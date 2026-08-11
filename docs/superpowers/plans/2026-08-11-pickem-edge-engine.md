@@ -236,22 +236,22 @@ Adapters normalize to this convention at ingest; nothing downstream re-checks it
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, model_validator
 
 
-class Sport(str, Enum):
+class Sport(StrEnum):
     NFL = "nfl"
     CFB = "cfb"
 
 
-class Side(str, Enum):
+class Side(StrEnum):
     HOME = "home"
     AWAY = "away"
 
 
-class Tier(str, Enum):
+class Tier(StrEnum):
     STRONG = "strong"
     LEAN = "lean"
     COINFLIP = "coinflip"
@@ -2312,12 +2312,12 @@ Create `src/pickem/backtest/__init__.py` (empty) and `src/pickem/backtest/stats.
 from __future__ import annotations
 
 import math
-from enum import Enum
+from enum import StrEnum
 
 from pickem.models import Side
 
 
-class Result(str, Enum):
+class Result(StrEnum):
     WIN = "win"
     LOSS = "loss"
     PUSH = "push"
