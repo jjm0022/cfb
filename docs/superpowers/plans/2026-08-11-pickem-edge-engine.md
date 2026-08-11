@@ -652,6 +652,7 @@ def test_upserting_a_game_updates_scores_rather_than_duplicating(store):
 
 
 def test_roundtrips_a_league_line(store):
+    store.upsert_games([game()])  # league_lines_for_week joins games for the sport filter
     store.upsert_league_lines(
         [LeagueLine(game_id=GID, season=2025, week=3, spread_home=-3.0, posted_at=KICK)]
     )
@@ -859,10 +860,6 @@ class Store:
         ]
 ```
 
-Note: `test_roundtrips_a_league_line` requires the game to exist for the join.
-If it fails on an empty result, insert the game first in that test — update the
-test to call `store.upsert_games([game()])` before `upsert_league_lines`.
-
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_store.py -v`
@@ -974,13 +971,20 @@ def test_unknown_team_raises(resolver):
         parse("Fictional State at Miami Dolphins -3.0", resolver, sport=Sport.CFB)
 
 
-def test_parses_full_nfl_fixture(resolver):
-    text = FIXTURE.read_text()
-    result = parse(text, resolver)
-    nfl = [line for line in result.lines]
-    # Three NFL games in the fixture resolve; the two CFB games raise under Sport.NFL,
-    # so this fixture is parsed per-sport in real use. Verify the NFL subset here.
-    assert len(nfl) >= 3
+def test_parses_the_nfl_portion_of_the_fixture(resolver):
+    # A real sheet mixes sports; each is ingested with its own --sport run.
+    nfl_lines = [
+        line for line in FIXTURE.read_text().splitlines() if "at" in line and "Ole Miss" not in line
+        and "Ohio State" not in line and "Michigan" not in line
+    ]
+    result = parse("\n".join(nfl_lines), resolver)
+    assert len(result.lines) == 3
+    assert [line.spread_home for line in result.lines] == [-3.0, 6.5, 2.5]
+
+
+def test_parses_the_cfb_portion_of_the_fixture(resolver):
+    result = parse("Ole Miss at Alabama -7.5\nOhio State -14.0 at Michigan", resolver, sport=Sport.CFB)
+    assert [line.spread_home for line in result.lines] == [-7.5, 14.0]
 
 
 def test_pickem_pushes_are_allowed(resolver):
@@ -1097,11 +1101,6 @@ def parse_cbs_block(
 
 Run: `uv run pytest tests/test_cbs_parser.py -v`
 Expected: PASS
-
-If `test_parses_full_nfl_fixture` fails because the CFB lines raise
-`UnknownTeamError` under `Sport.NFL`, that is correct behavior — change that
-test to parse only the first three lines of the fixture, and add a separate
-CFB-sport test for the last two.
 
 - [ ] **Step 6: Commit**
 
