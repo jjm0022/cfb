@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 10 (Odds API adapter)
+**Last updated:** 2026-08-11, after Task 11 (backtest statistics)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,12 +30,12 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 79 passing, `uv run pytest -q`
+- **Tests:** 90 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-10 plus amendment 9a — all reviewed clean
-- **Next:** Task 11 (backtest statistics). Not started; no brief generated yet.
-- **BASE for Task 11:** current branch HEAD — the `docs: refresh handoff through
-  Task 10` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
+- **Done:** Tasks 1-11 plus amendment 9a — all reviewed clean
+- **Next:** Task 12 (backtest runner). Not started; no brief generated yet.
+- **BASE for Task 12:** current branch HEAD — the `docs: refresh handoff through
+  Task 11` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
   SHA written here, since the docs commit that records it lands after the fact.
 
 Built so far:
@@ -64,6 +64,8 @@ src/pickem/ingest/odds.py         OddsClient.fetch_spreads for live book lines;
                                   injectable HTTP transport keeps tests offline.
                                   QuotaExhausted is distinct from feed errors;
                                   missing spreads are surfaced in skipped.
+src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
+                                  Wilson score intervals. Pure; no I/O.
 ```
 
 ## Process being followed
@@ -140,13 +142,12 @@ These are already reflected in the plan document — do not re-litigate them.
 
 ## Remaining tasks
 
-11. Backtest stats — 12. Backtest runner — 13. Pick sheet report —
-14. CLI wiring —
+12. Backtest runner — 13. Pick sheet report — 14. CLI wiring —
 15. Wire tiebreaks into the pick sheet
 
 After all 15: a final whole-branch review on the most capable model, pointed at
 the ledger's deferred-minor and parked lines, then
-`superpowers:finishing-a-development-branch`. Tasks 1-10 have deferred minors
+`superpowers:finishing-a-development-branch`. Tasks 1-11 have deferred minors
 waiting there; the ledger is the only record of them.
 
 ## Known gaps to raise with the user later
