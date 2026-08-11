@@ -7,7 +7,7 @@ here issues UPDATE or DELETE against it.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
@@ -19,12 +19,8 @@ from pickem.models import Game, LeagueLine, MarketLine, Sport
 class Store:
     def __init__(self, path: Path | str) -> None:
         self._con = duckdb.connect(str(path))
-        # This build has no pytz, which duckdb needs to materialize TIMESTAMPTZ
-        # values as tz-aware Python datetimes on fetch. Pin the session to UTC
-        # and read timestamp columns back via `AT TIME ZONE 'UTC'`, which
-        # yields a naive-UTC datetime through the pytz-free fast path; callers
-        # below reattach tzinfo=UTC. Writes are unaffected — binding a
-        # tz-aware datetime as a query parameter never touches pytz.
+        # Fixes the session timezone so TIMESTAMPTZ round-trips are
+        # deterministic regardless of the host machine's local timezone.
         self._con.execute("SET TimeZone='UTC'")
 
     def init_schema(self) -> None:
@@ -66,7 +62,7 @@ class Store:
 
     def market_lines_for(self, game_id: str, before: datetime | None = None) -> list[MarketLine]:
         sql = (
-            "SELECT game_id, source, book, spread_home, total, captured_at AT TIME ZONE 'UTC' "
+            "SELECT game_id, source, book, spread_home, total, captured_at "
             "FROM lines WHERE game_id = ?"
         )
         params: list = [game_id]
@@ -76,12 +72,7 @@ class Store:
         rows = self._con.execute(sql, params).fetchall()
         return [
             MarketLine(
-                game_id=r[0],
-                source=r[1],
-                book=r[2],
-                spread_home=r[3],
-                total=r[4],
-                captured_at=r[5].replace(tzinfo=UTC),
+                game_id=r[0], source=r[1], book=r[2], spread_home=r[3], total=r[4], captured_at=r[5]
             )
             for r in rows
         ]
@@ -89,27 +80,21 @@ class Store:
     def league_lines_for_week(self, sport: Sport, season: int, week: int) -> list[LeagueLine]:
         rows = self._con.execute(
             """
-            SELECT l.game_id, l.season, l.week, l.spread_home, l.posted_at AT TIME ZONE 'UTC'
+            SELECT l.game_id, l.season, l.week, l.spread_home, l.posted_at
             FROM league_lines l JOIN games g USING (game_id)
             WHERE g.sport = ? AND l.season = ? AND l.week = ?
             """,
             [sport.value, season, week],
         ).fetchall()
         return [
-            LeagueLine(
-                game_id=r[0],
-                season=r[1],
-                week=r[2],
-                spread_home=r[3],
-                posted_at=r[4].replace(tzinfo=UTC),
-            )
+            LeagueLine(game_id=r[0], season=r[1], week=r[2], spread_home=r[3], posted_at=r[4])
             for r in rows
         ]
 
     def games_for_week(self, sport: Sport, season: int, week: int) -> list[Game]:
         rows = self._con.execute(
             """
-            SELECT game_id, sport, season, week, kickoff_utc AT TIME ZONE 'UTC',
+            SELECT game_id, sport, season, week, kickoff_utc,
                    home_team_id, away_team_id, home_score, away_score
             FROM games WHERE sport = ? AND season = ? AND week = ?
             """,
@@ -121,7 +106,7 @@ class Store:
                 sport=Sport(r[1]),
                 season=r[2],
                 week=r[3],
-                kickoff_utc=r[4].replace(tzinfo=UTC),
+                kickoff_utc=r[4],
                 home_team_id=r[5],
                 away_team_id=r[6],
                 home_score=r[7],
