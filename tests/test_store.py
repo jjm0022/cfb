@@ -41,6 +41,9 @@ def test_roundtrips_a_game(store):
     got = store.games_for_week(Sport.NFL, 2025, 3)
     assert len(got) == 1
     assert got[0].home_team_id == "MIA"
+    # kickoff_utc must survive the TIMESTAMPTZ round-trip exactly, tz-aware.
+    assert got[0].kickoff_utc == KICK
+    assert got[0].kickoff_utc.tzinfo is not None
 
 
 def test_upserting_a_game_updates_scores_rather_than_duplicating(store):
@@ -58,14 +61,26 @@ def test_roundtrips_a_league_line(store):
     )
     got = store.league_lines_for_week(Sport.NFL, 2025, 3)
     assert got[0].spread_home == -3.0
+    # posted_at must survive the TIMESTAMPTZ round-trip exactly, tz-aware.
+    assert got[0].posted_at == KICK
+    assert got[0].posted_at.tzinfo is not None
 
 
 def test_market_lines_are_append_only_and_preserve_movement(store):
-    store.append_market_lines([market(-3.0, datetime(2025, 9, 16, tzinfo=UTC))])
-    store.append_market_lines([market(-6.0, datetime(2025, 9, 21, tzinfo=UTC))])
+    first_at = datetime(2025, 9, 16, tzinfo=UTC)
+    second_at = datetime(2025, 9, 21, tzinfo=UTC)
+    store.append_market_lines([market(-3.0, first_at)])
+    store.append_market_lines([market(-6.0, second_at)])
     got = store.market_lines_for(GID)
     # Both snapshots survive. Overwriting would destroy the signal we exist to measure.
     assert sorted(line.spread_home for line in got) == [-6.0, -3.0]
+    # captured_at must survive the TIMESTAMPTZ round-trip exactly, tz-aware —
+    # backtest chronology and the `before` cutoff both depend on this.
+    captured = {line.spread_home: line.captured_at for line in got}
+    assert captured[-3.0] == first_at
+    assert captured[-6.0] == second_at
+    assert captured[-3.0].tzinfo is not None
+    assert captured[-6.0].tzinfo is not None
 
 
 def test_identical_snapshot_appended_twice_is_stored_once(store):
