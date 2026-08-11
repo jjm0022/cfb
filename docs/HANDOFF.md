@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 7 (Elo tiebreak)
+**Last updated:** 2026-08-11, after Task 8 (nflverse adapter)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,11 +30,13 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 60 passing, `uv run pytest -q`
+- **Tests:** 65 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-7 — all reviewed clean
-- **Next:** Task 8 (nflverse adapter). Not started; no brief generated yet.
-- **BASE for Task 8:** `bdcdcfd`
+- **Done:** Tasks 1-8 — all reviewed clean
+- **Next:** Task 9 (CFBD adapter). Not started; no brief generated yet.
+- **BASE for Task 9:** current branch HEAD — the `docs: refresh handoff through
+  Task 8` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
+  SHA written here, since the docs commit that records it lands after the fact.
 
 Built so far:
 
@@ -51,6 +53,8 @@ src/pickem/edge/divergence.py     Thresholds, consensus_spread, compute_edge,
                                   rank_edges. Pure; no I/O.
 src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
                                   tiebreak_side. Pure; no I/O.
+src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
+                                  `loader` is injected so tests stay offline.
 ```
 
 ## Process being followed
@@ -91,6 +95,11 @@ These are already reflected in the plan document — do not re-litigate them.
 - **`pytz` is a real dependency.** duckdb imports it dynamically to read
   TIMESTAMPTZ but does not declare it. Do not prune it as unused. Reads return
   pytz UTC tzinfo, not `datetime.UTC`. Plan amended at Task 4.
+- **nflverse team abbreviations vary by era.** The Rams appear as both `LA` and
+  `LAR` across seasons (likewise `OAK`/`LV`, `SD`/`LAC`, `STL`). Task 8 swept
+  1999-2025 through both loaders until the resolver stopped raising, and added
+  the missing spellings as aliases of existing canonical ids — never as new ids.
+  Do the same when a new source arrives.
 - **CBS lines carrying two numbers are skipped, not resolved.** A paste line
   with a number on both sides (a total, a stray trailing digit) matches both
   regex groups; the plan's original code silently took the home-side one as the
@@ -117,13 +126,13 @@ These are already reflected in the plan document — do not re-litigate them.
 
 ## Remaining tasks
 
-8. nflverse adapter — 9. CFBD adapter — 10. Odds API adapter —
-11. Backtest stats — 12. Backtest runner — 13. Pick sheet report —
-14. CLI wiring — 15. Wire tiebreaks into the pick sheet
+9. CFBD adapter — 10. Odds API adapter — 11. Backtest stats —
+12. Backtest runner — 13. Pick sheet report — 14. CLI wiring —
+15. Wire tiebreaks into the pick sheet
 
 After all 15: a final whole-branch review on the most capable model, pointed at
 the ledger's deferred-minor and parked lines, then
-`superpowers:finishing-a-development-branch`. Tasks 1-7 have deferred minors
+`superpowers:finishing-a-development-branch`. Tasks 1-8 have deferred minors
 waiting there; the ledger is the only record of them.
 
 ## Known gaps to raise with the user later
@@ -139,10 +148,10 @@ waiting there; the ledger is the only record of them.
   (Task 13) prints it loudly, a CBS format change would silently drop games
   from a week and the report would still look complete. Handle it at Task 13
   at the latest.
-- **`aliases.yaml` ships with ~31 teams** (Task 5 added `CHI`) and will raise
-  `UnknownTeamError` on real data until extended. That is the intended growth
-  path, not a bug — but note the plan's own later tasks may name teams the file
-  does not have yet, exactly as Task 5's tests named the Bears.
+- **`aliases.yaml` now covers all 32 NFL teams but only 14 CFB teams.** Task 8
+  extended the NFL side by sweeping nflverse 1999-2025 until it stopped raising
+  `UnknownTeamError`; the CFB side will raise on real data until the CFBD
+  adapter (Task 9) forces the same growth. That is the intended path, not a bug.
 - Live operation should fit The Odds API free tier (500 credits/month).
 
 ## Phase B decision (do not skip)
