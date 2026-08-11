@@ -1,6 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
+**Last updated:** 2026-08-11, after Task 5 (CBS paste parser)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -106,6 +107,9 @@ These are already reflected in the plan document — do not re-litigate them.
   testable offline and replayable in the backtest.
 - **Fail loud.** Unknown teams raise. Missing market lines are reported as
   `NO_MARKET`, never skipped. Never fabricate or interpolate a line.
+- **Nothing the parser could not read is dropped in silence.** Every unread
+  paste line lands in `ParseResult.skipped`. That list only does its job if
+  something downstream prints it — see the known gap below.
 
 ## Remaining tasks
 
@@ -115,7 +119,9 @@ These are already reflected in the plan document — do not re-litigate them.
 14. CLI wiring — 15. Wire tiebreaks into the pick sheet
 
 After all 15: a final whole-branch review on the most capable model, pointed at
-the ledger's deferred-minor lines, then `superpowers:finishing-a-development-branch`.
+the ledger's deferred-minor and parked lines, then
+`superpowers:finishing-a-development-branch`. Tasks 1-5 have deferred minors
+waiting there; the ledger is the only record of them.
 
 ## Known gaps to raise with the user later
 
@@ -125,8 +131,15 @@ the ledger's deferred-minor lines, then `superpowers:finishing-a-development-bra
   lines free back to 1999; openers need one month of a paid Odds API tier
   (~$29) to backfill 2020-2025 snapshots, then cancel. `pickem backfill` loads
   closers only and says so.
-- **`aliases.yaml` ships with ~30 teams** and will raise `UnknownTeamError` on
-  real data until extended. That is the intended growth path, not a bug.
+- **`ParseResult.skipped` has no reader yet.** The CBS parser reports every
+  line it could not read, but nothing surfaces that list. Until the pick sheet
+  (Task 13) prints it loudly, a CBS format change would silently drop games
+  from a week and the report would still look complete. Handle it at Task 13
+  at the latest.
+- **`aliases.yaml` ships with ~31 teams** (Task 5 added `CHI`) and will raise
+  `UnknownTeamError` on real data until extended. That is the intended growth
+  path, not a bug — but note the plan's own later tasks may name teams the file
+  does not have yet, exactly as Task 5's tests named the Bears.
 - Live operation should fit The Odds API free tier (500 credits/month).
 
 ## Phase B decision (do not skip)
