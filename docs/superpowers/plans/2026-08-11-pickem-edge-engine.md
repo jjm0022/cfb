@@ -16,7 +16,7 @@
 - Package layout is `src/pickem/`, tests in `tests/`.
 - **All spreads are stored and passed home-perspective.** Home favored by 3 is `-3.0`. Every adapter normalizes at ingest.
 - The `lines` table is **append-only**. Never `UPDATE` or `DELETE` a row in it.
-- **Degrade visibly, never silently.** Unknown teams raise. Missing market lines are reported, not skipped. Never fabricate or interpolate a line.
+- **Degrade visibly, never silently.** Unknown teams raise. Missing market lines are reported, not skipped. Never fabricate or interpolate a line. **Human ruling, 2026-08-11 (Task 9a amendment):** a market-line row with no usable spread is counted and named in `MarketLinesResult.skipped`, not silently `continue`d past — the same discipline Task 5's ruling applied to `ingest.cbs.ParseResult.skipped`. This binds Tasks 8, 9, 10 and the `backfill`/`poll-odds` CLI commands in Task 14.
 - `edge/` performs no I/O — no network, no database, no filesystem.
 - `pydantic` models at module boundaries; `polars` frames only inside adapters and backtest internals, never across a public interface.
 - The test suite runs fully offline. Network calls are stubbed at the adapter boundary.
@@ -1603,15 +1603,22 @@ git commit -m "feat: add minimal Elo rating for coinflip tiebreaks"
 
 ### Task 8: nflverse adapter
 
+> **Amendment (Task 9a, human ruling 2026-08-11): surface dropped rows, don't
+> silently skip them.** The reviewer flagged that dropping a row with no
+> `spread_line` via a bare `continue` reads against the Global Constraint
+> "missing market lines are reported, not skipped." `load_nfl_closing_lines`
+> now returns `MarketLinesResult` (`lines` + `skipped`), mirroring
+> `ingest.cbs.ParseResult`. The text below is amended in place to reflect this.
+
 **Files:**
 - Create: `src/pickem/ingest/nflverse.py`
 - Test: `tests/test_nflverse_adapter.py`
 
 **Interfaces:**
-- Consumes: `Game`, `MarketLine`, `Sport`, `make_game_id`, `TeamResolver`
+- Consumes: `Game`, `MarketLine`, `MarketLinesResult`, `Sport`, `make_game_id`, `TeamResolver`
 - Produces:
   - `load_nfl_games(seasons: Sequence[int], *, resolver: TeamResolver, loader=...) -> list[Game]`
-  - `load_nfl_closing_lines(seasons, *, resolver, loader=...) -> list[MarketLine]`
+  - `load_nfl_closing_lines(seasons, *, resolver, loader=...) -> MarketLinesResult`
 
 `loader` is injected so tests never hit the network. Its default is
 `nflreadpy.load_schedules`; it must return a polars DataFrame with columns
@@ -1664,23 +1671,27 @@ def test_carries_final_scores():
 
 def test_negates_nflverse_spread_to_home_perspective():
     # nflverse says home favored by 3 as +3.0; we store -3.0.
-    lines = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=fake_loader)
-    assert lines[0].spread_home == -3.0
+    result = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=fake_loader)
+    assert result.lines[0].spread_home == -3.0
 
 
 def test_closing_lines_are_tagged_as_such():
-    lines = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=fake_loader)
-    assert lines[0].source == "nflverse"
-    assert lines[0].book == "close"
+    result = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=fake_loader)
+    assert result.lines[0].source == "nflverse"
+    assert result.lines[0].book == "close"
 
 
-def test_rows_without_a_spread_are_dropped_not_defaulted():
+def test_rows_without_a_spread_are_surfaced_not_silently_dropped():
+    # Human ruling, 2026-08-11 (Task 9a): a missing per-book spread is counted
+    # and named in `skipped`, never silently dropped. See MarketLinesResult.
     frame = FRAME.with_columns(pl.lit(None, dtype=pl.Float64).alias("spread_line"))
-    lines = load_nfl_closing_lines(
+    result = load_nfl_closing_lines(
         [2025], resolver=TeamResolver.default(), loader=lambda s: frame
     )
     # A missing line must never become 0.0 — that would read as a pick'em.
-    assert lines == []
+    assert result.lines == []
+    assert len(result.skipped) == 1
+    assert "nfl-2025-03-BUF-at-MIA" in result.skipped[0]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1698,6 +1709,10 @@ Create `src/pickem/ingest/nflverse.py`:
 nflverse expresses `spread_line` as a positive number when the home team is
 favored. This project stores home-perspective spreads, where a home favorite is
 negative. The negation below is the only place that conversion happens.
+
+A row with no spread is never silently dropped: `load_nfl_closing_lines`
+returns a `MarketLinesResult` and records a one-liner in `skipped` naming the
+game, mirroring `ingest.cbs.ParseResult`.
 """
 
 from __future__ import annotations
@@ -1707,7 +1722,7 @@ from datetime import UTC, datetime
 
 import polars as pl
 
-from pickem.models import Game, MarketLine, Sport, make_game_id
+from pickem.models import Game, MarketLine, MarketLinesResult, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver
 
 Loader = Callable[[Sequence[int]], pl.DataFrame]
@@ -1749,17 +1764,23 @@ def load_nfl_games(
 
 def load_nfl_closing_lines(
     seasons: Sequence[int], *, resolver: TeamResolver, loader: Loader | None = None
-) -> list[MarketLine]:
+) -> MarketLinesResult:
     frame = (loader or _default_loader)(seasons)
     lines: list[MarketLine] = []
+    skipped: list[str] = []
     for row in frame.iter_rows(named=True):
-        if row["spread_line"] is None:
-            continue  # never default a missing line to 0.0; that reads as a pick'em
+        # Resolve teams first (unknown teams must still raise, never become a
+        # skipped line) so a missing spread can be named by game_id below.
         home = resolver.resolve(row["home_team"], Sport.NFL)
         away = resolver.resolve(row["away_team"], Sport.NFL)
+        game_id = make_game_id(Sport.NFL, row["season"], row["week"], away, home)
+        if row["spread_line"] is None:
+            # never default a missing line to 0.0; that reads as a pick'em
+            skipped.append(f"{game_id}: close — no spread")
+            continue
         lines.append(
             MarketLine(
-                game_id=make_game_id(Sport.NFL, row["season"], row["week"], away, home),
+                game_id=game_id,
                 source="nflverse",
                 book="close",
                 spread_home=-float(row["spread_line"]),
@@ -1767,13 +1788,13 @@ def load_nfl_closing_lines(
                 captured_at=_kickoff(row["gameday"]),
             )
         )
-    return lines
+    return MarketLinesResult(lines=lines, skipped=skipped)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_nflverse_adapter.py -v`
-Expected: PASS (5 tests)
+Expected: PASS (6 tests)
 
 - [ ] **Step 5: Verify the sign convention against reality once, manually**
 
@@ -1783,8 +1804,8 @@ Run this and confirm a known home favorite comes out negative:
 uv run python -c "
 from pickem.ingest.nflverse import load_nfl_closing_lines
 from pickem.resolve.resolver import TeamResolver
-lines = load_nfl_closing_lines([2024], resolver=TeamResolver.default())
-print(lines[0])
+result = load_nfl_closing_lines([2024], resolver=TeamResolver.default())
+print(result.lines[0])
 "
 ```
 
@@ -1802,16 +1823,22 @@ git commit -m "feat: add nflverse adapter for NFL games and closing lines"
 
 ### Task 9: CFBD adapter
 
+> **Amendment (Task 9a, human ruling 2026-08-11): surface dropped rows, don't
+> silently skip them.** Same ruling as Task 8: `load_cfb_lines` now returns
+> `MarketLinesResult` and records a one-liner in `skipped` for every provider
+> row with no spread instead of a bare `continue`. The text below is amended
+> in place.
+
 **Files:**
 - Create: `src/pickem/ingest/cfbd_source.py`
 - Test: `tests/test_cfbd_adapter.py`
 
 **Interfaces:**
-- Consumes: `Game`, `MarketLine`, `Sport`, `make_game_id`, `TeamResolver`
+- Consumes: `Game`, `MarketLine`, `MarketLinesResult`, `Sport`, `make_game_id`, `TeamResolver`
 - Produces:
   - `CfbdConfig` pydantic model: `api_key: str`
   - `load_cfb_games(season, week, *, resolver, fetcher) -> list[Game]`
-  - `load_cfb_lines(season, week, *, resolver, fetcher) -> list[MarketLine]`
+  - `load_cfb_lines(season, week, *, resolver, fetcher) -> MarketLinesResult`
 
 `fetcher` is a callable injected for testing, returning plain dicts shaped like
 the CFBD REST payload. Named `cfbd_source.py` rather than `cfbd.py` to avoid
@@ -1873,19 +1900,40 @@ def test_resolves_source_specific_school_naming(resolver):
 
 
 def test_preserves_cfbd_home_negative_convention(resolver):
-    lines = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: LINES)
+    result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: LINES)
     # CFBD already uses home-negative; no flip.
-    assert {line.spread_home for line in lines} == {-7.5, -7.0}
+    assert {line.spread_home for line in result.lines} == {-7.5, -7.0}
 
 
 def test_each_provider_becomes_its_own_book_row(resolver):
-    lines = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: LINES)
-    assert {line.book for line in lines} == {"DraftKings", "Bovada"}
+    result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: LINES)
+    assert {line.book for line in result.lines} == {"DraftKings", "Bovada"}
 
 
-def test_providers_without_a_spread_are_dropped(resolver):
+def test_providers_without_a_spread_are_surfaced_not_silently_dropped(resolver):
+    # Human ruling, 2026-08-11 (Task 9a): a missing per-book spread is counted
+    # and named in `skipped`, never silently dropped. See MarketLinesResult.
     payload = [{**LINES[0], "lines": [{"provider": "X", "spread": None, "over_under": 50.0}]}]
-    assert load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: payload) == []
+    result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: payload)
+    assert result.lines == []
+    assert len(result.skipped) == 1
+    assert "cfb-2025-03-MISS-at-BAMA" in result.skipped[0]
+    assert "X" in result.skipped[0]
+
+
+def test_usable_providers_survive_alongside_skipped_ones(resolver):
+    payload = [
+        {
+            **LINES[0],
+            "lines": [
+                {"provider": "DraftKings", "spread": -7.5, "over_under": 52.5},
+                {"provider": "X", "spread": None, "over_under": 50.0},
+            ],
+        }
+    ]
+    result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: payload)
+    assert [line.book for line in result.lines] == ["DraftKings"]
+    assert len(result.skipped) == 1
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1902,6 +1950,10 @@ Create `src/pickem/ingest/cfbd_source.py`:
 
 CFBD already expresses spreads home-negative, matching this project's
 convention, so no sign flip happens here. The tests pin that.
+
+A provider row with no spread is never silently dropped: `load_cfb_lines`
+returns a `MarketLinesResult` and records a one-liner in `skipped` naming the
+game and book, mirroring `ingest.cbs.ParseResult`.
 """
 
 from __future__ import annotations
@@ -1912,7 +1964,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
-from pickem.models import Game, MarketLine, Sport, make_game_id
+from pickem.models import Game, MarketLine, MarketLinesResult, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver
 
 Fetcher = Callable[[int, int], list[dict]]
@@ -1985,14 +2037,16 @@ def load_cfb_games(
 
 def load_cfb_lines(
     season: int, week: int, *, resolver: TeamResolver, fetcher: Fetcher
-) -> list[MarketLine]:
+) -> MarketLinesResult:
     lines: list[MarketLine] = []
+    skipped: list[str] = []
     for row in fetcher(season, week):
         home = resolver.resolve(row["home_team"], Sport.CFB)
         away = resolver.resolve(row["away_team"], Sport.CFB)
         game_id = make_game_id(Sport.CFB, season, week, away, home)
         for provider in row.get("lines") or []:
             if provider.get("spread") is None:
+                skipped.append(f"{game_id}: {provider.get('provider')} — no spread")
                 continue
             lines.append(
                 MarketLine(
@@ -2004,13 +2058,13 @@ def load_cfb_lines(
                     captured_at=datetime.now(tz=UTC),
                 )
             )
-    return lines
+    return MarketLinesResult(lines=lines, skipped=skipped)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_cfbd_adapter.py -v`
-Expected: PASS (5 tests)
+Expected: PASS (6 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -2023,16 +2077,24 @@ git commit -m "feat: add CFBD adapter for college games and betting lines"
 
 ### Task 10: The Odds API adapter
 
+> **Amendment (Task 9a, human ruling 2026-08-11): surface dropped rows, don't
+> silently skip them.** Same ruling as Tasks 8 and 9, applied here before this
+> task is ever built so it starts consistent: `fetch_spreads` returns
+> `MarketLinesResult` and records a one-liner in `skipped` for a bookmaker with
+> no `spreads` market and for an outcome with no `point`, instead of the two
+> bare `continue`s the plan originally specified. The text below is amended in
+> place.
+
 **Files:**
 - Create: `src/pickem/ingest/odds.py`
 - Test: `tests/test_odds_adapter.py`
 
 **Interfaces:**
-- Consumes: `MarketLine`, `Sport`, `make_game_id`, `TeamResolver`
+- Consumes: `MarketLine`, `MarketLinesResult`, `Sport`, `make_game_id`, `TeamResolver`
 - Produces:
   - `OddsApiError(Exception)`, `QuotaExhausted(OddsApiError)`
   - `OddsClient(api_key: str, *, transport: httpx.BaseTransport | None = None)`
-  - `OddsClient.fetch_spreads(sport_key, *, resolver, sport, season, week, now) -> list[MarketLine]`
+  - `OddsClient.fetch_spreads(sport_key, *, resolver, sport, season, week, now) -> MarketLinesResult`
   - Module constants `NFL_KEY = "americanfootball_nfl"`, `CFB_KEY = "americanfootball_ncaaf"`
 
 The Odds API returns each outcome as a team name plus a `point`. The home team's
@@ -2109,20 +2171,20 @@ def fetch(client):
 
 
 def test_one_market_line_per_bookmaker():
-    assert len(fetch(client_returning(PAYLOAD))) == 2
+    assert len(fetch(client_returning(PAYLOAD)).lines) == 2
 
 
 def test_takes_the_home_teams_point_without_flipping():
-    lines = {line.book: line.spread_home for line in fetch(client_returning(PAYLOAD))}
+    lines = {line.book: line.spread_home for line in fetch(client_returning(PAYLOAD)).lines}
     assert lines == {"pinnacle": -6.0, "draftkings": -6.5}
 
 
 def test_builds_canonical_game_ids():
-    assert fetch(client_returning(PAYLOAD))[0].game_id == "nfl-2025-03-BUF-at-MIA"
+    assert fetch(client_returning(PAYLOAD)).lines[0].game_id == "nfl-2025-03-BUF-at-MIA"
 
 
 def test_snapshot_is_stamped_with_capture_time():
-    assert fetch(client_returning(PAYLOAD))[0].captured_at == NOW
+    assert fetch(client_returning(PAYLOAD)).lines[0].captured_at == NOW
 
 
 def test_quota_exhaustion_raises_a_distinct_error():
@@ -2131,9 +2193,42 @@ def test_quota_exhaustion_raises_a_distinct_error():
         fetch(client_returning({"message": "out of credits"}, status=401))
 
 
-def test_bookmaker_without_a_spreads_market_is_skipped():
+def test_bookmaker_without_a_spreads_market_is_surfaced_not_silently_dropped():
+    # Human ruling, 2026-08-11 (Task 9a): a missing spreads market or missing
+    # point is counted and named in `skipped`, never silently dropped.
     payload = [{**PAYLOAD[0], "bookmakers": [{"key": "x", "markets": [{"key": "totals", "outcomes": []}]}]}]
-    assert fetch(client_returning(payload)) == []
+    result = fetch(client_returning(payload))
+    assert result.lines == []
+    assert len(result.skipped) == 1
+    assert "nfl-2025-03-BUF-at-MIA" in result.skipped[0]
+    assert "x" in result.skipped[0]
+
+
+def test_outcome_missing_a_point_is_surfaced_not_silently_dropped():
+    payload = [
+        {
+            **PAYLOAD[0],
+            "bookmakers": [
+                {
+                    "key": "y",
+                    "markets": [
+                        {
+                            "key": "spreads",
+                            "outcomes": [
+                                {"name": "Miami Dolphins", "point": None},
+                                {"name": "Buffalo Bills", "point": None},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+    result = fetch(client_returning(payload))
+    assert result.lines == []
+    assert len(result.skipped) == 1
+    assert "nfl-2025-03-BUF-at-MIA" in result.skipped[0]
+    assert "y" in result.skipped[0]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -2151,6 +2246,11 @@ Create `src/pickem/ingest/odds.py`:
 Quota exhaustion is a distinct exception so the CLI can fall back to the most
 recent cached snapshot and stamp the report with its age, while a genuine bug
 still fails loudly.
+
+A bookmaker with no `spreads` market, or an outcome with no `point`, is never
+silently dropped: `fetch_spreads` returns a `MarketLinesResult` and records a
+one-liner in `skipped` naming the game and book, mirroring
+`ingest.cbs.ParseResult`.
 """
 
 from __future__ import annotations
@@ -2159,7 +2259,7 @@ from datetime import datetime
 
 import httpx
 
-from pickem.models import MarketLine, Sport, make_game_id
+from pickem.models import MarketLine, MarketLinesResult, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver
 
 BASE_URL = "https://api.the-odds-api.com/v4"
@@ -2189,7 +2289,7 @@ class OddsClient:
         season: int,
         week: int,
         now: datetime,
-    ) -> list[MarketLine]:
+    ) -> MarketLinesResult:
         response = self._client.get(
             f"/sports/{sport_key}/odds",
             params={
@@ -2205,6 +2305,7 @@ class OddsClient:
             raise OddsApiError(f"odds api returned {response.status_code}: {response.text}")
 
         lines: list[MarketLine] = []
+        skipped: list[str] = []
         for event in response.json():
             home_name = event["home_team"]
             home = resolver.resolve(home_name, sport)
@@ -2212,33 +2313,36 @@ class OddsClient:
             game_id = make_game_id(sport, season, week, away, home)
 
             for book in event.get("bookmakers", []):
+                book_key = book.get("key")
                 spreads = next(
                     (m for m in book.get("markets", []) if m.get("key") == "spreads"), None
                 )
                 if spreads is None:
+                    skipped.append(f"{game_id}: {book_key} — no spreads market")
                     continue
                 outcome = next(
                     (o for o in spreads.get("outcomes", []) if o.get("name") == home_name), None
                 )
                 if outcome is None or outcome.get("point") is None:
+                    skipped.append(f"{game_id}: {book_key} — no spread")
                     continue
                 lines.append(
                     MarketLine(
                         game_id=game_id,
                         source="oddsapi",
-                        book=book["key"],
+                        book=book_key,
                         # Already home-perspective; do not flip.
                         spread_home=float(outcome["point"]),
                         captured_at=now,
                     )
                 )
-        return lines
+        return MarketLinesResult(lines=lines, skipped=skipped)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_odds_adapter.py -v`
-Expected: PASS (6 tests)
+Expected: PASS (7 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -2824,6 +2928,14 @@ git commit -m "feat: render auditable ranked pick sheet as markdown"
 
 ### Task 14: CLI wiring
 
+> **Amendment (Task 9a, human ruling 2026-08-11): surface dropped rows, don't
+> silently skip them.** `load_nfl_closing_lines` and `OddsClient.fetch_spreads`
+> now return `MarketLinesResult` rather than a bare list (Tasks 8 and 10). The
+> `backfill` and `poll-odds` commands below consume `.lines` and print the
+> skipped count loudly (`typer.secho(..., fg="yellow")`) when non-empty —
+> surfacing dropped rows to a human is the entire point of the ruling. The text
+> below is amended in place.
+
 **Files:**
 - Create: `src/pickem/cli.py`, `src/pickem/config.py`
 - Modify: `pyproject.toml` (add the console script entry point)
@@ -3002,7 +3114,7 @@ def poll_odds(
     client = OddsClient(config.odds_api_key())
     key = NFL_KEY if sport is Sport.NFL else CFB_KEY
     try:
-        lines = client.fetch_spreads(
+        result = client.fetch_spreads(
             key,
             resolver=TeamResolver.default(),
             sport=sport,
@@ -3016,8 +3128,12 @@ def poll_odds(
         raise typer.Exit(code=2) from exc
 
     store = _store(db)
-    store.append_market_lines(lines)
-    typer.echo(f"appended {len(lines)} market lines")
+    store.append_market_lines(result.lines)
+    typer.echo(f"appended {len(result.lines)} market lines")
+    if result.skipped:
+        typer.secho(f"skipped {len(result.skipped)} book rows with no spread:", fg="yellow")
+        for skipped in result.skipped:
+            typer.secho(f"  skipped: {skipped}", fg="yellow")
     store.close()
 
 
@@ -3078,8 +3194,14 @@ def backfill(
     games = load_nfl_games(seasons, resolver=resolver)
     closers = load_nfl_closing_lines(seasons, resolver=resolver)
     store.upsert_games(games)
-    store.append_market_lines(closers)
-    typer.echo(f"backfilled {len(games)} games and {len(closers)} closing lines")
+    store.append_market_lines(closers.lines)
+    typer.echo(f"backfilled {len(games)} games and {len(closers.lines)} closing lines")
+    if closers.skipped:
+        typer.secho(
+            f"skipped {len(closers.skipped)} rows with no spread — see below", fg="yellow"
+        )
+        for skipped in closers.skipped:
+            typer.secho(f"  skipped: {skipped}", fg="yellow")
     typer.secho(
         "openers are still missing; run the Odds API historical backfill to complete the pair",
         fg="yellow",

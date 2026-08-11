@@ -3,6 +3,10 @@
 nflverse expresses `spread_line` as a positive number when the home team is
 favored. This project stores home-perspective spreads, where a home favorite is
 negative. The negation below is the only place that conversion happens.
+
+A row with no spread is never silently dropped: `load_nfl_closing_lines`
+returns a `MarketLinesResult` and records a one-liner in `skipped` naming the
+game, mirroring `ingest.cbs.ParseResult`.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from datetime import UTC, datetime
 
 import polars as pl
 
-from pickem.models import Game, MarketLine, Sport, make_game_id
+from pickem.models import Game, MarketLine, MarketLinesResult, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver
 
 Loader = Callable[[Sequence[int]], pl.DataFrame]
@@ -54,17 +58,23 @@ def load_nfl_games(
 
 def load_nfl_closing_lines(
     seasons: Sequence[int], *, resolver: TeamResolver, loader: Loader | None = None
-) -> list[MarketLine]:
+) -> MarketLinesResult:
     frame = (loader or _default_loader)(seasons)
     lines: list[MarketLine] = []
+    skipped: list[str] = []
     for row in frame.iter_rows(named=True):
-        if row["spread_line"] is None:
-            continue  # never default a missing line to 0.0; that reads as a pick'em
+        # Resolve teams first (unknown teams must still raise, never become a
+        # skipped line) so a missing spread can be named by game_id below.
         home = resolver.resolve(row["home_team"], Sport.NFL)
         away = resolver.resolve(row["away_team"], Sport.NFL)
+        game_id = make_game_id(Sport.NFL, row["season"], row["week"], away, home)
+        if row["spread_line"] is None:
+            # never default a missing line to 0.0; that reads as a pick'em
+            skipped.append(f"{game_id}: close — no spread")
+            continue
         lines.append(
             MarketLine(
-                game_id=make_game_id(Sport.NFL, row["season"], row["week"], away, home),
+                game_id=game_id,
                 source="nflverse",
                 book="close",
                 spread_home=-float(row["spread_line"]),
@@ -72,4 +82,4 @@ def load_nfl_closing_lines(
                 captured_at=_kickoff(row["gameday"]),
             )
         )
-    return lines
+    return MarketLinesResult(lines=lines, skipped=skipped)

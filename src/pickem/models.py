@@ -78,6 +78,17 @@ class MarketLine(BaseModel):
     captured_at: datetime
 
 
+class MarketLinesResult(BaseModel):
+    """Return shape for market-line loaders: what parsed, and what did not.
+
+    Mirrors `ingest.cbs.ParseResult` — a row with no usable spread is counted
+    in `skipped`, never silently dropped.
+    """
+
+    lines: list[MarketLine]
+    skipped: list[str]
+
+
 class Edge(BaseModel):
     """The output of the strategy for a single game.
 

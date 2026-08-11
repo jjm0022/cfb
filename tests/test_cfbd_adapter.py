@@ -46,16 +46,35 @@ def test_resolves_source_specific_school_naming(resolver):
 
 
 def test_preserves_cfbd_home_negative_convention(resolver):
-    lines = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: LINES)
+    result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: LINES)
     # CFBD already uses home-negative; no flip.
-    assert {line.spread_home for line in lines} == {-7.5, -7.0}
+    assert {line.spread_home for line in result.lines} == {-7.5, -7.0}
 
 
 def test_each_provider_becomes_its_own_book_row(resolver):
-    lines = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: LINES)
-    assert {line.book for line in lines} == {"DraftKings", "Bovada"}
+    result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: LINES)
+    assert {line.book for line in result.lines} == {"DraftKings", "Bovada"}
 
 
-def test_providers_without_a_spread_are_dropped(resolver):
+def test_providers_without_a_spread_are_surfaced_not_silently_dropped(resolver):
     payload = [{**LINES[0], "lines": [{"provider": "X", "spread": None, "over_under": 50.0}]}]
-    assert load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: payload) == []
+    result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: payload)
+    assert result.lines == []
+    assert len(result.skipped) == 1
+    assert "cfb-2025-03-MISS-at-BAMA" in result.skipped[0]
+    assert "X" in result.skipped[0]
+
+
+def test_usable_providers_survive_alongside_skipped_ones(resolver):
+    payload = [
+        {
+            **LINES[0],
+            "lines": [
+                {"provider": "DraftKings", "spread": -7.5, "over_under": 52.5},
+                {"provider": "X", "spread": None, "over_under": 50.0},
+            ],
+        }
+    ]
+    result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: payload)
+    assert [line.book for line in result.lines] == ["DraftKings"]
+    assert len(result.skipped) == 1

@@ -2,6 +2,10 @@
 
 CFBD already expresses spreads home-negative, matching this project's
 convention, so no sign flip happens here. The tests pin that.
+
+A provider row with no spread is never silently dropped: `load_cfb_lines`
+returns a `MarketLinesResult` and records a one-liner in `skipped` naming the
+game and book, mirroring `ingest.cbs.ParseResult`.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
-from pickem.models import Game, MarketLine, Sport, make_game_id
+from pickem.models import Game, MarketLine, MarketLinesResult, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver
 
 Fetcher = Callable[[int, int], list[dict]]
@@ -85,14 +89,16 @@ def load_cfb_games(
 
 def load_cfb_lines(
     season: int, week: int, *, resolver: TeamResolver, fetcher: Fetcher
-) -> list[MarketLine]:
+) -> MarketLinesResult:
     lines: list[MarketLine] = []
+    skipped: list[str] = []
     for row in fetcher(season, week):
         home = resolver.resolve(row["home_team"], Sport.CFB)
         away = resolver.resolve(row["away_team"], Sport.CFB)
         game_id = make_game_id(Sport.CFB, season, week, away, home)
         for provider in row.get("lines") or []:
             if provider.get("spread") is None:
+                skipped.append(f"{game_id}: {provider.get('provider')} — no spread")
                 continue
             lines.append(
                 MarketLine(
@@ -104,4 +110,4 @@ def load_cfb_lines(
                     captured_at=datetime.now(tz=UTC),
                 )
             )
-    return lines
+    return MarketLinesResult(lines=lines, skipped=skipped)

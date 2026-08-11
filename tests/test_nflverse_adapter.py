@@ -34,20 +34,37 @@ def test_carries_final_scores():
 
 def test_negates_nflverse_spread_to_home_perspective():
     # nflverse says home favored by 3 as +3.0; we store -3.0.
-    lines = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=fake_loader)
-    assert lines[0].spread_home == -3.0
+    result = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=fake_loader)
+    assert result.lines[0].spread_home == -3.0
 
 
 def test_closing_lines_are_tagged_as_such():
-    lines = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=fake_loader)
-    assert lines[0].source == "nflverse"
-    assert lines[0].book == "close"
+    result = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=fake_loader)
+    assert result.lines[0].source == "nflverse"
+    assert result.lines[0].book == "close"
 
 
-def test_rows_without_a_spread_are_dropped_not_defaulted():
+def test_rows_without_a_spread_are_surfaced_not_silently_dropped():
     frame = FRAME.with_columns(pl.lit(None, dtype=pl.Float64).alias("spread_line"))
-    lines = load_nfl_closing_lines(
+    result = load_nfl_closing_lines(
         [2025], resolver=TeamResolver.default(), loader=lambda s: frame
     )
     # A missing line must never become 0.0 — that would read as a pick'em.
-    assert lines == []
+    assert result.lines == []
+    assert len(result.skipped) == 1
+    assert "nfl-2025-03-BUF-at-MIA" in result.skipped[0]
+
+
+def test_usable_rows_survive_alongside_skipped_ones():
+    second = FRAME.with_columns(
+        pl.lit(None, dtype=pl.Float64).alias("spread_line"),
+        pl.lit("KC").alias("home_team"),
+        pl.lit("LV").alias("away_team"),
+    )
+    frame = pl.concat([FRAME, second])
+    result = load_nfl_closing_lines(
+        [2025], resolver=TeamResolver.default(), loader=lambda s: frame
+    )
+    assert [line.game_id for line in result.lines] == ["nfl-2025-03-BUF-at-MIA"]
+    assert len(result.skipped) == 1
+    assert "LV-at-KC" in result.skipped[0]
