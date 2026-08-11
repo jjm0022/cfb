@@ -23,6 +23,9 @@ dependencies = [
 requires = ["uv_build>=0.9.1,<0.10.0"]
 build-backend = "uv_build"
 
+[project.scripts]
+pickem = "pickem.cli:app"
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
