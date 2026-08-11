@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 11 (backtest statistics)
+**Last updated:** 2026-08-11, after Task 12 (backtest runner)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,12 +30,12 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 90 passing, `uv run pytest -q`
+- **Tests:** 99 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-11 plus amendment 9a — all reviewed clean
-- **Next:** Task 12 (backtest runner). Not started; no brief generated yet.
-- **BASE for Task 12:** current branch HEAD — the `docs: refresh handoff through
-  Task 11` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
+- **Done:** Tasks 1-12 plus amendments 9a and 12a — all reviewed clean
+- **Next:** Task 13 (pick sheet report). Not started; no brief generated yet.
+- **BASE for Task 13:** current branch HEAD — the `docs: refresh handoff through
+  Task 12` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
   SHA written here, since the docs commit that records it lands after the fact.
 
 Built so far:
@@ -66,6 +66,10 @@ src/pickem/ingest/odds.py         OddsClient.fetch_spreads for live book lines;
                                   missing spreads are surfaced in skipped.
 src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
                                   Wilson score intervals. Pure; no I/O.
+src/pickem/backtest/runner.py     run_backtest replays opener/closer proxies
+                                  through compute_edge; BacktestReport includes
+                                  tier records, assumptions, and deterministic
+                                  skipped-game reasons. Pure; no I/O.
 ```
 
 ## Process being followed
@@ -115,6 +119,11 @@ These are already reflected in the plan document — do not re-litigate them.
   with a number on both sides (a total, a stray trailing digit) matches both
   regex groups; the plan's original code silently took the home-side one as the
   spread. Such lines now go to `ParseResult.skipped`. Plan amended at Task 5.
+- **Backtests report every excluded game.** Task 12's original literal code
+  silently continued past unplayed games, missing opening proxies, and missing
+  closing markets. Human ruling 12a added deterministic
+  `BacktestReport.skipped` entries naming every game and reason, and amended the
+  Task 12 plan text.
 
 ## Load-bearing conventions — do not "improve" these
 
@@ -142,12 +151,11 @@ These are already reflected in the plan document — do not re-litigate them.
 
 ## Remaining tasks
 
-12. Backtest runner — 13. Pick sheet report — 14. CLI wiring —
-15. Wire tiebreaks into the pick sheet
+13. Pick sheet report — 14. CLI wiring — 15. Wire tiebreaks into the pick sheet
 
 After all 15: a final whole-branch review on the most capable model, pointed at
 the ledger's deferred-minor and parked lines, then
-`superpowers:finishing-a-development-branch`. Tasks 1-11 have deferred minors
+`superpowers:finishing-a-development-branch`. Tasks 1-12 have deferred minors
 waiting there; the ledger is the only record of them.
 
 ## Known gaps to raise with the user later
