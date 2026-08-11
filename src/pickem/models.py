@@ -7,22 +7,22 @@ Adapters normalize to this convention at ingest; nothing downstream re-checks it
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, model_validator
 
 
-class Sport(str, Enum):
+class Sport(StrEnum):
     NFL = "nfl"
     CFB = "cfb"
 
 
-class Side(str, Enum):
+class Side(StrEnum):
     HOME = "home"
     AWAY = "away"
 
 
-class Tier(str, Enum):
+class Tier(StrEnum):
     STRONG = "strong"
     LEAN = "lean"
     COINFLIP = "coinflip"
