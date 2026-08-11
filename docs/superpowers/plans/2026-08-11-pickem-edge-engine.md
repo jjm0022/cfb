@@ -548,17 +548,23 @@ class TeamResolver:
         return msg
 ```
 
-- [ ] **Step 5: Ensure the YAML ships with the package**
+- [ ] **Step 5: Verify the YAML is reachable as package data**
 
-Add to `pyproject.toml` so `aliases.yaml` is included:
+The project builds with `uv_build`, which includes non-Python files under
+`src/pickem/` automatically — no `pyproject.toml` change is needed. Do NOT add
+hatchling config; this project does not use hatchling.
 
-```toml
-[tool.hatch.build.targets.wheel]
-packages = ["src/pickem"]
+Confirm the resource actually loads:
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/pickem/resolve/aliases.yaml" = "pickem/resolve/aliases.yaml"
+```bash
+uv run python -c "
+from pickem.resolve.resolver import TeamResolver
+from pickem.models import Sport
+print(TeamResolver.default().resolve('Ole Miss', Sport.CFB))
+"
 ```
+
+Expected output: `MISS`
 
 - [ ] **Step 6: Run tests to verify they pass**
 
