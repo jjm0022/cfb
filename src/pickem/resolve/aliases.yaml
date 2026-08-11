@@ -12,6 +12,7 @@ nfl:
   SF:  ["San Francisco 49ers", "San Francisco", "SF", "SFO", "49ers", "Niners"]
   TB:  ["Tampa Bay Buccaneers", "Tampa Bay", "TB", "TAM", "Buccaneers", "Bucs"]
   GB:  ["Green Bay Packers", "Green Bay", "GB", "GNB", "Packers"]
+  CHI: ["Chicago Bears", "Chicago", "CHI", "Bears"]
   "NO": ["New Orleans Saints", "New Orleans", "NO", "NOR", "Saints"]
   NYG: ["New York Giants", "NY Giants", "NYG", "Giants"]
   NYJ: ["New York Jets", "NY Jets", "NYJ", "Jets"]
