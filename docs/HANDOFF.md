@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 12 (backtest runner)
+**Last updated:** 2026-08-11, after Task 13 (pick sheet report)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,12 +30,12 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 99 passing, `uv run pytest -q`
+- **Tests:** 106 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-12 plus amendments 9a and 12a — all reviewed clean
-- **Next:** Task 13 (pick sheet report). Not started; no brief generated yet.
-- **BASE for Task 13:** current branch HEAD — the `docs: refresh handoff through
-  Task 12` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
+- **Done:** Tasks 1-13 plus amendments 9a, 12a, and 13a — all reviewed clean
+- **Next:** Task 14 (CLI wiring). Not started; no brief generated yet.
+- **BASE for Task 14:** current branch HEAD — the `docs: refresh handoff through
+  Task 13` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
   SHA written here, since the docs commit that records it lands after the fact.
 
 Built so far:
@@ -70,6 +70,10 @@ src/pickem/backtest/runner.py     run_backtest replays opener/closer proxies
                                   through compute_edge; BacktestReport includes
                                   tier records, assumptions, and deterministic
                                   skipped-game reasons. Pure; no I/O.
+src/pickem/report/sheet.py        render_sheet ranks edges into auditable
+                                  markdown with named picks, both spreads,
+                                  visible NO_MARKET rows, required provenance,
+                                  and numeric or explicitly unknown data age.
 ```
 
 ## Process being followed
@@ -86,8 +90,8 @@ src/pickem/backtest/runner.py     run_backtest replays opener/closer proxies
 Scripts live at:
 `/Users/jmiller/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/`
 
-Models used: haiku for pure transcription tasks, sonnet for integration tasks
-and all reviewers.
+Model selection follows the skill's cost/capability guidance. Task 13 used a
+fast implementation model and a stronger independent reviewer.
 
 ## Decisions and amendments made so far
 
@@ -124,6 +128,11 @@ These are already reflected in the plan document — do not re-litigate them.
   closing markets. Human ruling 12a added deterministic
   `BacktestReport.skipped` entries naming every game and reason, and amended the
   Task 12 plan text.
+- **Every pick sheet carries provenance and age.** Task 13's original exact
+  interface made age optional in the output and had no provenance input,
+  conflicting with spec §8. Human ruling 13a made `provenance` a required
+  keyword argument and requires every sheet to show either numeric snapshot age
+  or `unknown/unavailable`. Tasks 13 and 14 were amended in the plan.
 
 ## Load-bearing conventions — do not "improve" these
 
@@ -148,14 +157,17 @@ These are already reflected in the plan document — do not re-litigate them.
   **Any new line loader returns `MarketLinesResult`, never a bare list** —
   this was a human ruling at Task 5 and again at 9a. Both lists only do their
   job if something downstream prints them — see the known gap below.
+- **Every rendered pick sheet names its provenance and age.** Callers must pass
+  `provenance`; absent market timing renders as `unknown/unavailable`, never as
+  a missing status line.
 
 ## Remaining tasks
 
-13. Pick sheet report — 14. CLI wiring — 15. Wire tiebreaks into the pick sheet
+14. CLI wiring — 15. Wire tiebreaks into the pick sheet
 
 After all 15: a final whole-branch review on the most capable model, pointed at
 the ledger's deferred-minor and parked lines, then
-`superpowers:finishing-a-development-branch`. Tasks 1-12 have deferred minors
+`superpowers:finishing-a-development-branch`. Tasks 1-13 have deferred minors
 waiting there; the ledger is the only record of them.
 
 ## Known gaps to raise with the user later
@@ -166,13 +178,15 @@ waiting there; the ledger is the only record of them.
   lines free back to 1999; openers need one month of a paid Odds API tier
   (~$29) to backfill 2020-2025 snapshots, then cancel. `pickem backfill` loads
   closers only and says so.
-- **The `skipped` lists have no reader yet.** Both `ParseResult.skipped` and
-  `MarketLinesResult.skipped` are populated, but nothing prints them. Task 14's
-  plan text now makes `backfill` echo the market-line skip count in yellow;
-  the CBS side still has no reader at all. Until the pick sheet (Task 13)
-  prints both loudly, a CBS format change would silently drop games from a
-  week and the report would still look complete. Handle it at Task 13 at the
-  latest.
+- **The `skipped` lists have no reader until Task 14 is built.** Both
+  `ParseResult.skipped` and `MarketLinesResult.skipped` are populated today,
+  but the CLI does not exist yet. The amended Task 14 plan prints CBS parser
+  skips from `ingest-cbs` and market-row skips from both `poll-odds` and
+  `backfill`, all in yellow. Do not omit those readers during CLI wiring.
+- **Repository-wide Ruff formatting has pre-existing drift.** After Task 13,
+  `uv run ruff format --check src tests` named six files outside Task 13 that
+  would be reformatted. Task 13's three files are clean; the full list and
+  verification note are in the ledger for final-review triage.
 - **`aliases.yaml` now covers all 32 NFL teams but still only 14 CFB teams.**
   Task 8 extended the NFL side by sweeping nflverse 1999-2025 until it stopped
   raising `UnknownTeamError`. Task 9 could NOT do the same sweep for CFB —
