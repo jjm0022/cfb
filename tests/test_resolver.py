@@ -51,3 +51,23 @@ def test_never_falls_back_to_fuzzy_resolution(resolver):
     # A near-miss must still raise. Fuzzy matching informs the human, never the data.
     with pytest.raises(UnknownTeamError):
         resolver.resolve("Miami Dolphin", Sport.NFL)
+
+
+def test_resolves_new_orleans_saints(resolver):
+    # Regression guard: bare `NO` is a YAML 1.1 boolean literal (parses as
+    # False), so the "NO" key in aliases.yaml must stay quoted as a string.
+    # If that quoting is ever reverted, TeamResolver.default() raises
+    # AttributeError('bool' object has no attribute 'strip') during fixture
+    # setup for every test in this file, not a targeted assertion here.
+    for name in ["New Orleans Saints", "New Orleans", "NO", "NOR"]:
+        assert resolver.resolve(name, Sport.NFL) == "NO"
+
+
+def test_duplicate_alias_raises_at_load_time(tmp_path):
+    # An alias claimed by two different team ids must fail loudly at build
+    # time rather than silently resolving to whichever team happened to be
+    # processed last.
+    conflicting_yaml = tmp_path / "conflicting_aliases.yaml"
+    conflicting_yaml.write_text('nfl:\n  MIA: ["Dolphins"]\n  BUF: ["Dolphins"]\n')
+    with pytest.raises(ValueError):
+        TeamResolver.from_yaml(conflicting_yaml)
