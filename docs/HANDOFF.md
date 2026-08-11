@@ -1,7 +1,8 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 9 (CFBD adapter)
+**Last updated:** 2026-08-11, after Task 9 + amendment 9a (CFBD adapter;
+dropped market lines now surfaced)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,19 +31,22 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 70 passing, `uv run pytest -q`
+- **Tests:** 72 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-9 — all reviewed clean
+- **Done:** Tasks 1-9 plus amendment 9a — all reviewed clean
 - **Next:** Task 10 (Odds API adapter). Not started; no brief generated yet.
+  **Its plan text was amended by 9a** — build it from the plan as it now
+  reads, returning `MarketLinesResult`, not from memory of the old shape.
 - **BASE for Task 10:** current branch HEAD — the `docs: refresh handoff through
-  Task 9` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
+  Task 9a` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
   SHA written here, since the docs commit that records it lands after the fact.
 
 Built so far:
 
 ```
 src/pickem/models.py              Sport/Side/Tier StrEnums, make_game_id, Game,
-                                  LeagueLine, MarketLine, Edge
+                                  LeagueLine, MarketLine, MarketLinesResult,
+                                  Edge
 src/pickem/resolve/resolver.py    TeamResolver, UnknownTeamError (fail-loud)
 src/pickem/resolve/aliases.yaml   canonical team IDs -> every source's spelling
 src/pickem/store/db.py            Store — the only module that talks to DuckDB
@@ -58,6 +62,7 @@ src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
 src/pickem/ingest/cfbd_source.py  CfbdConfig, load_cfb_games, load_cfb_lines.
                                   `fetcher` is injected; named `_source` so it
                                   does not shadow the installed `cfbd` package.
+                                  Both line loaders return MarketLinesResult.
 ```
 
 ## Process being followed
@@ -123,9 +128,14 @@ These are already reflected in the plan document — do not re-litigate them.
   testable offline and replayable in the backtest.
 - **Fail loud.** Unknown teams raise. Missing market lines are reported as
   `NO_MARKET`, never skipped. Never fabricate or interpolate a line.
-- **Nothing the parser could not read is dropped in silence.** Every unread
-  paste line lands in `ParseResult.skipped`. That list only does its job if
-  something downstream prints it — see the known gap below.
+- **Nothing a source could not give us is dropped in silence.** Two parallel
+  result types carry this, and they are the same idea in two places:
+  `ParseResult.skipped` (CBS paste lines that would not parse) and
+  `MarketLinesResult.skipped` (per-book rows with no spread). Both are
+  `list[str]` of human-readable one-liners naming the game and the book.
+  **Any new line loader returns `MarketLinesResult`, never a bare list** —
+  this was a human ruling at Task 5 and again at 9a. Both lists only do their
+  job if something downstream prints them — see the known gap below.
 
 ## Remaining tasks
 
@@ -146,11 +156,13 @@ waiting there; the ledger is the only record of them.
   lines free back to 1999; openers need one month of a paid Odds API tier
   (~$29) to backfill 2020-2025 snapshots, then cancel. `pickem backfill` loads
   closers only and says so.
-- **`ParseResult.skipped` has no reader yet.** The CBS parser reports every
-  line it could not read, but nothing surfaces that list. Until the pick sheet
-  (Task 13) prints it loudly, a CBS format change would silently drop games
-  from a week and the report would still look complete. Handle it at Task 13
-  at the latest.
+- **The `skipped` lists have no reader yet.** Both `ParseResult.skipped` and
+  `MarketLinesResult.skipped` are populated, but nothing prints them. Task 14's
+  plan text now makes `backfill` echo the market-line skip count in yellow;
+  the CBS side still has no reader at all. Until the pick sheet (Task 13)
+  prints both loudly, a CBS format change would silently drop games from a
+  week and the report would still look complete. Handle it at Task 13 at the
+  latest.
 - **`aliases.yaml` now covers all 32 NFL teams but still only 14 CFB teams.**
   Task 8 extended the NFL side by sweeping nflverse 1999-2025 until it stopped
   raising `UnknownTeamError`. Task 9 could NOT do the same sweep for CFB —
@@ -159,11 +171,18 @@ waiting there; the ledger is the only record of them.
   `UnknownTeamError` on the ~120 missing FBS schools.** Sweep a real week
   through `load_cfb_games` with a key set and add the spellings as aliases of
   existing canonical ids before relying on live CFB data.
-- **Null-spread provider rows are dropped silently** by `load_cfb_lines`
-  (and by the nflverse loader before it). This is plan-mandated and pinned by a
-  test, but it reads against "missing market lines are reported, not skipped" —
-  the same tension the human ruled on at Task 5. Awaiting a ruling; see the
-  ledger's Task 9 lines.
+- **RESOLVED (amendment 9a, human ruling):** null-spread rows are no longer
+  dropped silently. `load_cfb_lines` and `load_nfl_closing_lines` return
+  `MarketLinesResult`, and the plan was amended at Tasks 8, 9, 10 and 14 so
+  the unbuilt tasks follow suit. Nothing left to decide here.
+- **nflverse's null-spread branch is defensive only.** A real 1999-2025 sweep
+  during 9a loaded 7,276 closing lines with ZERO null spreads and no
+  `UnknownTeamError`, so that branch never fires on historical data and only
+  the injected-loader unit test covers it. CFBD's branch is the one that will
+  actually fire, since per-book spreads there genuinely go missing. Relevant
+  because 9a moved team resolution ahead of the null check in nflverse: a row
+  with both a null spread and an unknown abbreviation now raises where it once
+  skipped. The sweep proves that combination does not occur in 1999-2025.
 - Live operation should fit The Odds API free tier (500 credits/month).
 
 ## Phase B decision (do not skip)
