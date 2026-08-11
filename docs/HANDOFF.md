@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 8 (nflverse adapter)
+**Last updated:** 2026-08-11, after Task 9 (CFBD adapter)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,12 +30,12 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 65 passing, `uv run pytest -q`
+- **Tests:** 70 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-8 — all reviewed clean
-- **Next:** Task 9 (CFBD adapter). Not started; no brief generated yet.
-- **BASE for Task 9:** current branch HEAD — the `docs: refresh handoff through
-  Task 8` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
+- **Done:** Tasks 1-9 — all reviewed clean
+- **Next:** Task 10 (Odds API adapter). Not started; no brief generated yet.
+- **BASE for Task 10:** current branch HEAD — the `docs: refresh handoff through
+  Task 9` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
   SHA written here, since the docs commit that records it lands after the fact.
 
 Built so far:
@@ -55,6 +55,9 @@ src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
                                   tiebreak_side. Pure; no I/O.
 src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
                                   `loader` is injected so tests stay offline.
+src/pickem/ingest/cfbd_source.py  CfbdConfig, load_cfb_games, load_cfb_lines.
+                                  `fetcher` is injected; named `_source` so it
+                                  does not shadow the installed `cfbd` package.
 ```
 
 ## Process being followed
@@ -126,13 +129,13 @@ These are already reflected in the plan document — do not re-litigate them.
 
 ## Remaining tasks
 
-9. CFBD adapter — 10. Odds API adapter — 11. Backtest stats —
-12. Backtest runner — 13. Pick sheet report — 14. CLI wiring —
+10. Odds API adapter — 11. Backtest stats — 12. Backtest runner —
+13. Pick sheet report — 14. CLI wiring —
 15. Wire tiebreaks into the pick sheet
 
 After all 15: a final whole-branch review on the most capable model, pointed at
 the ledger's deferred-minor and parked lines, then
-`superpowers:finishing-a-development-branch`. Tasks 1-8 have deferred minors
+`superpowers:finishing-a-development-branch`. Tasks 1-9 have deferred minors
 waiting there; the ledger is the only record of them.
 
 ## Known gaps to raise with the user later
@@ -148,10 +151,19 @@ waiting there; the ledger is the only record of them.
   (Task 13) prints it loudly, a CBS format change would silently drop games
   from a week and the report would still look complete. Handle it at Task 13
   at the latest.
-- **`aliases.yaml` now covers all 32 NFL teams but only 14 CFB teams.** Task 8
-  extended the NFL side by sweeping nflverse 1999-2025 until it stopped raising
-  `UnknownTeamError`; the CFB side will raise on real data until the CFBD
-  adapter (Task 9) forces the same growth. That is the intended path, not a bug.
+- **`aliases.yaml` now covers all 32 NFL teams but still only 14 CFB teams.**
+  Task 8 extended the NFL side by sweeping nflverse 1999-2025 until it stopped
+  raising `UnknownTeamError`. Task 9 could NOT do the same sweep for CFB —
+  CFBD needs an API key, and the suite must stay offline — so the CFB side is
+  still only the 14 hand-entered schools. **The first real CFBD call will raise
+  `UnknownTeamError` on the ~120 missing FBS schools.** Sweep a real week
+  through `load_cfb_games` with a key set and add the spellings as aliases of
+  existing canonical ids before relying on live CFB data.
+- **Null-spread provider rows are dropped silently** by `load_cfb_lines`
+  (and by the nflverse loader before it). This is plan-mandated and pinned by a
+  test, but it reads against "missing market lines are reported, not skipped" —
+  the same tension the human ruled on at Task 5. Awaiting a ruling; see the
+  ledger's Task 9 lines.
 - Live operation should fit The Odds API free tier (500 credits/month).
 
 ## Phase B decision (do not skip)
