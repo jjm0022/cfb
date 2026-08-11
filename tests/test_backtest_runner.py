@@ -93,6 +93,44 @@ def test_games_without_an_opener_are_excluded():
     assert report.overall.wins == 0
 
 
+def test_excluded_games_report_each_reason_in_deterministic_order():
+    """Catches a runner that silently drops excluded games or their reason."""
+    unplayed_gid = "nfl-2025-01-BUF-at-MIA"
+    missing_opener_gid = "nfl-2025-02-BUF-at-MIA"
+    missing_market_gid = "nfl-2025-03-BUF-at-MIA"
+    unplayed = Game(
+        game_id=unplayed_gid,
+        sport=Sport.NFL,
+        season=2025,
+        week=1,
+        kickoff_utc=T_CLOSE,
+        home_team_id="MIA",
+        away_team_id="BUF",
+    )
+    report = run_backtest(
+        games=[
+            game(missing_market_gid, 27, 17, 3),
+            game(missing_opener_gid, 27, 17, 2),
+            unplayed,
+        ],
+        openers=[
+            line(unplayed_gid, -3.0, "open", T_OPEN),
+            line(missing_market_gid, -3.0, "open", T_OPEN),
+        ],
+        closers=[line(unplayed_gid, -6.0, "close", T_CLOSE)],
+    )
+
+    assert [entry.split(":", maxsplit=1)[0] for entry in report.skipped] == [
+        unplayed_gid,
+        missing_opener_gid,
+        missing_market_gid,
+    ]
+    reasons = [entry.lower() for entry in report.skipped]
+    assert "unplayed" in reasons[0]
+    assert "missing" in reasons[1] and "open" in reasons[1]
+    assert "missing" in reasons[2] and "clos" in reasons[2]
+
+
 def test_results_are_broken_out_by_tier():
     """Catches a runner that only aggregates overall results."""
     strong = "nfl-2025-03-BUF-at-MIA"

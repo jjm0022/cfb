@@ -39,6 +39,7 @@ class BacktestReport(BaseModel):
     overall: TierRecord
     by_tier: list[TierRecord]
     assumptions: list[str]
+    skipped: list[str]
 
 
 def _record(tier: Tier | None, results: Sequence[Result]) -> TierRecord:
@@ -76,12 +77,15 @@ def run_backtest(
 
     all_results: list[Result] = []
     by_tier: dict[Tier, list[Result]] = defaultdict(list)
+    skipped: list[str] = []
 
     for game in sorted(games, key=lambda game: (game.season, game.week, game.game_id)):
         if game.home_score is None or game.away_score is None:
+            skipped.append(f"{game.game_id}: unplayed game (missing final score)")
             continue
         opener = openers_by_game.get(game.game_id)
         if opener is None:
+            skipped.append(f"{game.game_id}: missing opening line for frozen proxy")
             continue
 
         frozen = LeagueLine(
@@ -93,6 +97,7 @@ def run_backtest(
         )
         edge = compute_edge(frozen, closers_by_game.get(game.game_id, []), thresholds)
         if edge.tier is Tier.NO_MARKET:
+            skipped.append(f"{game.game_id}: missing closing market line")
             continue
 
         result = grade_pick(
@@ -108,4 +113,5 @@ def run_backtest(
             for tier in sorted(by_tier, key=lambda tier: tier.value)
         ],
         assumptions=list(ASSUMPTIONS),
+        skipped=skipped,
     )

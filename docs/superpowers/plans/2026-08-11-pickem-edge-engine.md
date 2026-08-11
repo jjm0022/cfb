@@ -2517,7 +2517,7 @@ git commit -m "feat: add ATS grading and Wilson interval estimation"
 - Consumes: `Game`, `LeagueLine`, `MarketLine`, `Tier`, `compute_edge`, `Thresholds`, `grade_pick`, `Result`, `wilson_interval`
 - Produces:
   - `TierRecord` pydantic model: `tier: Tier | None` (None on the overall row), `wins: int`, `losses: int`, `pushes: int`, `hit_rate: float`, `ci_low: float`, `ci_high: float`
-  - `BacktestReport` pydantic model: `overall: TierRecord`, `by_tier: list[TierRecord]`, `assumptions: list[str]`
+  - `BacktestReport` pydantic model: `overall: TierRecord`, `by_tier: list[TierRecord]`, `assumptions: list[str]`, `skipped: list[str]` (each excluded game ID and reason, deterministically ordered)
   - `run_backtest(games, openers, closers, thresholds: Thresholds | None = None) -> BacktestReport`
 
 `openers` and `closers` are `Sequence[MarketLine]`; openers stand in for the
@@ -2619,6 +2619,42 @@ def test_games_without_an_opener_are_excluded():
     assert report.overall.wins == 0
 
 
+def test_excluded_games_report_each_reason_in_deterministic_order():
+    unplayed_gid = "nfl-2025-01-BUF-at-MIA"
+    missing_opener_gid = "nfl-2025-02-BUF-at-MIA"
+    missing_market_gid = "nfl-2025-03-BUF-at-MIA"
+    unplayed = Game(
+        game_id=unplayed_gid,
+        sport=Sport.NFL,
+        season=2025,
+        week=1,
+        kickoff_utc=T_CLOSE,
+        home_team_id="MIA",
+        away_team_id="BUF",
+    )
+    report = run_backtest(
+        games=[
+            game(missing_market_gid, 27, 17, 3),
+            game(missing_opener_gid, 27, 17, 2),
+            unplayed,
+        ],
+        openers=[
+            line(unplayed_gid, -3.0, "open", T_OPEN),
+            line(missing_market_gid, -3.0, "open", T_OPEN),
+        ],
+        closers=[line(unplayed_gid, -6.0, "close", T_CLOSE)],
+    )
+    assert [entry.split(":", maxsplit=1)[0] for entry in report.skipped] == [
+        unplayed_gid,
+        missing_opener_gid,
+        missing_market_gid,
+    ]
+    reasons = [entry.lower() for entry in report.skipped]
+    assert "unplayed" in reasons[0]
+    assert "missing" in reasons[1] and "open" in reasons[1]
+    assert "missing" in reasons[2] and "clos" in reasons[2]
+
+
 def test_results_are_broken_out_by_tier():
     strong = "nfl-2025-03-BUF-at-MIA"
     lean = "nfl-2025-04-BUF-at-MIA"
@@ -2698,6 +2734,7 @@ class BacktestReport(BaseModel):
     overall: TierRecord
     by_tier: list[TierRecord]
     assumptions: list[str]
+    skipped: list[str]
 
 
 def _record(tier: Tier | None, results: Sequence[Result]) -> TierRecord:
@@ -2730,12 +2767,15 @@ def run_backtest(
 
     all_results: list[Result] = []
     by_tier: dict[Tier, list[Result]] = defaultdict(list)
+    skipped: list[str] = []
 
     for game in sorted(games, key=lambda g: (g.season, g.week, g.game_id)):
         if game.home_score is None or game.away_score is None:
+            skipped.append(f"{game.game_id}: unplayed game (missing final score)")
             continue
         opener = openers_by_game.get(game.game_id)
         if opener is None:
+            skipped.append(f"{game.game_id}: missing opening line for frozen proxy")
             continue
 
         frozen = LeagueLine(
@@ -2747,6 +2787,7 @@ def run_backtest(
         )
         edge = compute_edge(frozen, closers_by_game.get(game.game_id, []), thresholds)
         if edge.tier is Tier.NO_MARKET:
+            skipped.append(f"{game.game_id}: missing closing market line")
             continue
 
         result = grade_pick(
@@ -2759,13 +2800,14 @@ def run_backtest(
         overall=_record(None, all_results),
         by_tier=[_record(tier, by_tier[tier]) for tier in sorted(by_tier, key=lambda t: t.value)],
         assumptions=list(ASSUMPTIONS),
+        skipped=skipped,
     )
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_backtest_runner.py -v`
-Expected: PASS (8 tests)
+Expected: PASS (9 tests)
 
 - [ ] **Step 5: Commit**
 
