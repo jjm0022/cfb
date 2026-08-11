@@ -29,12 +29,11 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 18 passing, `uv run pytest -q`
+- **Tests:** 36 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1, 2, 3 — all reviewed clean
-- **Next:** Task 4 (DuckDB store). Not started. Its brief is already generated at
-  `.superpowers/sdd/2026-08-11-pickem-edge-engine/task-4-brief.md`
-- **BASE for Task 4:** `81648f2`
+- **Done:** Tasks 1-5 — all reviewed clean
+- **Next:** Task 6 (divergence engine). Not started; no brief generated yet.
+- **BASE for Task 6:** `796be07`
 
 Built so far:
 
@@ -43,6 +42,10 @@ src/pickem/models.py              Sport/Side/Tier StrEnums, make_game_id, Game,
                                   LeagueLine, MarketLine, Edge
 src/pickem/resolve/resolver.py    TeamResolver, UnknownTeamError (fail-loud)
 src/pickem/resolve/aliases.yaml   canonical team IDs -> every source's spelling
+src/pickem/store/db.py            Store — the only module that talks to DuckDB
+src/pickem/store/schema.sql       DuckDB DDL; `lines` is append-only
+src/pickem/ingest/cbs.py          parse_cbs_block -> ParseResult (lines,
+                                  matchups, skipped); CbsParseError
 ```
 
 ## Process being followed
@@ -80,6 +83,13 @@ These are already reflected in the plan document — do not re-litigate them.
   new way, so this trap will recur.**
 - Two pre-flight plan defects fixed before Task 1 (Task 5 fixture test, Task 4
   league-line join).
+- **`pytz` is a real dependency.** duckdb imports it dynamically to read
+  TIMESTAMPTZ but does not declare it. Do not prune it as unused. Reads return
+  pytz UTC tzinfo, not `datetime.UTC`. Plan amended at Task 4.
+- **CBS lines carrying two numbers are skipped, not resolved.** A paste line
+  with a number on both sides (a total, a stray trailing digit) matches both
+  regex groups; the plan's original code silently took the home-side one as the
+  spread. Such lines now go to `ParseResult.skipped`. Plan amended at Task 5.
 
 ## Load-bearing conventions — do not "improve" these
 
@@ -99,7 +109,7 @@ These are already reflected in the plan document — do not re-litigate them.
 
 ## Remaining tasks
 
-4. DuckDB store — 5. CBS paste parser — 6. Divergence engine — 7. Elo tiebreak —
+6. Divergence engine — 7. Elo tiebreak —
 8. nflverse adapter — 9. CFBD adapter — 10. Odds API adapter —
 11. Backtest stats — 12. Backtest runner — 13. Pick sheet report —
 14. CLI wiring — 15. Wire tiebreaks into the pick sheet
