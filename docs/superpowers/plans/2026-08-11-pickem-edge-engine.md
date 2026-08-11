@@ -6,7 +6,7 @@
 
 **Architecture:** One-directional pipeline — `ingest → resolve → store → edge → report`, with `backtest` hanging off `edge`. Adapters normalize every source into shared pydantic records; `edge/` is pure functions over those records with no I/O, making the strategy exhaustively testable offline.
 
-**Tech Stack:** Python 3.12+, uv, pydantic, duckdb, polars, httpx, typer, pyyaml, nflreadpy, cfbd. Tests: pytest, ruff.
+**Tech Stack:** Python 3.12+, uv, pydantic, duckdb, polars, httpx, typer, pyyaml, nflreadpy, cfbd, pytz. Tests: pytest, ruff.
 
 **Spec:** `docs/superpowers/specs/2026-08-11-pickem-edge-design.md`
 
@@ -66,7 +66,7 @@ write `pyproject.toml`. Do not delete existing files.
 - [ ] **Step 2: Add dependencies**
 
 ```bash
-uv add pydantic duckdb polars httpx typer pyyaml nflreadpy cfbd
+uv add pydantic duckdb polars httpx typer pyyaml nflreadpy cfbd pytz
 uv add --dev pytest pytest-cov ruff
 ```
 
@@ -583,6 +583,17 @@ git commit -m "feat: add fail-loud team identity resolver"
 ---
 
 ### Task 4: DuckDB store
+
+> **Amendment (pytz is required, and duckdb will not tell you so).** duckdb's
+> Python client imports `pytz` dynamically to materialize `TIMESTAMPTZ` columns
+> on read, but does not declare it in its own package metadata — not as a
+> dependency, not even as an extra. Without `pytz` installed, every read method
+> below raises `InvalidInputException: Required module 'pytz' failed to import`,
+> while writes succeed. `pytz` is therefore declared explicitly in `pyproject.toml`;
+> do not remove it as "unused" because nothing imports it in our source. Note that
+> timestamps come back with a `pytz` UTC tzinfo rather than `datetime.UTC` — equal
+> by instant, but not identical by `is`. `tests/test_store.py` pins round-trip
+> equality and tz-awareness on all three timestamp paths to catch a regression here.
 
 **Files:**
 - Create: `src/pickem/store/__init__.py`, `src/pickem/store/schema.sql`, `src/pickem/store/db.py`
