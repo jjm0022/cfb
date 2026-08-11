@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 5 (CBS paste parser)
+**Last updated:** 2026-08-11, after Task 6 (divergence engine)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,11 +30,11 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 36 passing, `uv run pytest -q`
+- **Tests:** 51 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-5 — all reviewed clean
-- **Next:** Task 6 (divergence engine). Not started; no brief generated yet.
-- **BASE for Task 6:** `796be07`
+- **Done:** Tasks 1-6 — all reviewed clean
+- **Next:** Task 7 (Elo tiebreak rating). Not started; no brief generated yet.
+- **BASE for Task 7:** `1ad8f87`
 
 Built so far:
 
@@ -47,6 +47,8 @@ src/pickem/store/db.py            Store — the only module that talks to DuckDB
 src/pickem/store/schema.sql       DuckDB DDL; `lines` is append-only
 src/pickem/ingest/cbs.py          parse_cbs_block -> ParseResult (lines,
                                   matchups, skipped); CbsParseError
+src/pickem/edge/divergence.py     Thresholds, consensus_spread, compute_edge,
+                                  rank_edges. Pure; no I/O.
 ```
 
 ## Process being followed
@@ -113,14 +115,14 @@ These are already reflected in the plan document — do not re-litigate them.
 
 ## Remaining tasks
 
-6. Divergence engine — 7. Elo tiebreak —
+7. Elo tiebreak —
 8. nflverse adapter — 9. CFBD adapter — 10. Odds API adapter —
 11. Backtest stats — 12. Backtest runner — 13. Pick sheet report —
 14. CLI wiring — 15. Wire tiebreaks into the pick sheet
 
 After all 15: a final whole-branch review on the most capable model, pointed at
 the ledger's deferred-minor and parked lines, then
-`superpowers:finishing-a-development-branch`. Tasks 1-5 have deferred minors
+`superpowers:finishing-a-development-branch`. Tasks 1-6 have deferred minors
 waiting there; the ledger is the only record of them.
 
 ## Known gaps to raise with the user later
