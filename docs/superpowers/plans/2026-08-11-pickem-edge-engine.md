@@ -2827,7 +2827,7 @@ git commit -m "feat: add backtest runner replaying history through live edge cod
 **Interfaces:**
 - Consumes: `Edge`, `Game`, `Tier`, `Side`, `rank_edges`
 - Produces:
-  - `render_sheet(edges: Sequence[Edge], games: Sequence[Game], *, generated_at: datetime, snapshot_age_minutes: float | None = None) -> str` returning markdown
+  - `render_sheet(edges: Sequence[Edge], games: Sequence[Game], *, generated_at: datetime, provenance: str, snapshot_age_minutes: float | None = None) -> str` returning markdown; every sheet displays provenance and either snapshot age or an explicit unknown/unavailable state
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2841,6 +2841,7 @@ from pickem.report.sheet import render_sheet
 
 NOW = datetime(2025, 9, 21, 12, 0, tzinfo=UTC)
 GID = "nfl-2025-03-BUF-at-MIA"
+PROVENANCE = "CBS frozen league lines vs latest stored market consensus"
 
 GAME = Game(
     game_id=GID,
@@ -2866,36 +2867,46 @@ def edge(tier: Tier = Tier.STRONG, delta: float = 3.0, side: Side = Side.HOME) -
 
 
 def test_names_the_picked_team_not_just_a_side():
-    sheet = render_sheet([edge()], [GAME], generated_at=NOW)
+    sheet = render_sheet([edge()], [GAME], generated_at=NOW, provenance=PROVENANCE)
     assert "MIA" in sheet
 
 
 def test_shows_both_numbers_so_a_pick_can_be_audited():
-    sheet = render_sheet([edge()], [GAME], generated_at=NOW)
+    sheet = render_sheet([edge()], [GAME], generated_at=NOW, provenance=PROVENANCE)
     assert "-3.0" in sheet and "-6.0" in sheet
 
 
 def test_orders_by_divergence_strongest_first():
     strong = edge(Tier.STRONG, delta=6.0)
     weak = edge(Tier.COINFLIP, delta=0.5)
-    sheet = render_sheet([weak, strong], [GAME], generated_at=NOW)
+    sheet = render_sheet([weak, strong], [GAME], generated_at=NOW, provenance=PROVENANCE)
     assert sheet.index("6.0") < sheet.index("0.5")
 
 
 def test_stamps_snapshot_age_when_data_is_stale():
-    sheet = render_sheet([edge()], [GAME], generated_at=NOW, snapshot_age_minutes=180.0)
+    sheet = render_sheet([edge()], [GAME], generated_at=NOW, provenance=PROVENANCE, snapshot_age_minutes=180.0)
     assert "180" in sheet
 
 
 def test_flags_games_with_no_market_line():
-    sheet = render_sheet([edge(Tier.NO_MARKET, delta=0.0)], [GAME], generated_at=NOW)
+    sheet = render_sheet([edge(Tier.NO_MARKET, delta=0.0)], [GAME], generated_at=NOW, provenance=PROVENANCE)
     assert "no_market" in sheet.lower() or "no market" in sheet.lower()
+
+
+def test_displays_provenance_in_every_sheet():
+    sheet = render_sheet([edge()], [GAME], generated_at=NOW, provenance=PROVENANCE)
+    assert PROVENANCE in sheet
+
+
+def test_stamps_unknown_snapshot_age_when_unavailable():
+    sheet = render_sheet([edge()], [GAME], generated_at=NOW, provenance=PROVENANCE)
+    assert "market snapshot age: **unknown" in sheet.lower()
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_report.py -v`
-Expected: FAIL with `ModuleNotFoundError`
+Expected: FAIL until `render_sheet` accepts provenance and renders provenance plus unknown snapshot age.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -2922,17 +2933,23 @@ def render_sheet(
     games: Sequence[Game],
     *,
     generated_at: datetime,
+    provenance: str,
     snapshot_age_minutes: float | None = None,
 ) -> str:
     by_id = {game.game_id: game for game in games}
 
-    header = [f"# Pick Sheet — generated {generated_at:%Y-%m-%d %H:%M UTC}", ""]
+    header = [
+        f"# Pick Sheet — generated {generated_at:%Y-%m-%d %H:%M UTC}",
+        f"> Provenance: {provenance}",
+    ]
     if snapshot_age_minutes is not None:
         header.append(
             f"> Market snapshot is **{snapshot_age_minutes:.0f} minutes old**. "
             "Re-run `pickem poll-odds` for fresher numbers."
         )
-        header.append("")
+    else:
+        header.append("> Market snapshot age: **unknown/unavailable**.")
+    header.append("")
 
     rows = [
         "| # | Matchup | Pick | Tier | Edge | League | Market |",
@@ -2957,7 +2974,7 @@ def render_sheet(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_report.py -v`
-Expected: PASS (5 tests)
+Expected: PASS (7 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -3203,7 +3220,13 @@ def report(
         edges.append(compute_edge(line, market))
 
     age = (now - newest).total_seconds() / 60 if newest else None
-    sheet = render_sheet(edges, games, generated_at=now, snapshot_age_minutes=age)
+    sheet = render_sheet(
+        edges,
+        games,
+        generated_at=now,
+        provenance="CBS frozen league lines vs latest stored market consensus",
+        snapshot_age_minutes=age,
+    )
     typer.echo(sheet)
     if out:
         out.write_text(sheet)

@@ -18,17 +18,23 @@ def render_sheet(
     games: Sequence[Game],
     *,
     generated_at: datetime,
+    provenance: str,
     snapshot_age_minutes: float | None = None,
 ) -> str:
     by_id = {game.game_id: game for game in games}
 
-    header = [f"# Pick Sheet — generated {generated_at:%Y-%m-%d %H:%M UTC}", ""]
+    header = [
+        f"# Pick Sheet — generated {generated_at:%Y-%m-%d %H:%M UTC}",
+        f"> Provenance: {provenance}",
+    ]
     if snapshot_age_minutes is not None:
         header.append(
             f"> Market snapshot is **{snapshot_age_minutes:.0f} minutes old**. "
             "Re-run `pickem poll-odds` for fresher numbers."
         )
-        header.append("")
+    else:
+        header.append("> Market snapshot age: **unknown/unavailable**.")
+    header.append("")
 
     rows = [
         "| # | Matchup | Pick | Tier | Edge | League | Market |",
