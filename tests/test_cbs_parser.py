@@ -80,3 +80,13 @@ def test_pickem_pushes_are_allowed(resolver):
     # A pick'em game (no favorite) is a legitimate 0.0 line, not a parse failure.
     result = parse("Buffalo Bills at Miami Dolphins PK", resolver)
     assert result.lines[0].spread_home == 0.0
+
+
+def test_dual_number_lines_are_reported_as_ambiguous(resolver):
+    # A line with numbers on both sides (e.g., game line + total) is ambiguous
+    # and must be reported in skipped, not silently resolved to the home number.
+    text = "Buffalo Bills at Miami Dolphins -3.0\nKansas City Chiefs -6.5 at New York Jets 45.5"
+    result = parse(text, resolver)
+    assert len(result.lines) == 1  # only the first line parses
+    assert result.lines[0].spread_home == -3.0
+    assert any("45.5" in s for s in result.skipped)  # second line is reported

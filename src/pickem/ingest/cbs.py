@@ -68,6 +68,10 @@ def parse_cbs_block(
             skipped.append(raw)
             continue
 
+        if away_num is not None and home_num is not None:
+            skipped.append(raw)  # ambiguous: numbers on both sides
+            continue
+
         # Exactly one side carries the number. If the away team does, flip its
         # sign to express the same line from the home team's perspective.
         spread_home = home_num if home_num is not None else -away_num
