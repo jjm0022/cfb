@@ -430,6 +430,8 @@ surface new spellings.
 ```yaml
 # canonical team_id -> every spelling any source uses for it.
 # Matching is case-insensitive and whitespace-normalized.
+# QUOTE any ID or alias PyYAML would read as a YAML 1.1 scalar:
+# NO, ON, OFF, YES, Y, N, TRUE, FALSE, NULL. Bare NO becomes boolean false.
 nfl:
   MIA: ["Miami Dolphins", "Miami", "MIA", "Dolphins"]
   BUF: ["Buffalo Bills", "Buffalo", "BUF", "Bills"]
@@ -442,7 +444,7 @@ nfl:
   SF:  ["San Francisco 49ers", "San Francisco", "SF", "SFO", "49ers", "Niners"]
   TB:  ["Tampa Bay Buccaneers", "Tampa Bay", "TB", "TAM", "Buccaneers", "Bucs"]
   GB:  ["Green Bay Packers", "Green Bay", "GB", "GNB", "Packers"]
-  NO:  ["New Orleans Saints", "New Orleans", "NO", "NOR", "Saints"]
+  "NO": ["New Orleans Saints", "New Orleans", "NO", "NOR", "Saints"]  # quoted: bare NO is YAML 1.1 boolean false
   NYG: ["New York Giants", "NY Giants", "NYG", "Giants"]
   NYJ: ["New York Jets", "NY Jets", "NYJ", "Jets"]
 cfb:
