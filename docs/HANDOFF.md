@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 15 (all implementation tasks complete)
+**Last updated:** 2026-08-11, after the final whole-branch review and its fix wave
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,17 +30,17 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 120 passing, `uv run pytest -q`
-- **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-15 plus amendments 9a, 12a, 13a, and 14a — all task-scoped
-  reviews clean
-- **Next:** final whole-branch review. Generate a package from the merge-base
-  with master through current HEAD, dispatch the most capable reviewer, and
-  explicitly point it at every deferred-minor and parked ledger entry.
+- **Tests:** 141 passing, `uv run pytest -q`
+- **Lint:** clean, `uv run ruff check src tests`; `ruff format --check` is now
+  clean repo-wide too (the six pre-existing drifted files were formatted)
+- **Done:** Tasks 1-15 plus amendments 9a, 12a, 13a, 14a, the final
+  whole-branch review, and its single fix wave (`821ae5c`)
+- **Next:** `superpowers:finishing-a-development-branch`, once the scoped
+  re-review of `821ae5c` is clean.
 - **Do not start Task 14 or 15 again.** Their committed implementations are
   `e45b724` + atomic-ingest fix `62f4023`, and `63f54b3`, respectively.
 - **Review range:** always re-derive it with `git merge-base master HEAD` and
-  `git rev-parse HEAD`; this handoff update changes HEAD after the fact.
+  `git rev-parse HEAD`; handoff updates change HEAD after the fact.
 
 Built so far:
 
@@ -68,6 +68,8 @@ src/pickem/ingest/odds.py         OddsClient.fetch_spreads for live book lines;
                                   injectable HTTP transport keeps tests offline.
                                   QuotaExhausted is distinct from feed errors;
                                   missing spreads are surfaced in skipped.
+                                  Requires a `slate` of game ids; retries
+                                  transport/5xx with backoff; context manager.
 src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
                                   Wilson score intervals. Pure; no I/O.
 src/pickem/backtest/runner.py     run_backtest replays opener/closer proxies
@@ -162,7 +164,13 @@ These are already reflected in the plan document — do not re-litigate them.
 - **`make_game_id` format:** `nfl-2025-03-BUF-at-MIA` — zero-padded week,
   `-at-` separator, away before home. Every source joins on this string.
 - **The `lines` table is append-only.** `INSERT OR IGNORE`, never `OR REPLACE`.
-  Line movement is the signal; overwriting destroys it.
+  Line movement is the signal; overwriting destroys it. Because a bad row can
+  never be cleaned up, nothing writes to it without knowing the game id is
+  right — hence the odds `slate`.
+- **`upsert_games` never blind-replaces.** Scores COALESCE, so a source that
+  does not carry them cannot erase what `sync-results` wrote. `ingest-cbs` uses
+  `insert_games_if_absent`, because the CBS paste has a placeholder kickoff and
+  no scores.
 - **`edge/` performs no I/O.** Pure functions, which is what makes the strategy
   testable offline and replayable in the backtest.
 - **Fail loud.** Unknown teams raise. Missing market lines are reported as
@@ -180,22 +188,42 @@ These are already reflected in the plan document — do not re-litigate them.
   a missing status line.
 - **Elo never overrides a real divergence signal.** It may resolve only
   `COINFLIP` and `NO_MARKET`; `STRONG` and `LEAN` edges pass through unchanged.
+  An edge that needs a tiebreak but has no `Game` record raises
+  `MissingGameError` — it is never passed through carrying `compute_edge`'s
+  placeholder `side=HOME`.
+- **The backtest runs the pipeline that ships.** It applies the same
+  `apply_tiebreaks` the report does, with history that grows only after each
+  replayed week. If the two ever diverge again, the backtest stops being
+  evidence about the thing being shipped.
+
+## Final review outcome (2026-08-11)
+
+The whole-branch review over `bed73dd..22a842a` returned 1 Critical and 8
+Important findings and adjudicated all 17 deferred/parked ledger items. All
+were addressed in the single allowed fix wave, commit `821ae5c`. Full detail
+is in the ledger; the decisions that changed previously-ruled behavior are:
+
+- **The odds feed is now week-scoped by an explicit slate.** The endpoint
+  returns events across several weeks, and every one was being stamped with the
+  caller's week — writing wrong game ids permanently into the append-only
+  `lines` table while the real week silently reported `NO_MARKET`.
+  `fetch_spreads` now requires `slate`, a collection of canonical game ids;
+  `poll-odds` derives it from `league_lines_for_week` and refuses to run before
+  `ingest-cbs`. **This is the fix that matters most before any live run.**
+- **The backtest now grades NO_MARKET games instead of excluding them.** The
+  report ships a pick on them via the Elo tiebreak, so excluding them made the
+  backtest measure something the system does not do. Ruling 12a still holds:
+  every genuinely excluded game is still named in `BacktestReport.skipped`,
+  which the CLI now prints.
+- **The backtest applies the same tiebreak the report does**, with history that
+  grows only after each replayed week, so no future result informs its own pick.
+- **`apply_tiebreaks` raises rather than passing through an unresolved edge**
+  carrying `compute_edge`'s placeholder `side=HOME`.
 
 ## Remaining task
 
-Run the final whole-branch review required by
-`superpowers:subagent-driven-development`:
-
-1. Re-derive `MERGE_BASE=$(git merge-base master HEAD)` and current HEAD.
-2. Generate `scripts/review-package PLAN MERGE_BASE HEAD`.
-3. Dispatch the most capable reviewer using
-   `superpowers:requesting-code-review`'s `code-reviewer.md`.
-4. Point the reviewer at every `minor (deferred)` and `parked` ledger line.
-5. If findings remain, use the skill's single final fix wave and one scoped
-   re-review; do not restart per-task review loops.
-6. Only after final review, use `superpowers:finishing-a-development-branch`.
-
-Do not delete the SDD workspace until the final review is clean; it contains
+Use `superpowers:finishing-a-development-branch` once the scoped re-review of
+`821ae5c` is clean. Do not delete the SDD workspace before then; it contains
 the ledger and review artifacts needed for that gate.
 
 ## Known gaps to raise with the user later
@@ -233,14 +261,19 @@ the ledger and review artifacts needed for that gate.
   because 9a moved team resolution ahead of the null check in nflverse: a row
   with both a null spread and an unknown abbreviation now raises where it once
   skipped. The sweep proves that combination does not occur in 1999-2025.
-- **Task 14 deferred review items:** five commands have only help-discovery
-  CLI coverage for several warning/output branches, and Store handles close
-  only on happy paths. Both are recorded verbatim in the ledger for final
-  review triage.
-- **Tiebreaker total helper is not wired to output.** Task 15 required and
-  tested `predict_tiebreaker_total`, but the approved plan did not add a CLI or
-  report caller. Treat this as a plan-mandated note during final review, not as
-  missing Task 15 implementation.
+- **RESOLVED (final review): CLI output branches and Store handles.**
+  `report` and `backtest` output branches now have CLI-level tests, and both
+  `Store` and `OddsClient` are context managers used by all six commands.
+- **`predict_tiebreaker_total` is still unwired, and it is not a loose wire.**
+  `odds.py` requests `markets=spreads` only and never populates
+  `MarketLine.total`, so wiring it today returns `None` for all live data. Only
+  nflverse and CFBD supply totals. Wiring it needs the `totals` market added to
+  the odds request (a quota cost) plus a CLI flag naming the tiebreaker game.
+  Phase B scope.
+- **CFB is not usable end to end yet.** The alias gap above plus the fact that
+  CFB results only arrive through the new `sync-results --sport cfb --week N`
+  path (which needs a CFBD key) means a CFB rating is untrained in practice.
+  `report` prints a warning when no completed game is in the store.
 - **External phase-exit checks are still unverified.** The automated suite is
   offline. A real current CBS paste, a live-odds report, and a data-backed
   2020-2025 backtest still require credentials/data and should be called out
