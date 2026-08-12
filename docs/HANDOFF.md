@@ -29,15 +29,16 @@ allocation problem.
 
 ## Current state
 
-- **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 145 passing, `uv run pytest -q`
+- **Branch:** merged to `master` (2026-08-11). `phase-a-edge-engine` is gone.
+- **Tests:** 149 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`; `ruff format --check` is now
   clean repo-wide too (the six pre-existing drifted files were formatted)
 - **Done:** Tasks 1-15 plus amendments 9a, 12a, 13a, 14a, the final
   whole-branch review, its fix wave (`821ae5c`), the scoped re-review, and the
   re-review fix (`11fbdb3`)
-- **Next:** `superpowers:finishing-a-development-branch`. No review findings
-  remain open.
+- **Next:** Phase A is code-complete and merged. What remains is not code:
+  run the external phase-exit checks below with real credentials, then make the
+  Phase B decision from the backtest's Wilson intervals.
 - **Do not start Task 14 or 15 again.** Their committed implementations are
   `e45b724` + atomic-ingest fix `62f4023`, and `63f54b3`, respectively.
 - **Review range:** always re-derive it with `git merge-base master HEAD` and
@@ -230,9 +231,19 @@ is in the ledger; the decisions that changed previously-ruled behavior are:
 
 ## Remaining task
 
-Use `superpowers:finishing-a-development-branch` once the scoped re-review of
-`821ae5c` is clean. Do not delete the SDD workspace before then; it contains
-the ledger and review artifacts needed for that gate.
+None in code. Phase A merged to `master` at `b9959b9` with the review gate
+clean. The external phase-exit checks still require credentials and real data:
+
+1. `export ODDS_API_KEY=...` and `export CFBD_API_KEY=...` (or a `.env` at the
+   repo root — already gitignored). `src/pickem/config.py` reads both.
+2. **Sweep CFB aliases before any live CFB run.** `aliases.yaml` still has only
+   14 schools. Run a real week through `load_cfb_games` with a key set and add
+   every spelling as an alias of an existing canonical id.
+3. Paste a real CBS block through `ingest-cbs`, then `poll-odds`, then
+   `report`, and read the sheet for anything that looks wrong.
+4. `backfill` then `backtest` for the data-backed hit rate, remembering that
+   openers are still missing (see the backtest data gap below), so the run will
+   report every game as excluded until that is resolved.
 
 ## Known gaps to raise with the user later
 
