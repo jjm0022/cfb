@@ -30,7 +30,7 @@ allocation problem.
 ## Current state
 
 - **Branch:** merged to `master` (2026-08-11). `phase-a-edge-engine` is gone.
-- **Tests:** 149 passing, `uv run pytest -q`
+- **Tests:** 170 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`; `ruff format --check` is now
   clean repo-wide too (the six pre-existing drifted files were formatted)
 - **Done:** Tasks 1-15 plus amendments 9a, 12a, 13a, 14a, the final
@@ -63,8 +63,9 @@ src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
 src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
                                   `loader` is injected so tests stay offline.
 src/pickem/ingest/cfbd_source.py  CfbdConfig, load_cfb_games, load_cfb_lines.
-                                  `fetcher` is injected; named `_source` so it
-                                  does not shadow the installed `cfbd` package.
+                                  `fetcher` is injected. Talks to the CFBD REST
+                                  API over httpx — NOT the `cfbd` SDK, which
+                                  pins pydantic<2. Retries 429 with backoff.
                                   Both line loaders return MarketLinesResult.
 src/pickem/ingest/odds.py         OddsClient.fetch_spreads for live book lines;
                                   injectable HTTP transport keeps tests offline.
@@ -128,6 +129,12 @@ These are already reflected in the plan document — do not re-litigate them.
   new way, so this trap will recur.**
 - Two pre-flight plan defects fixed before Task 1 (Task 5 fixture test, Task 4
   league-line join).
+- **The `cfbd` SDK is NOT usable here.** Every published `cfbd` 5.x release
+  pins `pydantic<2` and this project is built on pydantic 2; the 4.x line
+  predates the current API and silently deserializes its camelCase fields to
+  None, which made every team name on `/games` come back null while `/lines`
+  looked fine. `cfbd_source.py` calls the REST API over httpx instead and the
+  dependency was removed. Do not "restore" the SDK.
 - **`pytz` is a real dependency.** duckdb imports it dynamically to read
   TIMESTAMPTZ but does not declare it. Do not prune it as unused. Reads return
   pytz UTC tzinfo, not `datetime.UTC`. Plan amended at Task 4.
@@ -260,14 +267,22 @@ clean. The external phase-exit checks still require credentials and real data:
   `uv run ruff format --check src tests` named six files outside Task 13 that
   would be reformatted. Task 13's three files are clean; the full list and
   verification note are in the ledger for final-review triage.
-- **`aliases.yaml` now covers all 32 NFL teams but still only 14 CFB teams.**
-  Task 8 extended the NFL side by sweeping nflverse 1999-2025 until it stopped
-  raising `UnknownTeamError`. Task 9 could NOT do the same sweep for CFB —
-  CFBD needs an API key, and the suite must stay offline — so the CFB side is
-  still only the 14 hand-entered schools. **The first real CFBD call will raise
-  `UnknownTeamError` on the ~120 missing FBS schools.** Sweep a real week
-  through `load_cfb_games` with a key set and add the spellings as aliases of
-  existing canonical ids before relying on live CFB data.
+- **RESOLVED (2026-08-11): `aliases.yaml` now covers all 32 NFL teams and the
+  whole FBS (136 schools).** The CFB side was generated from the CFBD FBS team
+  registry (2021-2025) and merged into the 14 hand-entered ids — none renamed —
+  then verified by sweeping 2022-2025 weeks 1-15 through `load_cfb_games` and
+  `load_cfb_lines`: **3,173 games and 10,197 lines resolved, zero
+  `UnknownTeamError`**, 5 rows skipped for null spreads. `tests/test_cfb_aliases.py`
+  guards the table offline.
+- **The alias table is FBS-only, deliberately.** Both CFBD fetchers drop games
+  where either side is FCS — `classification=fbs` alone still returns FBS-hosts-
+  FCS games, and those schools are ones this system never picks. An FCS school
+  that genuinely appears on the CBS sheet fails loud at `ingest-cbs`, which is
+  the right place to notice and hand-add it.
+- **Bare "Miami" resolves to MIAFL (the Hurricanes)**, matching CFBD's own
+  naming. `Miami (OH)` stays distinct as MIAOH. If a CBS paste ever writes bare
+  "Miami" meaning the RedHawks it will silently resolve to the wrong school —
+  the one place in the table where that is possible.
 - **RESOLVED (amendment 9a, human ruling):** null-spread rows are no longer
   dropped silently. `load_cfb_lines` and `load_nfl_closing_lines` return
   `MarketLinesResult`, and the plan was amended at Tasks 8, 9, 10 and 14 so
