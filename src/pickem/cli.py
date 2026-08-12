@@ -51,6 +51,12 @@ def ingest_cbs(
         typer.secho(f"unresolved team: {exc}", fg="red", err=True)
         raise typer.Exit(code=1) from exc
 
+    typer.echo(f"parsed {len(parsed.lines)} games for {sport.value} {season} week {week}")
+    for skipped in parsed.skipped:
+        typer.secho(f"  skipped: {skipped!r}", fg="yellow")
+    if parsed.skipped:
+        raise typer.Exit(code=1)
+
     store = _store(db)
     games = [
         Game(
@@ -68,8 +74,6 @@ def ingest_cbs(
     store.upsert_league_lines(parsed.lines)
 
     typer.echo(f"ingested {len(parsed.lines)} games for {sport.value} {season} week {week}")
-    for skipped in parsed.skipped:
-        typer.secho(f"  skipped: {skipped!r}", fg="yellow")
     store.close()
 
 

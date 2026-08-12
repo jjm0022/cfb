@@ -2994,6 +2994,12 @@ git commit -m "feat: render auditable ranked pick sheet as markdown"
 > skipped count loudly (`typer.secho(..., fg="yellow")`) when non-empty —
 > surfacing dropped rows to a human is the entire point of the ruling. The text
 > below is amended in place.
+>
+> **Amendment (Task 14 Fix Round 1, human ruling):** CBS parsing is atomic at
+> the command boundary. After parsing, `ingest-cbs` prints the parse summary
+> and every `ParseResult.skipped` row in yellow, then exits non-zero before
+> opening or mutating the database. A mixed valid/ambiguous paste must never
+> partially ingest a week.
 
 **Files:**
 - Create: `src/pickem/cli.py`, `src/pickem/config.py`
@@ -3047,6 +3053,24 @@ def test_ingest_cbs_exits_nonzero_on_an_unknown_team(tmp_path):
     )
     # A partially-ingested week looks like success. It must not be allowed.
     assert result.exit_code != 0
+
+
+def test_ingest_cbs_rejects_a_partially_parsed_block_without_creating_a_database(tmp_path):
+    paste = tmp_path / "mixed.txt"
+    paste.write_text(
+        "Buffalo Bills at Miami Dolphins -3.0\n"
+        "Kansas City Chiefs -6.5 at New York Jets 45.5\n"
+    )
+    db = tmp_path / "test.duckdb"
+    result = runner.invoke(
+        app,
+        ["ingest-cbs", "--file", str(paste), "--sport", "nfl", "--season", "2025",
+         "--week", "3", "--db", str(db)],
+    )
+    assert result.exit_code != 0
+    assert "skipped" in result.stdout
+    assert "Kansas City Chiefs -6.5 at New York Jets 45.5" in result.stdout
+    assert not db.exists()
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -3140,6 +3164,12 @@ def ingest_cbs(
         typer.secho(f"unresolved team: {exc}", fg="red", err=True)
         raise typer.Exit(code=1) from exc
 
+    typer.echo(f"parsed {len(parsed.lines)} games for {sport.value} {season} week {week}")
+    for skipped in parsed.skipped:
+        typer.secho(f"  skipped: {skipped!r}", fg="yellow")
+    if parsed.skipped:
+        raise typer.Exit(code=1)
+
     store = _store(db)
     games = [
         Game(
@@ -3157,8 +3187,6 @@ def ingest_cbs(
     store.upsert_league_lines(parsed.lines)
 
     typer.echo(f"ingested {len(parsed.lines)} games for {sport.value} {season} week {week}")
-    for skipped in parsed.skipped:
-        typer.secho(f"  skipped: {skipped!r}", fg="yellow")
     store.close()
 
 
