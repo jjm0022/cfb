@@ -1,7 +1,8 @@
 import polars as pl
+import pytest
 
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
-from pickem.resolve.resolver import TeamResolver
+from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 FRAME = pl.DataFrame(
     {
@@ -46,9 +47,7 @@ def test_closing_lines_are_tagged_as_such():
 
 def test_rows_without_a_spread_are_surfaced_not_silently_dropped():
     frame = FRAME.with_columns(pl.lit(None, dtype=pl.Float64).alias("spread_line"))
-    result = load_nfl_closing_lines(
-        [2025], resolver=TeamResolver.default(), loader=lambda s: frame
-    )
+    result = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=lambda s: frame)
     # A missing line must never become 0.0 — that would read as a pick'em.
     assert result.lines == []
     assert len(result.skipped) == 1
@@ -62,9 +61,26 @@ def test_usable_rows_survive_alongside_skipped_ones():
         pl.lit("LV").alias("away_team"),
     )
     frame = pl.concat([FRAME, second])
-    result = load_nfl_closing_lines(
-        [2025], resolver=TeamResolver.default(), loader=lambda s: frame
-    )
+    result = load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=lambda s: frame)
     assert [line.game_id for line in result.lines] == ["nfl-2025-03-BUF-at-MIA"]
     assert len(result.skipped) == 1
     assert "LV-at-KC" in result.skipped[0]
+
+
+UNKNOWN_FRAME = FRAME.with_columns(pl.lit("ZZZ").alias("home_team"))
+
+
+def unknown_loader(seasons):
+    return UNKNOWN_FRAME
+
+
+def test_unknown_team_propagates_out_of_the_game_loader():
+    # "Degrade visibly": a spelling we do not know must stop the load, never
+    # resolve to a guess. Regression-proofs the manual 1999-2025 sweep.
+    with pytest.raises(UnknownTeamError):
+        load_nfl_games([2025], resolver=TeamResolver.default(), loader=unknown_loader)
+
+
+def test_unknown_team_propagates_out_of_the_closing_line_loader():
+    with pytest.raises(UnknownTeamError):
+        load_nfl_closing_lines([2025], resolver=TeamResolver.default(), loader=unknown_loader)

@@ -16,7 +16,7 @@ from pickem.models import LeagueLine, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver
 
 # "<away> [spread] at <home> [spread]" — the number may sit on either team.
-_NUM = r"(?:[+-]?\d+(?:\.\d+)?|PK|EVEN|pk)"
+_NUM = r"(?:[+-]?\d+(?:\.\d+)?|PK|EVEN)"
 _GAME_RE = re.compile(
     rf"^\s*(?P<away>.+?)\s*(?P<away_num>{_NUM})?\s+at\s+(?P<home>.+?)\s*(?P<home_num>{_NUM})?\s*$",
     re.IGNORECASE,

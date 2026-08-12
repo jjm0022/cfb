@@ -30,14 +30,17 @@ class TeamResolver:
         self._mapping = mapping
 
     @classmethod
+    def from_text(cls, text: str) -> TeamResolver:
+        return cls._build(yaml.safe_load(text))
+
+    @classmethod
     def from_yaml(cls, path: Path) -> TeamResolver:
-        raw = yaml.safe_load(path.read_text())
-        return cls._build(raw)
+        return cls.from_text(path.read_text())
 
     @classmethod
     def default(cls) -> TeamResolver:
         source = resources.files("pickem.resolve").joinpath("aliases.yaml")
-        return cls._build(yaml.safe_load(source.read_text()))
+        return cls.from_text(source.read_text())
 
     @classmethod
     def _build(cls, raw: dict) -> TeamResolver:

@@ -22,9 +22,7 @@ def game(gid: str, home_score: int, away_score: int, week: int = 3) -> Game:
 
 
 def line(gid: str, spread: float, book: str, at: datetime) -> MarketLine:
-    return MarketLine(
-        game_id=gid, source="test", book=book, spread_home=spread, captured_at=at
-    )
+    return MarketLine(game_id=gid, source="test", book=book, spread_home=spread, captured_at=at)
 
 
 def test_a_correct_strong_pick_is_recorded_as_a_win():
@@ -120,15 +118,59 @@ def test_excluded_games_report_each_reason_in_deterministic_order():
         closers=[line(unplayed_gid, -6.0, "close", T_CLOSE)],
     )
 
+    # A game with no closing market is NOT excluded: the report ships a pick on
+    # it via the Elo tiebreak, so the backtest grades it under the NO_MARKET
+    # tier. Only genuinely ungradeable games appear in `skipped`.
     assert [entry.split(":", maxsplit=1)[0] for entry in report.skipped] == [
         unplayed_gid,
         missing_opener_gid,
-        missing_market_gid,
     ]
     reasons = [entry.lower() for entry in report.skipped]
     assert "unplayed" in reasons[0]
     assert "missing" in reasons[1] and "open" in reasons[1]
-    assert "missing" in reasons[2] and "clos" in reasons[2]
+    assert [record.tier for record in report.by_tier] == [Tier.NO_MARKET]
+    assert report.by_tier[0].wins + report.by_tier[0].losses == 1
+
+
+def test_no_market_games_are_graded_by_the_tiebreak_not_dropped():
+    """The report picks these games with the rating, so the backtest must grade them."""
+    gid = "nfl-2025-03-BUF-at-MIA"
+    report = run_backtest(
+        games=[game(gid, 27, 17)],
+        openers=[line(gid, -3.0, "open", T_OPEN)],
+        closers=[],
+    )
+    assert report.skipped == []
+    assert [record.tier for record in report.by_tier] == [Tier.NO_MARKET]
+
+
+def test_the_tiebreak_never_sees_the_week_it_is_picking():
+    """Catches a runner that leaks future results into its own picks."""
+    from pickem.models import Game as G
+
+    def played(gid, week, home_score, away_score, home, away):
+        return G(
+            game_id=gid,
+            sport=Sport.NFL,
+            season=2025,
+            week=week,
+            kickoff_utc=T_CLOSE,
+            home_team_id=home,
+            away_team_id=away,
+            home_score=home_score,
+            away_score=away_score,
+        )
+
+    # Week 1 alone: both teams sit at the initial rating, so the projected
+    # margin is exactly home_field and cannot encode week 1's own result.
+    first = played("nfl-2025-01-BUF-at-MIA", 1, 40, 0, "MIA", "BUF")
+    report = run_backtest(
+        games=[first],
+        openers=[line(first.game_id, 0.0, "open", T_OPEN)],
+        closers=[],
+    )
+    # home_field (+2.0) > implied home margin (-0.0) -> HOME, and MIA won by 40.
+    assert report.overall.wins == 1
 
 
 def test_results_are_broken_out_by_tier():

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from pickem.edge.divergence import Thresholds, compute_edge, consensus_spread, rank_edges
-from pickem.models import LeagueLine, MarketLine, Side, Tier
+from pickem.models import Edge, LeagueLine, MarketLine, Side, Tier
 
 GID = "nfl-2025-03-BUF-at-MIA"
 T0 = datetime(2025, 9, 16, tzinfo=UTC)
@@ -69,8 +69,8 @@ def test_small_divergence_is_a_coinflip():
 
 
 def test_tier_boundaries_are_inclusive_at_the_threshold():
-    assert compute_edge(league(-3.0), [market(-5.0)]).tier is Tier.STRONG   # exactly 2.0
-    assert compute_edge(league(-3.0), [market(-4.0)]).tier is Tier.LEAN     # exactly 1.0
+    assert compute_edge(league(-3.0), [market(-5.0)]).tier is Tier.STRONG  # exactly 2.0
+    assert compute_edge(league(-3.0), [market(-4.0)]).tier is Tier.LEAN  # exactly 1.0
 
 
 def test_thresholds_are_configuration_not_logic():
@@ -99,3 +99,28 @@ def test_ranking_orders_by_absolute_divergence():
         compute_edge(league(-3.0), [market(-1.0)]),
     ]
     assert [abs(e.delta) for e in rank_edges(edges)] == [6.0, 2.0, 0.5]
+
+
+def test_rank_edges_keeps_no_market_and_tied_edges_in_a_defined_order():
+    # NO_MARKET edges all carry delta 0.0, so ties are the normal case, not an
+    # exotic one — and this order is what the sheet is read top-to-bottom in.
+    def e(game_id, delta, tier):
+        return Edge(
+            game_id=game_id,
+            side=Side.HOME,
+            delta=delta,
+            tier=tier,
+            league_spread=-3.0,
+            market_spread=None if tier is Tier.NO_MARKET else -3.0 - delta,
+            rationale="x",
+        )
+
+    edges = [
+        e("a", 0.0, Tier.NO_MARKET),
+        e("b", 1.5, Tier.LEAN),
+        e("c", -1.5, Tier.LEAN),
+        e("d", 0.0, Tier.NO_MARKET),
+        e("e", 3.0, Tier.STRONG),
+    ]
+    ranked = rank_edges(edges)
+    assert [x.game_id for x in ranked] == ["e", "b", "c", "a", "d"]

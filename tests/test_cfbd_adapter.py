@@ -1,7 +1,7 @@
 import pytest
 
 from pickem.ingest.cfbd_source import load_cfb_games, load_cfb_lines
-from pickem.resolve.resolver import TeamResolver
+from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 GAMES = [
     {
@@ -78,3 +78,22 @@ def test_usable_providers_survive_alongside_skipped_ones(resolver):
     result = load_cfb_lines(2025, 3, resolver=resolver, fetcher=lambda s, w: payload)
     assert [line.book for line in result.lines] == ["DraftKings"]
     assert len(result.skipped) == 1
+
+
+def test_unknown_team_propagates_out_of_the_cfb_loaders():
+    def fetcher(_season, _week):
+        return [
+            {
+                "home_team": "Nowhere State",
+                "away_team": "Alabama",
+                "start_date": "2025-09-06T23:30:00.000Z",
+                "home_points": 21,
+                "away_points": 24,
+                "lines": [{"provider": "consensus", "spread": -7.0}],
+            }
+        ]
+
+    with pytest.raises(UnknownTeamError):
+        load_cfb_games(2025, 2, resolver=TeamResolver.default(), fetcher=fetcher)
+    with pytest.raises(UnknownTeamError):
+        load_cfb_lines(2025, 2, resolver=TeamResolver.default(), fetcher=fetcher)

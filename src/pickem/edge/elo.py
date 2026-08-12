@@ -18,7 +18,6 @@ class EloConfig(BaseModel):
     k: float = 20.0
     home_field: float = 2.0
     points_per_elo: float = 0.04
-    season_regression: float = 0.25
     initial: float = 1500.0
 
 

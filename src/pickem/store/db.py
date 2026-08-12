@@ -13,7 +13,7 @@ from pathlib import Path
 
 import duckdb
 
-from pickem.models import Game, LeagueLine, MarketLine, Sport
+from pickem.models import Edge, Game, LeagueLine, MarketLine, Sport
 
 
 class Store:
@@ -30,6 +30,14 @@ class Store:
     def close(self) -> None:
         self._con.close()
 
+    def __enter__(self) -> Store:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        # Closed on the failure path too: a leaked handle can leave a lock
+        # behind on a file database and break the next command.
+        self.close()
+
     def upsert_games(self, games: Sequence[Game]) -> None:
         rows = [
             (
@@ -45,8 +53,47 @@ class Store:
             )
             for g in games
         ]
+        # Never blind-REPLACE: a source that does not carry scores (a CBS
+        # paste) must not erase the finals `sync-results` already wrote, or the
+        # Elo history silently shrinks and the tiebreak quietly degrades.
         self._con.executemany(
-            "INSERT OR REPLACE INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+            """
+            INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (game_id) DO UPDATE SET
+                sport = excluded.sport,
+                season = excluded.season,
+                week = excluded.week,
+                kickoff_utc = excluded.kickoff_utc,
+                home_team_id = excluded.home_team_id,
+                away_team_id = excluded.away_team_id,
+                home_score = COALESCE(excluded.home_score, games.home_score),
+                away_score = COALESCE(excluded.away_score, games.away_score)
+            """,
+            rows,
+        )
+
+    def insert_games_if_absent(self, games: Sequence[Game]) -> None:
+        """Add games without touching rows that already exist.
+
+        The CBS paste carries no kickoff time and no scores, so it must not
+        overwrite a row an authoritative source already filled in.
+        """
+        rows = [
+            (
+                g.game_id,
+                g.sport.value,
+                g.season,
+                g.week,
+                g.kickoff_utc,
+                g.home_team_id,
+                g.away_team_id,
+                g.home_score,
+                g.away_score,
+            )
+            for g in games
+        ]
+        self._con.executemany(
+            "INSERT OR IGNORE INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
         )
 
     def upsert_league_lines(self, lines: Sequence[LeagueLine]) -> None:
@@ -54,9 +101,7 @@ class Store:
         self._con.executemany("INSERT OR REPLACE INTO league_lines VALUES (?, ?, ?, ?, ?)", rows)
 
     def append_market_lines(self, lines: Sequence[MarketLine]) -> None:
-        rows = [
-            (x.game_id, x.source, x.book, x.spread_home, x.total, x.captured_at) for x in lines
-        ]
+        rows = [(x.game_id, x.source, x.book, x.spread_home, x.total, x.captured_at) for x in lines]
         # INSERT OR IGNORE, never REPLACE: an existing snapshot is history.
         self._con.executemany("INSERT OR IGNORE INTO lines VALUES (?, ?, ?, ?, ?, ?)", rows)
 
@@ -65,7 +110,7 @@ class Store:
             "SELECT game_id, source, book, spread_home, total, captured_at "
             "FROM lines WHERE game_id = ?"
         )
-        params: list = [game_id]
+        params: list[object] = [game_id]
         if before is not None:
             sql += " AND captured_at < ?"
             params.append(before)
@@ -114,3 +159,56 @@ class Store:
             )
             for r in rows
         ]
+
+    def games_before(self, sport: Sport, season: int, week: int) -> list[Game]:
+        """Every game already played before this week, including prior seasons.
+
+        The rating is only as good as its history: restricting it to the
+        current season leaves every week-1 matchup at the initial rating.
+        """
+        rows = self._con.execute(
+            """
+            SELECT game_id, sport, season, week, kickoff_utc,
+                   home_team_id, away_team_id, home_score, away_score
+            FROM games
+            WHERE sport = ? AND (season < ? OR (season = ? AND week < ?))
+            """,
+            [sport.value, season, season, week],
+        ).fetchall()
+        return [
+            Game(
+                game_id=r[0],
+                sport=Sport(r[1]),
+                season=r[2],
+                week=r[3],
+                kickoff_utc=r[4],
+                home_team_id=r[5],
+                away_team_id=r[6],
+                home_score=r[7],
+                away_score=r[8],
+            )
+            for r in rows
+        ]
+
+    def record_picks(
+        self, edges: Sequence[Edge], season: int, week: int, generated_at: datetime
+    ) -> None:
+        """Persist a rendered sheet's picks so live results can be graded later.
+
+        Keyed by `generated_at`, so re-running the report keeps every earlier
+        sheet rather than overwriting the record of what was actually picked.
+        """
+        rows = [
+            (season, week, e.game_id, e.side.value, e.delta, e.tier.value, generated_at)
+            for e in edges
+        ]
+        self._con.executemany("INSERT OR IGNORE INTO picks VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+
+    def picks_for_week(self, season: int, week: int) -> list[tuple]:
+        return self._con.execute(
+            """
+            SELECT season, week, game_id, side, edge_points, tier, generated_at
+            FROM picks WHERE season = ? AND week = ? ORDER BY generated_at, game_id
+            """,
+            [season, week],
+        ).fetchall()

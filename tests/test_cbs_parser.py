@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pickem.ingest.cbs import parse_cbs_block
+from pickem.ingest.cbs import CbsParseError, parse_cbs_block
 from pickem.models import Sport
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
@@ -62,8 +62,12 @@ def test_unknown_team_raises(resolver):
 def test_parses_the_nfl_portion_of_the_fixture(resolver):
     # A real sheet mixes sports; each is ingested with its own --sport run.
     nfl_lines = [
-        line for line in FIXTURE.read_text().splitlines() if "at" in line and "Ole Miss" not in line
-        and "Ohio State" not in line and "Michigan" not in line
+        line
+        for line in FIXTURE.read_text().splitlines()
+        if "at" in line
+        and "Ole Miss" not in line
+        and "Ohio State" not in line
+        and "Michigan" not in line
     ]
     result = parse("\n".join(nfl_lines), resolver)
     assert len(result.lines) == 3
@@ -90,3 +94,16 @@ def test_dual_number_lines_are_reported_as_ambiguous(resolver):
     assert len(result.lines) == 1  # only the first line parses
     assert result.lines[0].spread_home == -3.0
     assert any("45.5" in s for s in result.skipped)  # second line is reported
+
+
+def test_a_block_with_no_games_at_all_raises():
+    # The most manual step in the system: the user pasted the wrong thing.
+    with pytest.raises(CbsParseError):
+        parse_cbs_block(
+            "Week 3 picks\nsubmit by Sunday\n",
+            resolver=TeamResolver.default(),
+            sport=Sport.NFL,
+            season=2025,
+            week=3,
+            posted_at=POSTED,
+        )

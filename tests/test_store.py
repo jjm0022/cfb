@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import duckdb
 import pytest
 
 from pickem.models import Game, LeagueLine, MarketLine, Sport
@@ -102,3 +103,74 @@ def test_market_lines_can_be_cut_off_at_a_deadline(store):
 def test_week_queries_do_not_leak_across_weeks(store):
     store.upsert_games([game()])
     assert store.games_for_week(Sport.NFL, 2025, 4) == []
+
+
+def test_reingesting_a_week_does_not_erase_synced_scores(tmp_path):
+    # A CBS paste carries no scores. Re-ingesting a week already synced must
+    # leave the finals alone, or build_ratings silently loses its history.
+    store = Store(tmp_path / "s.duckdb")
+    store.init_schema()
+    played = Game(
+        game_id="nfl-2025-03-BUF-at-MIA",
+        sport=Sport.NFL,
+        season=2025,
+        week=3,
+        kickoff_utc=datetime(2025, 9, 21, 17, 0, tzinfo=UTC),
+        home_team_id="MIA",
+        away_team_id="BUF",
+        home_score=17,
+        away_score=24,
+    )
+    store.upsert_games([played])
+
+    scoreless = played.model_copy(
+        update={
+            "home_score": None,
+            "away_score": None,
+            "kickoff_utc": datetime(2026, 1, 1, tzinfo=UTC),
+        }
+    )
+    store.upsert_games([scoreless])
+
+    kept = store.games_for_week(Sport.NFL, 2025, 3)[0]
+    assert (kept.home_score, kept.away_score) == (17, 24)
+    store.close()
+
+
+def test_insert_games_if_absent_leaves_existing_rows_untouched(tmp_path):
+    store = Store(tmp_path / "s.duckdb")
+    store.init_schema()
+    real = Game(
+        game_id="nfl-2025-03-BUF-at-MIA",
+        sport=Sport.NFL,
+        season=2025,
+        week=3,
+        kickoff_utc=datetime(2025, 9, 21, 17, 0, tzinfo=UTC),
+        home_team_id="MIA",
+        away_team_id="BUF",
+        home_score=17,
+        away_score=24,
+    )
+    store.upsert_games([real])
+    placeholder = real.model_copy(
+        update={
+            "home_score": None,
+            "away_score": None,
+            "kickoff_utc": datetime(2026, 1, 1, tzinfo=UTC),
+        }
+    )
+    store.insert_games_if_absent([placeholder])
+
+    kept = store.games_for_week(Sport.NFL, 2025, 3)[0]
+    assert (kept.home_score, kept.away_score) == (17, 24)
+    assert kept.kickoff_utc.year == 2025
+    store.close()
+
+
+def test_store_closes_its_handle_when_the_body_raises(tmp_path):
+    store = Store(tmp_path / "s.duckdb")
+    with pytest.raises(RuntimeError), store:
+        store.init_schema()
+        raise RuntimeError("boom")
+    with pytest.raises(duckdb.Error):
+        store.games_for_week(Sport.NFL, 2025, 3)

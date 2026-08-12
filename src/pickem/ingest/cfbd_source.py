@@ -10,12 +10,12 @@ game and book, mirroring `ingest.cbs.ParseResult`.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
+from pickem import config
 from pickem.models import Game, MarketLine, MarketLinesResult, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver
 
@@ -23,20 +23,18 @@ Fetcher = Callable[[int, int], list[dict]]
 
 
 class CfbdConfig(BaseModel):
-    api_key: str
+    # SecretStr so a traceback repr cannot print the key.
+    api_key: SecretStr
 
     @classmethod
     def from_env(cls) -> CfbdConfig:
-        key = os.environ.get("CFBD_API_KEY")
-        if not key:
-            raise RuntimeError("CFBD_API_KEY is not set")
-        return cls(api_key=key)
+        return cls(api_key=SecretStr(config.cfbd_api_key()))
 
 
 def _client(config: CfbdConfig):
     import cfbd
 
-    configuration = cfbd.Configuration(access_token=config.api_key)
+    configuration = cfbd.Configuration(access_token=config.api_key.get_secret_value())
     return cfbd.ApiClient(configuration)
 
 
@@ -88,8 +86,21 @@ def load_cfb_games(
 
 
 def load_cfb_lines(
-    season: int, week: int, *, resolver: TeamResolver, fetcher: Fetcher
+    season: int,
+    week: int,
+    *,
+    resolver: TeamResolver,
+    fetcher: Fetcher,
+    captured_at: datetime | None = None,
 ) -> MarketLinesResult:
+    """Load per-book CFB spreads.
+
+    `captured_at` defaults to now, which is right for a live poll. A historical
+    load must pass the moment the line actually applied, or every row in the
+    batch shares today's timestamp and `consensus_spread`'s latest-per-book
+    ordering becomes arbitrary.
+    """
+    stamp = captured_at or datetime.now(tz=UTC)
     lines: list[MarketLine] = []
     skipped: list[str] = []
     for row in fetcher(season, week):
@@ -107,7 +118,7 @@ def load_cfb_lines(
                     book=provider["provider"],
                     spread_home=float(provider["spread"]),
                     total=provider.get("over_under"),
-                    captured_at=datetime.now(tz=UTC),
+                    captured_at=stamp,
                 )
             )
     return MarketLinesResult(lines=lines, skipped=skipped)

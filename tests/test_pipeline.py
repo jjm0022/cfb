@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 
-from pickem.edge.pipeline import apply_tiebreaks, predict_tiebreaker_total
+import pytest
+
+from pickem.edge.pipeline import MissingGameError, apply_tiebreaks, predict_tiebreaker_total
 from pickem.models import Edge, Game, MarketLine, Side, Sport, Tier
 
 NOW = datetime(2025, 9, 21, tzinfo=UTC)
@@ -77,8 +79,15 @@ def test_a_heavy_number_flips_the_rating_to_the_dog():
     assert result[0].side is Side.AWAY
 
 
-def test_edge_for_an_unknown_game_is_passed_through_unchanged():
-    result = apply_tiebreaks([edge(Tier.COINFLIP)], [], HISTORY)
+def test_a_tiebreak_game_with_no_record_raises_rather_than_shipping_a_placeholder():
+    # compute_edge stamps a meaningless HOME on NO_MARKET edges. Passing one
+    # through unresolved would present that placeholder as a decision.
+    with pytest.raises(MissingGameError):
+        apply_tiebreaks([edge(Tier.COINFLIP)], [], HISTORY)
+
+
+def test_an_edge_that_needs_no_tiebreak_survives_a_missing_game_record():
+    result = apply_tiebreaks([edge(Tier.STRONG)], [], HISTORY)
     assert result[0].rationale == "original"
 
 

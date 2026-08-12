@@ -17,6 +17,10 @@ from pickem.models import Edge, Game, MarketLine, Tier
 _TIEBREAK_TIERS = {Tier.COINFLIP, Tier.NO_MARKET}
 
 
+class MissingGameError(LookupError):
+    """A game needing a tiebreak has no matching Game record."""
+
+
 def apply_tiebreaks(
     edges: Sequence[Edge],
     games: Sequence[Game],
@@ -29,10 +33,18 @@ def apply_tiebreaks(
 
     resolved: list[Edge] = []
     for edge in edges:
-        game = by_id.get(edge.game_id)
-        if edge.tier not in _TIEBREAK_TIERS or game is None:
+        if edge.tier not in _TIEBREAK_TIERS:
             resolved.append(edge)
             continue
+
+        game = by_id.get(edge.game_id)
+        if game is None:
+            # Falling through would ship compute_edge's placeholder HOME side as
+            # though it were a decision. These edges are exactly the ones with
+            # no real signal, so a silent pass-through is the worst outcome.
+            raise MissingGameError(
+                f"{edge.game_id} needs a {edge.tier.value} tiebreak but has no game record"
+            )
 
         margin = projected_margin(ratings, game.home_team_id, game.away_team_id, config)
         side = tiebreak_side(margin, edge.league_spread)
