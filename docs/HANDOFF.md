@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after Task 13 (pick sheet report)
+**Last updated:** 2026-08-11, after Task 15 (all implementation tasks complete)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -30,13 +30,17 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 106 passing, `uv run pytest -q`
+- **Tests:** 120 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`
-- **Done:** Tasks 1-13 plus amendments 9a, 12a, and 13a — all reviewed clean
-- **Next:** Task 14 (CLI wiring). Not started; no brief generated yet.
-- **BASE for Task 14:** current branch HEAD — the `docs: refresh handoff through
-  Task 13` commit. Always re-derive it with `git rev-parse HEAD`; do not trust a
-  SHA written here, since the docs commit that records it lands after the fact.
+- **Done:** Tasks 1-15 plus amendments 9a, 12a, 13a, and 14a — all task-scoped
+  reviews clean
+- **Next:** final whole-branch review. Generate a package from the merge-base
+  with master through current HEAD, dispatch the most capable reviewer, and
+  explicitly point it at every deferred-minor and parked ledger entry.
+- **Do not start Task 14 or 15 again.** Their committed implementations are
+  `e45b724` + atomic-ingest fix `62f4023`, and `63f54b3`, respectively.
+- **Review range:** always re-derive it with `git merge-base master HEAD` and
+  `git rev-parse HEAD`; this handoff update changes HEAD after the fact.
 
 Built so far:
 
@@ -74,6 +78,15 @@ src/pickem/report/sheet.py        render_sheet ranks edges into auditable
                                   markdown with named picks, both spreads,
                                   visible NO_MARKET rows, required provenance,
                                   and numeric or explicitly unknown data age.
+src/pickem/edge/pipeline.py       apply_tiebreaks resolves only COINFLIP and
+                                  NO_MARKET edges with Elo; strong/lean edges
+                                  pass through. predict_tiebreaker_total returns
+                                  the median available market total.
+src/pickem/config.py              Default DuckDB path and environment-sourced
+                                  Odds API / CFBD keys.
+src/pickem/cli.py                 Typer commands: ingest-cbs, poll-odds, report,
+                                  sync-results, backfill, and backtest. Prints
+                                  source skips visibly; CBS ingest is atomic.
 ```
 
 ## Process being followed
@@ -90,8 +103,8 @@ src/pickem/report/sheet.py        render_sheet ranks edges into auditable
 Scripts live at:
 `/Users/jmiller/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/`
 
-Model selection follows the skill's cost/capability guidance. Task 13 used a
-fast implementation model and a stronger independent reviewer.
+Model selection follows the skill's cost/capability guidance. The final
+whole-branch review must use the most capable available model.
 
 ## Decisions and amendments made so far
 
@@ -133,6 +146,11 @@ These are already reflected in the plan document — do not re-litigate them.
   conflicting with spec §8. Human ruling 13a made `provenance` a required
   keyword argument and requires every sheet to show either numeric snapshot age
   or `unknown/unavailable`. Tasks 13 and 14 were amended in the plan.
+- **CBS ingestion is atomic.** Task 14's literal CLI code persisted valid rows,
+  printed `ParseResult.skipped`, and exited zero. Human ruling 14a made the spec
+  govern: if any row is skipped, the CLI prints the parse summary and offending
+  rows, exits non-zero, and never opens or mutates the database. The plan and a
+  mixed valid/ambiguous-row regression test were amended in commit `62f4023`.
 
 ## Load-bearing conventions — do not "improve" these
 
@@ -155,20 +173,30 @@ These are already reflected in the plan document — do not re-litigate them.
   `MarketLinesResult.skipped` (per-book rows with no spread). Both are
   `list[str]` of human-readable one-liners naming the game and the book.
   **Any new line loader returns `MarketLinesResult`, never a bare list** —
-  this was a human ruling at Task 5 and again at 9a. Both lists only do their
-  job if something downstream prints them — see the known gap below.
+  this was a human ruling at Task 5 and again at 9a. The CLI now prints both
+  kinds: CBS skips abort ingestion; market-row skips are yellow warnings.
 - **Every rendered pick sheet names its provenance and age.** Callers must pass
   `provenance`; absent market timing renders as `unknown/unavailable`, never as
   a missing status line.
+- **Elo never overrides a real divergence signal.** It may resolve only
+  `COINFLIP` and `NO_MARKET`; `STRONG` and `LEAN` edges pass through unchanged.
 
-## Remaining tasks
+## Remaining task
 
-14. CLI wiring — 15. Wire tiebreaks into the pick sheet
+Run the final whole-branch review required by
+`superpowers:subagent-driven-development`:
 
-After all 15: a final whole-branch review on the most capable model, pointed at
-the ledger's deferred-minor and parked lines, then
-`superpowers:finishing-a-development-branch`. Tasks 1-13 have deferred minors
-waiting there; the ledger is the only record of them.
+1. Re-derive `MERGE_BASE=$(git merge-base master HEAD)` and current HEAD.
+2. Generate `scripts/review-package PLAN MERGE_BASE HEAD`.
+3. Dispatch the most capable reviewer using
+   `superpowers:requesting-code-review`'s `code-reviewer.md`.
+4. Point the reviewer at every `minor (deferred)` and `parked` ledger line.
+5. If findings remain, use the skill's single final fix wave and one scoped
+   re-review; do not restart per-task review loops.
+6. Only after final review, use `superpowers:finishing-a-development-branch`.
+
+Do not delete the SDD workspace until the final review is clean; it contains
+the ledger and review artifacts needed for that gate.
 
 ## Known gaps to raise with the user later
 
@@ -178,11 +206,9 @@ waiting there; the ledger is the only record of them.
   lines free back to 1999; openers need one month of a paid Odds API tier
   (~$29) to backfill 2020-2025 snapshots, then cancel. `pickem backfill` loads
   closers only and says so.
-- **The `skipped` lists have no reader until Task 14 is built.** Both
-  `ParseResult.skipped` and `MarketLinesResult.skipped` are populated today,
-  but the CLI does not exist yet. The amended Task 14 plan prints CBS parser
-  skips from `ingest-cbs` and market-row skips from both `poll-odds` and
-  `backfill`, all in yellow. Do not omit those readers during CLI wiring.
+- **RESOLVED (Task 14): skipped lists now have CLI readers.** `ingest-cbs`
+  prints parser skips and aborts atomically; `poll-odds` and `backfill` print
+  every missing-spread row in yellow.
 - **Repository-wide Ruff formatting has pre-existing drift.** After Task 13,
   `uv run ruff format --check src tests` named six files outside Task 13 that
   would be reformatted. Task 13's three files are clean; the full list and
@@ -207,6 +233,18 @@ waiting there; the ledger is the only record of them.
   because 9a moved team resolution ahead of the null check in nflverse: a row
   with both a null spread and an unknown abbreviation now raises where it once
   skipped. The sweep proves that combination does not occur in 1999-2025.
+- **Task 14 deferred review items:** five commands have only help-discovery
+  CLI coverage for several warning/output branches, and Store handles close
+  only on happy paths. Both are recorded verbatim in the ledger for final
+  review triage.
+- **Tiebreaker total helper is not wired to output.** Task 15 required and
+  tested `predict_tiebreaker_total`, but the approved plan did not add a CLI or
+  report caller. Treat this as a plan-mandated note during final review, not as
+  missing Task 15 implementation.
+- **External phase-exit checks are still unverified.** The automated suite is
+  offline. A real current CBS paste, a live-odds report, and a data-backed
+  2020-2025 backtest still require credentials/data and should be called out
+  when finishing the branch rather than claimed complete from unit tests.
 - Live operation should fit The Odds API free tier (500 credits/month).
 
 ## Phase B decision (do not skip)
