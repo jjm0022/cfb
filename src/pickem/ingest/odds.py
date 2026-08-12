@@ -10,18 +10,26 @@ one-liner in `skipped` naming the game and book, mirroring
 `ingest.cbs.ParseResult`.
 
 The endpoint returns every event with posted odds, which spans more than one
-week. `fetch_spreads` therefore requires the caller to name the week's slate of
-game ids and reports any event outside it in `skipped`. Without that, an event
-from a later week would be stamped with the requested week's number and land
-permanently in the append-only `lines` table under an id no report will ever
-join on.
+week. `fetch_spreads` therefore takes two independent guards, and needs both:
+
+* a kickoff `window`, applied to each event's `commence_time` BEFORE the team
+  names are resolved. Resolving first would abort the whole poll on the first
+  unmapped school the NCAAF feed happens to return, and the window is also the
+  only thing that can catch a repeat matchup played at the same site in a
+  different week — its constructed id embeds the requested week, so an id-set
+  check is blind to it.
+* the week's `slate` of canonical game ids, applied after resolution.
+
+Without them an out-of-week event would be stamped with the requested week's
+number and land permanently in the append-only `lines` table under an id no
+report will ever join on.
 """
 
 from __future__ import annotations
 
 import time
 from collections.abc import Callable, Collection
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
 
@@ -34,6 +42,21 @@ CFB_KEY = "americanfootball_ncaaf"
 
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = 0.5
+
+
+def _api_time(value: datetime) -> str:
+    """The Odds API wants second-precision ISO8601 with a literal Z."""
+    return value.astimezone(UTC).replace(microsecond=0, tzinfo=None).isoformat() + "Z"
+
+
+def _commence_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 class OddsApiError(RuntimeError):
@@ -98,13 +121,16 @@ class OddsClient:
         week: int,
         now: datetime,
         slate: Collection[str],
+        window: tuple[datetime, datetime],
     ) -> MarketLinesResult:
         """Fetch current spreads for the games named in `slate`.
 
         `slate` is the set of canonical game ids for the target week — normally
-        the ids already ingested from the CBS sheet. Events outside it belong to
-        another week and are reported, never stamped with this week's number.
+        the ids already ingested from the CBS sheet. `window` is the kickoff
+        range that week occupies. An event failing either guard is reported and
+        never stamped with this week's number.
         """
+        window_start, window_end = window
         response = self._get(
             f"/sports/{sport_key}/odds",
             params={
@@ -112,6 +138,10 @@ class OddsClient:
                 "regions": "us",
                 "markets": "spreads",
                 "oddsFormat": "american",
+                # Narrows the payload server-side; the client-side window check
+                # below is still authoritative.
+                "commenceTimeFrom": _api_time(window_start),
+                "commenceTimeTo": _api_time(window_end),
             },
         )
         if response.status_code in (401, 429):
@@ -124,14 +154,33 @@ class OddsClient:
         skipped: list[str] = []
         for event in response.json():
             home_name = event["home_team"]
+            away_name = event["away_team"]
+
+            # Before resolution, deliberately. The NCAAF feed covers the whole
+            # country while aliases.yaml covers the schools we actually pick, so
+            # resolving first would abort the poll on a school we never wanted.
+            kickoff = _commence_time(event.get("commence_time"))
+            if kickoff is None:
+                skipped.append(
+                    f"{away_name} at {home_name}: unreadable commence_time "
+                    f"{event.get('commence_time')!r} — not stored"
+                )
+                continue
+            if not window_start <= kickoff <= window_end:
+                skipped.append(
+                    f"{away_name} at {home_name}: kickoff {kickoff.isoformat()} is outside "
+                    f"the {sport.value} {season} week {week} window — not stored"
+                )
+                continue
+
             home = resolver.resolve(home_name, sport)
-            away = resolver.resolve(event["away_team"], sport)
+            away = resolver.resolve(away_name, sport)
             game_id = make_game_id(sport, season, week, away, home)
 
             if game_id not in wanted:
                 skipped.append(
                     f"{game_id}: not in the {sport.value} {season} week {week} slate "
-                    f"(commence_time {event.get('commence_time')}) — not stored"
+                    f"(kickoff {kickoff.isoformat()}) — not stored"
                 )
                 continue
 

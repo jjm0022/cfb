@@ -5,7 +5,7 @@ feed. If two adapters disagree by a single character the join silently returns
 nothing and the week comes back NO_MARKET with no error anywhere.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import polars as pl
@@ -86,6 +86,7 @@ def test_cbs_nflverse_and_the_odds_feed_agree_on_one_id():
         week=3,
         now=NOW,
         slate={EXPECTED},
+        window=(NOW - timedelta(hours=12), NOW + timedelta(days=7)),
     )
 
     produced = {

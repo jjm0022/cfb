@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
@@ -12,7 +12,7 @@ import typer
 from pickem import config
 from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.edge.divergence import compute_edge, rank_edges
-from pickem.edge.pipeline import apply_tiebreaks
+from pickem.edge.pipeline import MissingGameError, apply_tiebreaks
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
@@ -98,9 +98,13 @@ def poll_odds(
     season: int = typer.Option(...),
     week: int = typer.Option(...),
     db: Path = typer.Option(config.DEFAULT_DB),
+    days: int = typer.Option(7, help="Kickoff window ahead of now that this week occupies"),
 ) -> None:
     """Append a market snapshot for the active week."""
     key = NFL_KEY if sport is Sport.NFL else CFB_KEY
+    if not db.exists():
+        typer.secho(f"no database at {db}; run ingest-cbs first", fg="red", err=True)
+        raise typer.Exit(code=1)
     with _store(db) as store:
         # The feed returns events across several weeks. Only the games already
         # ingested for this week may be stored, or the append-only lines table
@@ -114,6 +118,7 @@ def poll_odds(
             )
             raise typer.Exit(code=1)
 
+        now = datetime.now(tz=UTC)
         try:
             with OddsClient(config.odds_api_key()) as client:
                 result = client.fetch_spreads(
@@ -122,8 +127,9 @@ def poll_odds(
                     sport=sport,
                     season=season,
                     week=week,
-                    now=datetime.now(tz=UTC),
+                    now=now,
                     slate=slate,
+                    window=(now - timedelta(hours=12), now + timedelta(days=days)),
                 )
         except QuotaExhausted as exc:
             typer.secho(
@@ -134,6 +140,11 @@ def poll_odds(
             raise typer.Exit(code=2) from exc
         except OddsApiError as exc:
             typer.secho(f"odds feed unavailable: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        except UnknownTeamError as exc:
+            # Still fail loud — an in-window team we cannot name is a real gap —
+            # but name it instead of raising a traceback at the user.
+            typer.secho(f"unresolved team in the kickoff window: {exc}", fg="red", err=True)
             raise typer.Exit(code=1) from exc
 
         store.append_market_lines(result.lines)
@@ -169,14 +180,27 @@ def report(
         # without which every early-season rating is still the initial value.
         history = store.games_before(sport, season, week)
         untrained = not any(g.home_score is not None and g.away_score is not None for g in history)
-        edges = apply_tiebreaks(edges, games, history)
+        try:
+            edges = apply_tiebreaks(edges, games, history)
+        except MissingGameError as exc:
+            typer.secho(f"cannot resolve a tiebreak: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+
+        # The caveat belongs in the artifact, not only in the terminal — a
+        # written sheet has to carry the standing of its own numbers.
+        provenance = "CBS frozen league lines vs latest stored market consensus"
+        if untrained:
+            provenance += (
+                "; NO completed games stored, so every tiebreak rating is still "
+                "the initial value and reduces to home field"
+            )
 
         age = (now - newest).total_seconds() / 60 if newest else None
         sheet = render_sheet(
             edges,
             games,
             generated_at=now,
-            provenance="CBS frozen league lines vs latest stored market consensus",
+            provenance=provenance,
             snapshot_age_minutes=age,
         )
         typer.echo(sheet)

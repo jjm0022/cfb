@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -46,6 +46,7 @@ PAYLOAD = [
 
 
 SLATE = {"nfl-2025-03-BUF-at-MIA"}
+WINDOW = (NOW - timedelta(hours=12), NOW + timedelta(days=7))
 
 
 def client_returning(payload, status=200):
@@ -55,7 +56,7 @@ def client_returning(payload, status=200):
     return OddsClient("key", transport=httpx.MockTransport(handler), sleep=lambda _: None)
 
 
-def fetch(client, slate=SLATE):
+def fetch(client, slate=SLATE, window=WINDOW):
     return client.fetch_spreads(
         NFL_KEY,
         resolver=TeamResolver.default(),
@@ -64,6 +65,7 @@ def fetch(client, slate=SLATE):
         week=3,
         now=NOW,
         slate=slate,
+        window=window,
     )
 
 
@@ -142,8 +144,9 @@ def test_events_outside_the_requested_week_are_never_stamped_with_it():
         PAYLOAD[0],
         {
             **PAYLOAD[0],
-            "id": "next-week",
-            "commence_time": "2025-09-28T17:00:00Z",
+            # Inside the kickoff window, so only the slate can reject it.
+            "id": "not-on-our-sheet",
+            "commence_time": "2025-09-22T17:00:00Z",
             "home_team": "New York Jets",
             "away_team": "Dallas Cowboys",
         },
@@ -201,3 +204,58 @@ def test_client_closes_as_a_context_manager():
     with client_returning(PAYLOAD) as client:
         assert fetch(client).lines
     assert client._client.is_closed
+
+
+def test_out_of_window_events_are_dropped_before_their_teams_are_resolved():
+    # The NCAAF feed covers the whole country while aliases.yaml covers only the
+    # schools we pick. Resolving before filtering aborts the entire poll on the
+    # first unmapped school and stores nothing at all.
+    payload = [
+        PAYLOAD[0],
+        {
+            **PAYLOAD[0],
+            "id": "far-future",
+            "commence_time": "2025-11-30T17:00:00Z",
+            "home_team": "Not A Real Team",
+            "away_team": "Also Not Real",
+        },
+    ]
+    result = fetch(client_returning(payload))
+    assert {line.game_id for line in result.lines} == {"nfl-2025-03-BUF-at-MIA"}
+    assert any("outside the nfl 2025 week 3 window" in row for row in result.skipped)
+
+
+def test_a_repeat_matchup_in_another_week_is_caught_by_the_window():
+    # Same teams, same home side, different week: make_game_id embeds the
+    # REQUESTED week, so the constructed id lands inside the slate. Only the
+    # kickoff window can tell these apart.
+    payload = [
+        {
+            **PAYLOAD[0],
+            "id": "rematch",
+            "commence_time": "2026-01-11T17:00:00Z",
+        }
+    ]
+    result = fetch(client_returning(payload))
+    assert result.lines == []
+    assert any("outside" in row for row in result.skipped)
+
+
+def test_an_unreadable_commence_time_is_reported_not_assumed():
+    payload = [{**PAYLOAD[0], "commence_time": "not a timestamp"}]
+    result = fetch(client_returning(payload))
+    assert result.lines == []
+    assert any("unreadable commence_time" in row for row in result.skipped)
+
+
+def test_the_window_is_sent_to_the_server_too():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=PAYLOAD)
+
+    client = OddsClient("key", transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    fetch(client)
+    assert "commenceTimeFrom=2025-09-21T00%3A00%3A00Z" in seen["url"]
+    assert "commenceTimeTo=2025-09-28T12%3A00%3A00Z" in seen["url"]
