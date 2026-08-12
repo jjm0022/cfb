@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after the final whole-branch review and its fix wave
+**Last updated:** 2026-08-11, after the live CFB alias sweep (`fd03baa`)
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -29,30 +29,33 @@ allocation problem.
 
 ## Current state
 
-- **Branch:** merged to `master` (2026-08-11). `phase-a-edge-engine` is gone.
-- **Tests:** 174 passing, `uv run pytest -q`
-- **Lint:** clean, `uv run ruff check src tests`; `ruff format --check` is now
-  clean repo-wide too (the six pre-existing drifted files were formatted)
-- **Done:** Tasks 1-15 plus amendments 9a, 12a, 13a, 14a, the final
-  whole-branch review, its fix wave (`821ae5c`), the scoped re-review, and the
-  re-review fix (`11fbdb3`)
-- **Next:** Phase A is code-complete and merged. What remains is not code:
-  run the external phase-exit checks below with real credentials, then make the
-  Phase B decision from the backtest's Wilson intervals.
-- **Do not start Task 14 or 15 again.** Their committed implementations are
-  `e45b724` + atomic-ingest fix `62f4023`, and `63f54b3`, respectively.
-- **Review range:** always re-derive it with `git merge-base master HEAD` and
-  `git rev-parse HEAD`; handoff updates change HEAD after the fact.
+- **Branch:** all work is on `master`. `phase-a-edge-engine` was merged and
+  deleted on 2026-08-11. There is no remote configured.
+- **Tests:** 174 passing, `uv run pytest -q` (the suite is fully offline)
+- **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`
+  are both clean repo-wide.
+- **Phase A is code-complete.** Tasks 1-15, amendments 9a/12a/13a/14a, the final
+  whole-branch review and its fix wave, the scoped re-review and its fix, an
+  end-to-end integration test, and the live CFB alias sweep are all done.
+- **What remains is not code.** See "Remaining work" below: a real CBS paste,
+  the opener backfill, and the Phase B decision.
+- **Do not re-run the SDD task loop.** Every task is committed; `git log` is the
+  record.
 
-Built so far:
+## What is built
 
 ```
 src/pickem/models.py              Sport/Side/Tier StrEnums, make_game_id, Game,
                                   LeagueLine, MarketLine, MarketLinesResult,
                                   Edge
-src/pickem/resolve/resolver.py    TeamResolver, UnknownTeamError (fail-loud)
-src/pickem/resolve/aliases.yaml   canonical team IDs -> every source's spelling
-src/pickem/store/db.py            Store — the only module that talks to DuckDB
+src/pickem/resolve/resolver.py    TeamResolver, UnknownTeamError (fail-loud).
+                                  _normalize folds case, whitespace, diacritics
+                                  and punctuation.
+src/pickem/resolve/aliases.yaml   canonical team IDs -> every source's spelling.
+                                  All 32 NFL teams and all 136 FBS schools.
+src/pickem/store/db.py            Store — the only module that talks to DuckDB.
+                                  Context manager. upsert_games COALESCEs
+                                  scores; insert_games_if_absent for CBS.
 src/pickem/store/schema.sql       DuckDB DDL; `lines` is append-only
 src/pickem/ingest/cbs.py          parse_cbs_block -> ParseResult (lines,
                                   matchups, skipped); CbsParseError
@@ -60,77 +63,74 @@ src/pickem/edge/divergence.py     Thresholds, consensus_spread, compute_edge,
                                   rank_edges. Pure; no I/O.
 src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
                                   tiebreak_side. Pure; no I/O.
+src/pickem/edge/pipeline.py       apply_tiebreaks resolves only COINFLIP and
+                                  NO_MARKET edges with Elo; strong/lean edges
+                                  pass through, and an unmatched game raises
+                                  MissingGameError. predict_tiebreaker_total
+                                  returns the median available market total.
 src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
                                   `loader` is injected so tests stay offline.
 src/pickem/ingest/cfbd_source.py  CfbdConfig, load_cfb_games, load_cfb_lines.
                                   `fetcher` is injected. Talks to the CFBD REST
                                   API over httpx — NOT the `cfbd` SDK, which
                                   pins pydantic<2. Retries 429 with backoff.
-                                  Both line loaders return MarketLinesResult.
+                                  Both loaders keep FBS-vs-FBS games only.
 src/pickem/ingest/odds.py         OddsClient.fetch_spreads for live book lines;
                                   injectable HTTP transport keeps tests offline.
-                                  QuotaExhausted is distinct from feed errors;
-                                  missing spreads are surfaced in skipped.
-                                  Requires a `slate` of game ids; retries
-                                  transport/5xx with backoff; context manager.
+                                  Requires BOTH a kickoff `window` and a `slate`
+                                  of game ids. QuotaExhausted is distinct from
+                                  feed errors. Retries transport/5xx with
+                                  backoff. Context manager.
 src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
                                   Wilson score intervals. Pure; no I/O.
 src/pickem/backtest/runner.py     run_backtest replays opener/closer proxies
-                                  through compute_edge; BacktestReport includes
-                                  tier records, assumptions, and deterministic
-                                  skipped-game reasons. Pure; no I/O.
+                                  through compute_edge AND apply_tiebreaks;
+                                  split_proxies classifies stored lines;
+                                  BacktestReport carries tier records,
+                                  assumptions and skip reasons. Pure; no I/O.
 src/pickem/report/sheet.py        render_sheet ranks edges into auditable
                                   markdown with named picks, both spreads,
                                   visible NO_MARKET rows, required provenance,
                                   and numeric or explicitly unknown data age.
-src/pickem/edge/pipeline.py       apply_tiebreaks resolves only COINFLIP and
-                                  NO_MARKET edges with Elo; strong/lean edges
-                                  pass through. predict_tiebreaker_total returns
-                                  the median available market total.
 src/pickem/config.py              Default DuckDB path and environment-sourced
                                   Odds API / CFBD keys. Loads `.env` on import
                                   with override=False, so an exported variable
                                   always wins over the file.
-src/pickem/cli.py                 Typer commands: ingest-cbs, poll-odds, report,
-                                  sync-results, backfill, and backtest. Prints
-                                  source skips visibly; CBS ingest is atomic.
+src/pickem/cli.py                 Typer commands: ingest-cbs, poll-odds
+                                  (--days for the kickoff window), report,
+                                  sync-results (--sport nfl|cfb), backfill, and
+                                  backtest. Prints every source skip visibly;
+                                  CBS ingest is atomic.
 ```
 
-## Process being followed
+Tests worth knowing about, beyond the per-module ones:
 
-`superpowers:subagent-driven-development`. Per task:
+- `tests/test_end_to_end.py` — the real CLI against a real DuckDB file, faking
+  only the HTTP transport. Covers paste -> poll -> sheet, out-of-week events,
+  re-polls appending history, and re-ingest not destroying synced scores.
+- `tests/test_game_id_contract.py` — CBS, nflverse, CFBD and the odds feed must
+  all produce the SAME id for the same matchup. A one-character disagreement
+  makes the join silently return nothing.
+- `tests/test_cfb_aliases.py` — guards the generated FBS table offline.
 
-1. `scripts/task-brief PLAN N` -> brief file; record BASE (`git rev-parse HEAD`)
-2. Dispatch a fresh implementer subagent with the brief path (never the whole plan)
-3. `scripts/review-package PLAN BASE HEAD` -> diff file; dispatch a task reviewer
-4. On Critical/Important findings: resume the implementer (rounds 1-3), then
-   scoped re-review. Max 5 rounds.
-5. Append completion to the ledger, then next task
+## How it was built
 
-Scripts live at:
-`/Users/jmiller/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/`
+`superpowers:subagent-driven-development`: per task, a brief to a fresh
+implementer subagent, then a scoped reviewer over that task's diff, then a
+ledger entry. Closed out with a whole-branch review, one fix wave, and one
+scoped re-review. That process is complete — it is recorded here only so the
+ledger's structure makes sense.
 
-Model selection follows the skill's cost/capability guidance. The final
-whole-branch review must use the most capable available model.
+## Decisions and amendments — do not re-litigate
 
-## Decisions and amendments made so far
-
-These are already reflected in the plan document — do not re-litigate them.
-
-- **StrEnum, not `str, Enum`.** Human ruling. The plan originally mandated
-  `str, Enum`, which trips ruff UP042 and contradicts the plan's own lint
-  config. Plan amended at Tasks 2 and 11.
-- **`uv_build`, not hatchling.** Task 3's original step added
-  `[tool.hatch.build...]` config, which is inert under this project's build
-  backend. Removed; `uv_build` ships package data under `src/pickem/`
-  automatically.
+- **StrEnum, not `str, Enum`.** Human ruling; `str, Enum` trips ruff UP042 and
+  contradicts the plan's own lint config. Plan amended at Tasks 2 and 11.
+- **`uv_build`, not hatchling.** `uv_build` ships package data under
+  `src/pickem/` automatically.
 - **YAML 1.1 boolean trap in `aliases.yaml`.** Bare `NO:` (New Orleans) parses
   as boolean `False`, crashing the resolver. Any ID or alias in
-  {NO, ON, OFF, YES, Y, N, TRUE, FALSE, NULL} must be quoted. A regression test
-  now guards this. **This file is hand-edited every time CBS spells a team a
-  new way, so this trap will recur.**
-- Two pre-flight plan defects fixed before Task 1 (Task 5 fixture test, Task 4
-  league-line join).
+  {NO, ON, OFF, YES, Y, N, TRUE, FALSE, NULL} must be quoted; the generated CFB
+  block quotes everything unconditionally. A regression test guards this.
 - **The `cfbd` SDK is NOT usable here.** Every published `cfbd` 5.x release
   pins `pydantic<2` and this project is built on pydantic 2; the 4.x line
   predates the current API and silently deserializes its camelCase fields to
@@ -139,31 +139,19 @@ These are already reflected in the plan document — do not re-litigate them.
   dependency was removed. Do not "restore" the SDK.
 - **`pytz` is a real dependency.** duckdb imports it dynamically to read
   TIMESTAMPTZ but does not declare it. Do not prune it as unused. Reads return
-  pytz UTC tzinfo, not `datetime.UTC`. Plan amended at Task 4.
+  pytz UTC tzinfo, not `datetime.UTC`.
 - **nflverse team abbreviations vary by era.** The Rams appear as both `LA` and
   `LAR` across seasons (likewise `OAK`/`LV`, `SD`/`LAC`, `STL`). Task 8 swept
-  1999-2025 through both loaders until the resolver stopped raising, and added
-  the missing spellings as aliases of existing canonical ids — never as new ids.
+  1999-2025 through both loaders until the resolver stopped raising, adding the
+  missing spellings as aliases of existing canonical ids — never as new ids.
   Do the same when a new source arrives.
 - **CBS lines carrying two numbers are skipped, not resolved.** A paste line
   with a number on both sides (a total, a stray trailing digit) matches both
-  regex groups; the plan's original code silently took the home-side one as the
-  spread. Such lines now go to `ParseResult.skipped`. Plan amended at Task 5.
-- **Backtests report every excluded game.** Task 12's original literal code
-  silently continued past unplayed games, missing opening proxies, and missing
-  closing markets. Human ruling 12a added deterministic
-  `BacktestReport.skipped` entries naming every game and reason, and amended the
-  Task 12 plan text.
-- **Every pick sheet carries provenance and age.** Task 13's original exact
-  interface made age optional in the output and had no provenance input,
-  conflicting with spec §8. Human ruling 13a made `provenance` a required
-  keyword argument and requires every sheet to show either numeric snapshot age
-  or `unknown/unavailable`. Tasks 13 and 14 were amended in the plan.
-- **CBS ingestion is atomic.** Task 14's literal CLI code persisted valid rows,
-  printed `ParseResult.skipped`, and exited zero. Human ruling 14a made the spec
-  govern: if any row is skipped, the CLI prints the parse summary and offending
-  rows, exits non-zero, and never opens or mutates the database. The plan and a
-  mixed valid/ambiguous-row regression test were amended in commit `62f4023`.
+  regex groups and would otherwise silently resolve to the home-side number.
+- **Backtests report every excluded game** (human ruling 12a).
+- **Every pick sheet carries provenance and age** (human ruling 13a).
+- **CBS ingestion is atomic** (human ruling 14a): on any skipped row the CLI
+  prints the offending rows, exits non-zero, and never opens the database.
 
 ## Load-bearing conventions — do not "improve" these
 
@@ -177,7 +165,7 @@ These are already reflected in the plan document — do not re-litigate them.
 - **The `lines` table is append-only.** `INSERT OR IGNORE`, never `OR REPLACE`.
   Line movement is the signal; overwriting destroys it. Because a bad row can
   never be cleaned up, nothing writes to it without knowing the game id is
-  right — hence the odds `slate`.
+  right — hence the odds `window` and `slate`.
 - **`upsert_games` never blind-replaces.** Scores COALESCE, so a source that
   does not carry them cannot erase what `sync-results` wrote. `ingest-cbs` uses
   `insert_games_if_absent`, because the CBS paste has a placeholder kickoff and
@@ -186,27 +174,28 @@ These are already reflected in the plan document — do not re-litigate them.
   testable offline and replayable in the backtest.
 - **Fail loud, but per source.** An unknown team in the CBS paste RAISES —
   there every line is a game we must pick. An unknown team in the odds feed is
-  REPORTED in `skipped` and skipped — that feed is a firehose whose NCAAF
+  REPORTED in `skipped` and passed over — that feed is a firehose whose NCAAF
   coverage includes every FCS matchup with a posted line, and aborting a poll
-  over a game we never pick would make live CFB unusable. Both are visible;
-  neither is silent. Missing market lines are reported as `NO_MARKET`, never
-  skipped. Never fabricate or interpolate a line.
+  over a game we never pick would make live CFB unusable. Such an event cannot
+  be in the slate anyway, since slate ids are built from names that already
+  resolved. Both paths are visible; neither is silent. Missing market lines are
+  reported as `NO_MARKET`, never skipped. Never fabricate or interpolate a line.
 - **Team-name matching folds diacritics and punctuation.** CFBD writes
   "San José State" and "Hawai'i" where the odds feed writes "San Jose State"
   and "Hawaii". `_normalize` folds these so the alias table does not need a row
   per decoration. It cannot merge two real schools — none differ only by an
-  accent. Do NOT extend this to prefix or fuzzy matching: "Arkansas Pine Bluff",
-  "Indiana State", "Tennessee State" and "Utah Tech" are all FCS schools whose
-  names begin with an FBS school's name, and a prefix match would silently pick
-  the wrong team.
+  accent. **Do NOT extend this to prefix or fuzzy matching:** "Arkansas Pine
+  Bluff", "Houston Baptist", "Indiana State", "North Carolina A&T",
+  "Northwestern State", "Tennessee State" and "Utah Tech" are all FCS schools
+  whose names begin with an FBS school's name, and a prefix match would silently
+  map picks to the wrong team. This was tried during the sweep and rejected.
 - **Nothing a source could not give us is dropped in silence.** Two parallel
-  result types carry this, and they are the same idea in two places:
-  `ParseResult.skipped` (CBS paste lines that would not parse) and
-  `MarketLinesResult.skipped` (per-book rows with no spread). Both are
-  `list[str]` of human-readable one-liners naming the game and the book.
-  **Any new line loader returns `MarketLinesResult`, never a bare list** —
-  this was a human ruling at Task 5 and again at 9a. The CLI now prints both
-  kinds: CBS skips abort ingestion; market-row skips are yellow warnings.
+  result types carry this: `ParseResult.skipped` (CBS paste lines that would not
+  parse) and `MarketLinesResult.skipped` (rows with no spread, teams we do not
+  track, events outside the window or off the slate). Both are `list[str]` of
+  human-readable one-liners. **Any new line loader returns `MarketLinesResult`,
+  never a bare list.** The CLI prints both kinds: CBS skips abort ingestion;
+  market-row skips are yellow warnings.
 - **Every rendered pick sheet names its provenance and age.** Callers must pass
   `provenance`; absent market timing renders as `unknown/unavailable`, never as
   a missing status line.
@@ -220,114 +209,85 @@ These are already reflected in the plan document — do not re-litigate them.
   replayed week. If the two ever diverge again, the backtest stops being
   evidence about the thing being shipped.
 
-## Final review outcome (2026-08-11)
+## The odds poll has two guards, and both are needed
 
-The whole-branch review over `bed73dd..22a842a` returned 1 Critical and 8
-Important findings and adjudicated all 17 deferred/parked ledger items. All
-were addressed in the single allowed fix wave, commit `821ae5c`. Full detail
-is in the ledger; the decisions that changed previously-ruled behavior are:
+This was the Critical finding of the final review and is the most dangerous
+part of the system, because its failure mode is silent and permanent.
 
-- **The odds feed is now week-scoped by TWO guards, and both are needed.** The
-  endpoint returns events across several weeks, and every one was being stamped
-  with the caller's week — writing wrong game ids permanently into the
-  append-only `lines` table while the real week silently reported `NO_MARKET`.
-  `fetch_spreads` now takes a kickoff `window`, applied to `commence_time`
-  **before any team name is resolved**, and a `slate` of canonical game ids,
-  applied after. The window catches out-of-week events and spares us resolving
-  the ~120 unmapped schools the nationwide NCAAF feed returns; the slate catches
-  in-window events that are simply not on our sheet. `make_game_id` embeds the
-  week being *asserted*, so only the window can catch a repeat matchup at the
-  same site in another week. `poll-odds` derives the slate from
-  `league_lines_for_week`, takes `--days` (default 7) for the window, and
-  refuses to run before `ingest-cbs`. **This is the fix that matters most
-  before any live run.**
-- **The backtest now grades NO_MARKET games instead of excluding them.** The
-  report ships a pick on them via the Elo tiebreak, so excluding them made the
-  backtest measure something the system does not do. Ruling 12a still holds:
-  every genuinely excluded game is still named in `BacktestReport.skipped`,
-  which the CLI now prints.
-- **The backtest applies the same tiebreak the report does**, with history that
-  grows only after each replayed week, so no future result informs its own pick.
-- **`apply_tiebreaks` raises rather than passing through an unresolved edge**
-  carrying `compute_edge`'s placeholder `side=HOME`.
+The endpoint returns every event with posted odds, spanning several weeks, and
+every one was being stamped with the caller's week — writing wrong game ids
+permanently into the append-only `lines` table while the real week reported
+`NO_MARKET`. `fetch_spreads` now requires:
 
-## Remaining task
+1. a kickoff **`window`**, checked against `commence_time` **before any team
+   name is resolved**. It catches out-of-week events and spares us resolving the
+   hundreds of schools we do not track. It is also the ONLY guard that can catch
+   a repeat matchup at the same site in another week, because `make_game_id`
+   embeds the week being *asserted*, not the week observed.
+2. a **`slate`** of canonical game ids, checked after resolution. It catches
+   in-window events that are simply not on our sheet.
 
-None in code. Phase A merged to `master` at `b9959b9` with the review gate
-clean. The external phase-exit checks still require credentials and real data:
+`poll-odds` derives the slate from `league_lines_for_week`, takes `--days`
+(default 7) for the window, and refuses to run before `ingest-cbs`.
 
-1. `export ODDS_API_KEY=...` and `export CFBD_API_KEY=...` (or a `.env` at the
-   repo root — already gitignored). `src/pickem/config.py` reads both.
-2. **Sweep CFB aliases before any live CFB run.** `aliases.yaml` still has only
-   14 schools. Run a real week through `load_cfb_games` with a key set and add
-   every spelling as an alias of an existing canonical id.
-3. Paste a real CBS block through `ingest-cbs`, then `poll-odds`, then
-   `report`, and read the sheet for anything that looks wrong.
-4. `backfill` then `backtest` for the data-backed hit rate, remembering that
-   openers are still missing (see the backtest data gap below), so the run will
-   report every game as excluded until that is resolved.
+## Verified against the live APIs (2026-08-11)
 
-## Known gaps to raise with the user later
+- **CFBD:** swept 2022-2025, weeks 1-15, through `load_cfb_games` and
+  `load_cfb_lines`. **3,173 games and 10,197 lines resolved, zero
+  `UnknownTeamError`**, 5 rows skipped for null spreads — confirming the CFBD
+  null-spread branch is the one that actually fires.
+- **The Odds API:** the real NCAAF feed replayed through `fetch_spreads` ->
+  `compute_edge` -> `render_sheet` with a season-opener window stored 53 market
+  lines across 6 in-window games and reported all 105 skips by reason (103 out
+  of window, 2 untracked FCS teams). Live CFB works end to end.
+- Both keys live in `.env` at the repo root (gitignored) and are read
+  automatically. Free tier is 500 credits/month; 4 were used verifying this.
+- Note: polling before the season opens returns nothing, correctly — the
+  default window is 7 days. Use `--days` to widen it.
 
-- **Backtest data gap (spec §9).** Historical frozen CBS lines do not exist —
-  nobody recorded them. The backtest proxies the frozen line with the market
-  OPENING line and submission-time with the CLOSING line. nflverse gives closing
-  lines free back to 1999; openers need one month of a paid Odds API tier
-  (~$29) to backfill 2020-2025 snapshots, then cancel. `pickem backfill` loads
-  closers only and says so.
-- **RESOLVED (Task 14): skipped lists now have CLI readers.** `ingest-cbs`
-  prints parser skips and aborts atomically; `poll-odds` and `backfill` print
-  every missing-spread row in yellow.
-- **Repository-wide Ruff formatting has pre-existing drift.** After Task 13,
-  `uv run ruff format --check src tests` named six files outside Task 13 that
-  would be reformatted. Task 13's three files are clean; the full list and
-  verification note are in the ledger for final-review triage.
-- **RESOLVED (2026-08-11): `aliases.yaml` now covers all 32 NFL teams and the
-  whole FBS (136 schools).** The CFB side was generated from the CFBD FBS team
-  registry (2021-2025) and merged into the 14 hand-entered ids — none renamed —
-  then verified by sweeping 2022-2025 weeks 1-15 through `load_cfb_games` and
-  `load_cfb_lines`: **3,173 games and 10,197 lines resolved, zero
-  `UnknownTeamError`**, 5 rows skipped for null spreads. `tests/test_cfb_aliases.py`
-  guards the table offline.
-- **The alias table is FBS-only, deliberately.** Both CFBD fetchers drop games
-  where either side is FCS — `classification=fbs` alone still returns FBS-hosts-
-  FCS games, and those schools are ones this system never picks. An FCS school
-  that genuinely appears on the CBS sheet fails loud at `ingest-cbs`, which is
-  the right place to notice and hand-add it.
-- **Bare "Miami" resolves to MIAFL (the Hurricanes)**, matching CFBD's own
-  naming. `Miami (OH)` stays distinct as MIAOH. If a CBS paste ever writes bare
-  "Miami" meaning the RedHawks it will silently resolve to the wrong school —
-  the one place in the table where that is possible.
-- **RESOLVED (amendment 9a, human ruling):** null-spread rows are no longer
-  dropped silently. `load_cfb_lines` and `load_nfl_closing_lines` return
-  `MarketLinesResult`, and the plan was amended at Tasks 8, 9, 10 and 14 so
-  the unbuilt tasks follow suit. Nothing left to decide here.
-- **nflverse's null-spread branch is defensive only.** A real 1999-2025 sweep
-  during 9a loaded 7,276 closing lines with ZERO null spreads and no
-  `UnknownTeamError`, so that branch never fires on historical data and only
-  the injected-loader unit test covers it. CFBD's branch is the one that will
-  actually fire, since per-book spreads there genuinely go missing. Relevant
-  because 9a moved team resolution ahead of the null check in nflverse: a row
-  with both a null spread and an unknown abbreviation now raises where it once
-  skipped. The sweep proves that combination does not occur in 1999-2025.
-- **RESOLVED (final review): CLI output branches and Store handles.**
-  `report` and `backtest` output branches now have CLI-level tests, and both
-  `Store` and `OddsClient` are context managers used by all six commands.
-- **`predict_tiebreaker_total` is still unwired, and it is not a loose wire.**
+## Remaining work
+
+1. **Paste a real CBS block** through `ingest-cbs`, then `poll-odds`, then
+   `report`, and read the sheet for anything that looks wrong. This is the last
+   unverified path — the parser has only ever seen fixtures.
+2. **Backfill openers, or accept the gap.** See below; until then `backtest`
+   correctly reports every game as excluded and says why.
+3. **Make the Phase B decision** from the backtest's Wilson intervals.
+
+## Known gaps
+
+- **Backtest data gap (spec §9), the big one.** Historical frozen CBS lines do
+  not exist — nobody recorded them. The backtest proxies the frozen line with
+  the market OPENING line and submission-time with the CLOSING line. nflverse
+  gives closing lines free back to 1999; **openers need one month of a paid Odds
+  API tier (~$29)** to backfill 2020-2025 snapshots, then cancel. `pickem
+  backfill` loads closers only and says so, so `backtest` currently grades
+  nothing and names the reason for every game.
+- **`predict_tiebreaker_total` is unwired, and it is not a loose wire.**
   `odds.py` requests `markets=spreads` only and never populates
   `MarketLine.total`, so wiring it today returns `None` for all live data. Only
-  nflverse and CFBD supply totals. Wiring it needs the `totals` market added to
-  the odds request (a quota cost) plus a CLI flag naming the tiebreaker game.
+  nflverse and CFBD supply totals. It needs the `totals` market added to the
+  odds request (a quota cost) plus a CLI flag naming the tiebreaker game.
   Phase B scope.
-- **CFB is not usable end to end yet.** The alias gap above plus the fact that
-  CFB results only arrive through the new `sync-results --sport cfb --week N`
-  path (which needs a CFBD key) means a CFB rating is untrained in practice.
-  `report` prints a warning when no completed game is in the store.
-- **External phase-exit checks are still unverified.** The automated suite is
-  offline. A real current CBS paste, a live-odds report, and a data-backed
-  2020-2025 backtest still require credentials/data and should be called out
-  when finishing the branch rather than claimed complete from unit tests.
-- Live operation should fit The Odds API free tier (500 credits/month).
+- **The alias table is FBS-only, deliberately.** Both CFBD fetchers keep only
+  games where BOTH sides are FBS — `classification=fbs` alone still returns
+  FBS-hosts-FCS games, whose schools this system never picks. An FCS school that
+  genuinely appears on the CBS sheet fails loud at `ingest-cbs`, which is the
+  right place to notice it and hand-add the alias.
+- **Bare "Miami" resolves to MIAFL (the Hurricanes)**, matching CFBD's own
+  naming; `Miami (OH)` stays distinct as MIAOH. If a CBS paste ever writes bare
+  "Miami" meaning the RedHawks it will silently resolve to the wrong school —
+  the one place in the table where that is possible.
+- **CFB Elo ratings are untrained until results are synced.** CFB scores arrive
+  only through `sync-results --sport cfb --week N`, which needs a CFBD key and
+  runs a week at a time. `report` prints a warning, and folds the caveat into
+  the sheet's provenance, when no completed game is in the store.
+- **nflverse's null-spread branch is defensive only.** A real 1999-2025 sweep
+  loaded 7,276 closing lines with ZERO null spreads and no `UnknownTeamError`,
+  so only the injected-loader unit test covers it. Kept as a guard. Relevant
+  because resolution now precedes the null check: a row with both a null spread
+  and an unknown abbreviation raises where it once skipped. The sweep proves
+  that combination does not occur in 1999-2025.
 
 ## Phase B decision (do not skip)
 
