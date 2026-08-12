@@ -30,13 +30,14 @@ allocation problem.
 ## Current state
 
 - **Branch:** `phase-a-edge-engine` (NOT master — master has only spec + plan)
-- **Tests:** 141 passing, `uv run pytest -q`
+- **Tests:** 145 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`; `ruff format --check` is now
   clean repo-wide too (the six pre-existing drifted files were formatted)
 - **Done:** Tasks 1-15 plus amendments 9a, 12a, 13a, 14a, the final
-  whole-branch review, and its single fix wave (`821ae5c`)
-- **Next:** `superpowers:finishing-a-development-branch`, once the scoped
-  re-review of `821ae5c` is clean.
+  whole-branch review, its fix wave (`821ae5c`), the scoped re-review, and the
+  re-review fix (`11fbdb3`)
+- **Next:** `superpowers:finishing-a-development-branch`. No review findings
+  remain open.
 - **Do not start Task 14 or 15 again.** Their committed implementations are
   `e45b724` + atomic-ingest fix `62f4023`, and `63f54b3`, respectively.
 - **Review range:** always re-derive it with `git merge-base master HEAD` and
@@ -203,13 +204,20 @@ Important findings and adjudicated all 17 deferred/parked ledger items. All
 were addressed in the single allowed fix wave, commit `821ae5c`. Full detail
 is in the ledger; the decisions that changed previously-ruled behavior are:
 
-- **The odds feed is now week-scoped by an explicit slate.** The endpoint
-  returns events across several weeks, and every one was being stamped with the
-  caller's week — writing wrong game ids permanently into the append-only
-  `lines` table while the real week silently reported `NO_MARKET`.
-  `fetch_spreads` now requires `slate`, a collection of canonical game ids;
-  `poll-odds` derives it from `league_lines_for_week` and refuses to run before
-  `ingest-cbs`. **This is the fix that matters most before any live run.**
+- **The odds feed is now week-scoped by TWO guards, and both are needed.** The
+  endpoint returns events across several weeks, and every one was being stamped
+  with the caller's week — writing wrong game ids permanently into the
+  append-only `lines` table while the real week silently reported `NO_MARKET`.
+  `fetch_spreads` now takes a kickoff `window`, applied to `commence_time`
+  **before any team name is resolved**, and a `slate` of canonical game ids,
+  applied after. The window catches out-of-week events and spares us resolving
+  the ~120 unmapped schools the nationwide NCAAF feed returns; the slate catches
+  in-window events that are simply not on our sheet. `make_game_id` embeds the
+  week being *asserted*, so only the window can catch a repeat matchup at the
+  same site in another week. `poll-odds` derives the slate from
+  `league_lines_for_week`, takes `--days` (default 7) for the window, and
+  refuses to run before `ingest-cbs`. **This is the fix that matters most
+  before any live run.**
 - **The backtest now grades NO_MARKET games instead of excluding them.** The
   report ships a pick on them via the Elo tiebreak, so excluding them made the
   backtest measure something the system does not do. Ruling 12a still holds:
