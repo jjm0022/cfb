@@ -12,6 +12,7 @@ import typer
 from pickem import config
 from pickem.backtest.runner import run_backtest
 from pickem.edge.divergence import compute_edge
+from pickem.edge.pipeline import apply_tiebreaks
 from pickem.ingest.cbs import parse_cbs_block
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import CFB_KEY, NFL_KEY, OddsClient, QuotaExhausted
@@ -136,6 +137,13 @@ def report(
             if newest is None or snapshot.captured_at > newest:
                 newest = snapshot.captured_at
         edges.append(compute_edge(line, market))
+
+    # Games the market never repriced fall through to the rating, built from
+    # every completed game already in the store.
+    history: list[Game] = []
+    for past_week in range(1, week):
+        history.extend(store.games_for_week(sport, season, past_week))
+    edges = apply_tiebreaks(edges, games, history)
 
     age = (now - newest).total_seconds() / 60 if newest else None
     sheet = render_sheet(
