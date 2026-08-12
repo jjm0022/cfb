@@ -8,6 +8,7 @@ never resolves data.
 from __future__ import annotations
 
 import difflib
+import unicodedata
 from importlib import resources
 from pathlib import Path
 
@@ -21,7 +22,18 @@ class UnknownTeamError(LookupError):
 
 
 def _normalize(name: str) -> str:
-    return " ".join(name.strip().lower().split())
+    """Fold case, whitespace, diacritics and punctuation.
+
+    Sources disagree on decoration, not identity: CFBD writes "San José State"
+    and "Hawai'i" where the odds feed writes "San Jose State" and "Hawaii", and
+    "Ragin' Cajuns" appears both with and without the apostrophe. Folding these
+    here removes a whole class of alias churn. It cannot merge two real schools
+    — no two differ only by an accent or an apostrophe.
+    """
+    decomposed = unicodedata.normalize("NFKD", name)
+    without_marks = "".join(c for c in decomposed if not unicodedata.combining(c))
+    cleaned = without_marks.replace("'", "").replace("\u2019", "").replace(".", "")
+    return " ".join(cleaned.strip().lower().split())
 
 
 class TeamResolver:

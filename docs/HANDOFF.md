@@ -30,7 +30,7 @@ allocation problem.
 ## Current state
 
 - **Branch:** merged to `master` (2026-08-11). `phase-a-edge-engine` is gone.
-- **Tests:** 170 passing, `uv run pytest -q`
+- **Tests:** 174 passing, `uv run pytest -q`
 - **Lint:** clean, `uv run ruff check src tests`; `ruff format --check` is now
   clean repo-wide too (the six pre-existing drifted files were formatted)
 - **Done:** Tasks 1-15 plus amendments 9a, 12a, 13a, 14a, the final
@@ -88,7 +88,9 @@ src/pickem/edge/pipeline.py       apply_tiebreaks resolves only COINFLIP and
                                   pass through. predict_tiebreaker_total returns
                                   the median available market total.
 src/pickem/config.py              Default DuckDB path and environment-sourced
-                                  Odds API / CFBD keys.
+                                  Odds API / CFBD keys. Loads `.env` on import
+                                  with override=False, so an exported variable
+                                  always wins over the file.
 src/pickem/cli.py                 Typer commands: ingest-cbs, poll-odds, report,
                                   sync-results, backfill, and backtest. Prints
                                   source skips visibly; CBS ingest is atomic.
@@ -182,8 +184,21 @@ These are already reflected in the plan document — do not re-litigate them.
   no scores.
 - **`edge/` performs no I/O.** Pure functions, which is what makes the strategy
   testable offline and replayable in the backtest.
-- **Fail loud.** Unknown teams raise. Missing market lines are reported as
-  `NO_MARKET`, never skipped. Never fabricate or interpolate a line.
+- **Fail loud, but per source.** An unknown team in the CBS paste RAISES —
+  there every line is a game we must pick. An unknown team in the odds feed is
+  REPORTED in `skipped` and skipped — that feed is a firehose whose NCAAF
+  coverage includes every FCS matchup with a posted line, and aborting a poll
+  over a game we never pick would make live CFB unusable. Both are visible;
+  neither is silent. Missing market lines are reported as `NO_MARKET`, never
+  skipped. Never fabricate or interpolate a line.
+- **Team-name matching folds diacritics and punctuation.** CFBD writes
+  "San José State" and "Hawai'i" where the odds feed writes "San Jose State"
+  and "Hawaii". `_normalize` folds these so the alias table does not need a row
+  per decoration. It cannot merge two real schools — none differ only by an
+  accent. Do NOT extend this to prefix or fuzzy matching: "Arkansas Pine Bluff",
+  "Indiana State", "Tennessee State" and "Utah Tech" are all FCS schools whose
+  names begin with an FBS school's name, and a prefix match would silently pick
+  the wrong team.
 - **Nothing a source could not give us is dropped in silence.** Two parallel
   result types carry this, and they are the same idea in two places:
   `ParseResult.skipped` (CBS paste lines that would not parse) and

@@ -259,3 +259,23 @@ def test_the_window_is_sent_to_the_server_too():
     fetch(client)
     assert "commenceTimeFrom=2025-09-21T00%3A00%3A00Z" in seen["url"]
     assert "commenceTimeTo=2025-09-28T12%3A00%3A00Z" in seen["url"]
+
+
+def test_a_team_we_do_not_track_is_reported_not_raised():
+    # The NCAAF feed carries every FCS matchup with a posted line. Raising on
+    # one would abort a poll over a game this system never picks. It cannot be
+    # in the slate anyway, and the row is still surfaced in `skipped`.
+    payload = [
+        PAYLOAD[0],
+        {
+            **PAYLOAD[0],
+            "id": "fcs",
+            "commence_time": "2025-09-22T17:00:00Z",
+            "home_team": "Towson Tigers",
+            "away_team": "Morgan State Bears",
+        },
+    ]
+    result = fetch(client_returning(payload))
+    assert {line.game_id for line in result.lines} == {"nfl-2025-03-BUF-at-MIA"}
+    assert any("not a team we track" in row for row in result.skipped)
+    assert any("Towson" in row for row in result.skipped)

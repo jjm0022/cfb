@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 import httpx
 
 from pickem.models import MarketLine, MarketLinesResult, Sport, make_game_id
-from pickem.resolve.resolver import TeamResolver
+from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 BASE_URL = "https://api.the-odds-api.com/v4"
 NFL_KEY = "americanfootball_nfl"
@@ -173,8 +173,22 @@ class OddsClient:
                 )
                 continue
 
-            home = resolver.resolve(home_name, sport)
-            away = resolver.resolve(away_name, sport)
+            # A name we cannot map is REPORTED here, not raised. This feed is a
+            # firehose: its NCAAF coverage includes every FCS matchup with a
+            # posted line, none of which this system picks, so an unknown name
+            # is expected rather than exceptional. It cannot be in the slate
+            # either — slate ids are built from names that already resolved.
+            # The CBS paste keeps raising, because there every line IS a game we
+            # must pick. Either way nothing is dropped in silence: poll-odds
+            # prints these, and a game left without a market shows as NO_MARKET.
+            try:
+                home = resolver.resolve(home_name, sport)
+                away = resolver.resolve(away_name, sport)
+            except UnknownTeamError as exc:
+                skipped.append(
+                    f"{away_name} at {home_name}: not a team we track ({exc}) — not stored"
+                )
+                continue
             game_id = make_game_id(sport, season, week, away, home)
 
             if game_id not in wanted:
