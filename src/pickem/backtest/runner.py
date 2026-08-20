@@ -1,6 +1,6 @@
 """Replay historical weeks through the live strategy code.
 
-The backtest calls the same ``compute_edge`` the weekly report calls. If the
+The backtest calls the same final-decision interface the weekly report calls. If the
 two ever diverge, the backtest stops being evidence about the thing being
 shipped.
 """
@@ -13,9 +13,9 @@ from collections.abc import Sequence
 from pydantic import BaseModel
 
 from pickem.backtest.stats import Result, grade_pick, wilson_interval
-from pickem.edge.divergence import Thresholds, compute_edge, consensus_spread
+from pickem.edge.divergence import Thresholds, consensus_spread
 from pickem.edge.elo import EloConfig
-from pickem.edge.pipeline import apply_tiebreaks
+from pickem.edge.pipeline import decide_edges
 from pickem.models import (
     FROZEN_SOURCE,
     SUBMISSION_SOURCE,
@@ -151,7 +151,6 @@ def run_backtest(
     for key in sorted(by_week):
         week_games = by_week[key]
         league_by_game: dict[str, LeagueLine] = {}
-        edges = []
 
         for game in week_games:
             if game.home_score is None or game.away_score is None:
@@ -171,11 +170,18 @@ def run_backtest(
                 posted_at=max(line.captured_at for line in frozen_lines),
             )
             league_by_game[game.game_id] = league
-            edges.append(compute_edge(league, submission_by_game.get(game.game_id, []), thresholds))
-
-        # The report resolves coinflip and no-market games with the rating, so
-        # the backtest must too — otherwise it is not measuring what ships.
-        for edge in apply_tiebreaks(edges, week_games, history, elo_config):
+        week_submission = [
+            line for game in week_games for line in submission_by_game.get(game.game_id, [])
+        ]
+        decided = decide_edges(
+            list(league_by_game.values()),
+            week_submission,
+            week_games,
+            history,
+            thresholds,
+            elo_config,
+        )
+        for edge in decided:
             game = games_by_id[edge.game_id]
             result = grade_pick(
                 edge.side,

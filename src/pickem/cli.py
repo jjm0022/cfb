@@ -13,8 +13,8 @@ from pickem import config
 from pickem.backtest.calibration import DEFAULT_TOLERANCE, calibrate
 from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.backtest.snapshots import SnapshotKind, estimate_credits, plan_snapshots
-from pickem.edge.divergence import compute_edge, rank_edges
-from pickem.edge.pipeline import MissingGameError, apply_tiebreaks
+from pickem.edge.divergence import rank_edges
+from pickem.edge.pipeline import MissingGameError, decide_edges
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
 from pickem.ingest.cbs_html import parse_cbs_html
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
@@ -173,22 +173,21 @@ def report(
         league_lines = store.league_lines_for_week(sport, season, week)
         games = store.games_for_week(sport, season, week)
 
-        edges = []
-        newest: datetime | None = None
-        for line in league_lines:
-            market = store.market_lines_for(line.game_id)
-            for snapshot in market:
-                if newest is None or snapshot.captured_at > newest:
-                    newest = snapshot.captured_at
-            edges.append(compute_edge(line, market))
-
         # Games the market never repriced fall through to the rating, built
         # from every completed game already stored — prior seasons included,
         # without which every early-season rating is still the initial value.
+        market = [
+            snapshot
+            for league in league_lines
+            for snapshot in store.market_lines_for(league.game_id)
+        ]
+        newest = max((line.captured_at for line in market), default=None)
         history = store.games_before(sport, season, week)
-        untrained = not any(g.home_score is not None and g.away_score is not None for g in history)
+        untrained = not any(
+            game.home_score is not None and game.away_score is not None for game in history
+        )
         try:
-            edges = apply_tiebreaks(edges, games, history)
+            edges = decide_edges(league_lines, market, games, history)
         except MissingGameError as exc:
             typer.secho(f"cannot resolve a tiebreak: {exc}", fg="red", err=True)
             raise typer.Exit(code=1) from exc

@@ -58,7 +58,9 @@ def _tier(delta: float, thresholds: Thresholds) -> Tier:
     return Tier.COINFLIP
 
 
-def compute_edge(
+# Internal measurement stage. COINFLIP and NO_MARKET carry a temporary side
+# until pipeline.decide_edges resolves them. Callers must use decide_edges.
+def _compute_edge(
     league: LeagueLine,
     market: Sequence[MarketLine],
     thresholds: Thresholds | None = None,

@@ -4,7 +4,7 @@ Every module here is the shipped one and the database is a real DuckDB file.
 Only the HTTP transport is faked, so this exercises the seams that per-module
 tests with injected fakes structurally cannot see: whether the game ids CBS
 writes are the ones the odds feed joins on, whether a stored snapshot actually
-reaches `compute_edge`, and whether the rendered sheet names real matchups.
+reaches the final decision path, and whether the rendered sheet names real matchups.
 """
 
 from datetime import UTC, datetime, timedelta

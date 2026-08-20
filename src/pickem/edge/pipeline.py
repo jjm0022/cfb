@@ -8,11 +8,13 @@ this system exists to capture.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 from statistics import median
 
+from pickem.edge.divergence import Thresholds, _compute_edge
 from pickem.edge.elo import EloConfig, build_ratings, projected_margin, tiebreak_side
-from pickem.models import Edge, Game, MarketLine, Tier
+from pickem.models import Edge, Game, LeagueLine, MarketLine, Tier
 
 _TIEBREAK_TIERS = {Tier.COINFLIP, Tier.NO_MARKET}
 
@@ -21,7 +23,27 @@ class MissingGameError(LookupError):
     """A game needing a tiebreak has no matching Game record."""
 
 
-def apply_tiebreaks(
+def decide_edges(
+    league_lines: Sequence[LeagueLine],
+    market_lines: Sequence[MarketLine],
+    games: Sequence[Game],
+    history: Sequence[Game],
+    thresholds: Thresholds | None = None,
+    elo_config: EloConfig | None = None,
+) -> list[Edge]:
+    """Return final auditable picks; no placeholder side crosses this interface."""
+    market_by_game: dict[str, list[MarketLine]] = defaultdict(list)
+    for line in market_lines:
+        market_by_game[line.game_id].append(line)
+
+    measured = [
+        _compute_edge(league, market_by_game.get(league.game_id, []), thresholds)
+        for league in league_lines
+    ]
+    return _apply_tiebreaks(measured, games, history, elo_config)
+
+
+def _apply_tiebreaks(
     edges: Sequence[Edge],
     games: Sequence[Game],
     history: Sequence[Game],
@@ -39,7 +61,7 @@ def apply_tiebreaks(
 
         game = by_id.get(edge.game_id)
         if game is None:
-            # Falling through would ship compute_edge's placeholder HOME side as
+            # Falling through would ship the measurement stage's placeholder HOME side as
             # though it were a decision. These edges are exactly the ones with
             # no real signal, so a silent pass-through is the worst outcome.
             raise MissingGameError(
