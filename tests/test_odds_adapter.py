@@ -1,4 +1,6 @@
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -391,3 +393,61 @@ def test_live_and_historical_agree_on_game_ids_and_spreads():
     assert sorted(line.spread_home for line in live.lines) == sorted(
         line.spread_home for line in archived.lines
     )
+
+
+# --- the real archive response -----------------------------------------------
+
+REAL_SNAPSHOT = json.loads(
+    (Path(__file__).parent / "fixtures" / "odds_historical_nfl.json").read_text()
+)
+
+
+def test_a_real_archive_response_parses_end_to_end():
+    """Guards the envelope contract against a genuinely captured response.
+
+    Bought for 10 credits on 2026-08-19: the 2024-09-22T16:55Z NFL snapshot,
+    31 events across two weeks and ten books. Hand-built fixtures encode the
+    author's assumptions; this one does not.
+    """
+    kickoff = datetime(2024, 9, 22, 17, 2, tzinfo=UTC)
+    slate = {"nfl-2024-03-CHI-at-IND", "nfl-2024-03-NYG-at-CLE"}
+    result = client_returning(REAL_SNAPSHOT).fetch_historical_spreads(
+        NFL_KEY,
+        resolver=TeamResolver.default(),
+        sport=Sport.NFL,
+        season=2024,
+        week=3,
+        at=datetime(2024, 9, 22, 16, 55, tzinfo=UTC),
+        slate=slate,
+        window=(kickoff - timedelta(hours=1), kickoff + timedelta(hours=6)),
+        source=SUBMISSION_SOURCE,
+    )
+    assert {line.game_id for line in result.lines} == slate
+    assert {line.source for line in result.lines} == {SUBMISSION_SOURCE}
+    # Ten books quote these games; a parser that kept one would still "work".
+    assert len({line.book for line in result.lines}) > 5
+    # The envelope's own timestamp, five minutes before the requested instant.
+    assert {line.captured_at for line in result.lines} == {
+        datetime(2024, 9, 22, 16, 50, 38, tzinfo=UTC)
+    }
+    # Every other event in the payload is named, never silently dropped.
+    assert result.skipped
+
+
+def test_the_real_response_has_out_of_window_events_that_are_rejected():
+    """The archive is the same nationwide firehose as the live feed."""
+    kickoff = datetime(2024, 9, 22, 17, 2, tzinfo=UTC)
+    result = client_returning(REAL_SNAPSHOT).fetch_historical_spreads(
+        NFL_KEY,
+        resolver=TeamResolver.default(),
+        sport=Sport.NFL,
+        season=2024,
+        week=3,
+        at=datetime(2024, 9, 22, 16, 55, tzinfo=UTC),
+        slate={"nfl-2024-03-CHI-at-IND"},
+        window=(kickoff - timedelta(hours=1), kickoff + timedelta(hours=6)),
+        source=SUBMISSION_SOURCE,
+    )
+    # Week 4 games carry posted odds already and must never be stamped week 3.
+    assert any("outside" in row for row in result.skipped)
+    assert {line.game_id for line in result.lines} == {"nfl-2024-03-CHI-at-IND"}

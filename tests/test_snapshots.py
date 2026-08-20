@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from pickem.backtest.snapshots import (
+    _SUBMISSION_LEAD,
     ARCHIVE_START,
     SnapshotKind,
     estimate_credits,
@@ -61,7 +62,7 @@ def test_one_submission_snapshot_per_distinct_kickoff_slot():
     submissions = [r for r in plan if r.kind is SnapshotKind.SUBMISSION]
     # Three slots, not four games — one snapshot carries every game with odds.
     assert len(submissions) == 3
-    early = next(r for r in submissions if r.at == SUN_EARLY - timedelta(minutes=5))
+    early = next(r for r in submissions if r.at == SUN_EARLY - _SUBMISSION_LEAD)
     # A slot's slate holds only the games kicking at that slot, so a game can
     # never be graded against a snapshot taken after it started.
     assert early.slate == {"nfl-2024-03-BUF-at-MIA", "nfl-2024-03-NYJ-at-NE"}
@@ -127,3 +128,17 @@ def test_credit_estimate_is_ten_per_request():
 def test_empty_input_costs_nothing():
     assert plan_snapshots([]) == []
     assert estimate_credits([]) == 0
+
+
+def test_submission_lead_outruns_the_sources_disagreeing_about_kickoff():
+    """The Odds API and nflverse disagree about when a game starts.
+
+    Measured against a real archived snapshot, commence_time ran from 5 minutes
+    before to 2 minutes after the nflverse kickoff. The lead must clear that,
+    or the returned snapshot can carry in-play odds into a proxy that is meant
+    to predate the game entirely.
+    """
+    worst_disagreement = timedelta(minutes=5)
+    plan = plan_snapshots([game(3, SUN_EARLY, "BUF", "MIA")])
+    submission = next(r for r in plan if r.kind is SnapshotKind.SUBMISSION)
+    assert submission.at < SUN_EARLY - worst_disagreement

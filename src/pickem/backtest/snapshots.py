@@ -43,7 +43,16 @@ _ANCHOR_HOUR = 14
 # Far enough before kickoff to be a real snapshot, close enough to be the
 # submission-time market. The archive answers with the closest snapshot at or
 # earlier than the requested instant, so this can only ever resolve backwards.
-_SUBMISSION_LEAD = timedelta(minutes=5)
+#
+# Fifteen minutes, not five, because the two sources disagree about when a game
+# starts: measured against a real 2024-09-22 snapshot, the Odds API's
+# commence_time ran from 5 minutes BEFORE to 2 minutes after nflverse's
+# kickoff. A 5-minute lead would put the request on top of the real kickoff for
+# the earliest of those, and the returned snapshot could then carry in-play
+# odds into a proxy that is supposed to predate the game. The extra margin
+# costs almost nothing — a line barely moves in the last ten minutes — and it
+# buys back three times the worst disagreement observed.
+_SUBMISSION_LEAD = timedelta(minutes=15)
 
 # Padding on the kickoff window that guards every request. Wide enough to hold
 # a whole week's slate, narrow enough to exclude the neighbouring weeks.
