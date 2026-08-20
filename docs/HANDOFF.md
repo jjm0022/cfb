@@ -26,7 +26,7 @@ You have a working system with a real result. Nothing is half-finished and
 there is no branch to merge. Orient yourself in about two minutes:
 
 ```bash
-uv run pytest -q                              # expect 246 passed
+uv run pytest -q                              # expect 253 passed
 uv run pickem backtest --from 2020 --to 2025  # expect the result below
 uv run pickem --help                          # the whole surface, 9 commands
 ```
@@ -57,7 +57,7 @@ wrong and are recorded there with their reasons.
 
 - **Branch:** all work is on `master`, working tree clean. There is no remote
   configured, so `git log` is the only history and nothing is pushed anywhere.
-- **Tests:** 246 passing, `uv run pytest -q`. The suite is fully offline — HTTP
+- **Tests:** 253 passing, `uv run pytest -q`. The suite is fully offline — HTTP
   is injected via `httpx.MockTransport` and loaders are injected. Keep it that
   way; no test may touch the network.
 - **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`
@@ -114,12 +114,13 @@ src/pickem/ingest/cbs_html.py     parse_cbs_html — the saved CBS page. Reads t
                                   the DOM. Same ParseResult, plus real kickoff
                                   instants. Deduplicates: CBS emits every game
                                   in two blobs.
-src/pickem/edge/divergence.py     Thresholds, consensus_spread, compute_edge,
-                                  rank_edges. Pure; no I/O.
+src/pickem/edge/divergence.py     Internal divergence measurement plus
+                                  consensus and ranking helpers. Pure; no I/O.
 src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
                                   tiebreak_side. Pure; no I/O.
-src/pickem/edge/pipeline.py       The only public edge decision interface; every
-                                  returned Edge is a final pick.
+src/pickem/edge/pipeline.py       `decide_edges`, the only public edge-decision
+                                  interface; it returns final picks and resolves
+                                  only COINFLIP and NO_MARKET internally.
 src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
                                   `loader` is injected so tests stay offline.
                                   _kickoff combines gameday + gametime through
@@ -149,13 +150,14 @@ src/pickem/backtest/calibration.py
                                   its posted_at; bias and dispersion are
                                   reported separately. Pure; no I/O.
 src/pickem/backtest/runner.py     run_backtest replays the frozen and submission
-                                  proxies through compute_edge AND
-                                  apply_tiebreaks; both ends collapse through
-                                  consensus_spread. split_proxies classifies
+                                  proxies through decide_edges; both ends
+                                  collapse through consensus_spread.
+                                  split_proxies classifies
                                   stored lines by `source`. BacktestReport
                                   carries tier records, assumptions and skip
                                   reasons. Pure; no I/O.
-src/pickem/report/sheet.py        render_sheet ranks edges into auditable
+src/pickem/report/sheet.py        render_sheet consumes final picks from
+                                  decide_edges and ranks them into auditable
                                   markdown with named picks, both spreads,
                                   visible NO_MARKET rows, required provenance,
                                   and numeric or explicitly unknown data age.
@@ -311,10 +313,10 @@ ledger's structure makes sense.
 - **Every rendered pick sheet names its provenance and age.** Callers must pass
   `provenance`; absent market timing renders as `unknown/unavailable`, never as
   a missing status line.
-- **`Thresholds.strong` is a display parameter, not a tuning knob.**
-  `compute_edge` sets `side` from the sign of `delta` alone, and
-  `apply_tiebreaks` rewrites it only for COINFLIP and NO_MARKET — so a STRONG
-  and a LEAN edge produce the SAME pick. Moving the STRONG/LEAN boundary
+- **`Thresholds.strong` is a display parameter, not a tuning knob.** Internal
+  divergence measurement sets `side` from the sign of `delta` alone;
+  `decide_edges` resolves only COINFLIP and NO_MARKET — so a STRONG and a LEAN
+  edge produce the SAME pick. Moving the STRONG/LEAN boundary
   relabels games; it never changes one, and no backtest can tune it toward
   correct picks. Only `lean` moves games between the two deciders (divergence
   vs the Elo tiebreak). Verified 2026-08-19 across a 56-cell sweep: every cell
@@ -328,11 +330,11 @@ ledger's structure makes sense.
 - **Elo never overrides a real divergence signal.** It may resolve only
   `COINFLIP` and `NO_MARKET`; `STRONG` and `LEAN` edges pass through unchanged.
   An edge that needs a tiebreak but has no `Game` record raises
-  `MissingGameError` — it is never passed through carrying `compute_edge`'s
-  placeholder `side=HOME`.
-- **The backtest runs the pipeline that ships.** It applies the same
-  `apply_tiebreaks` the report does, with history that grows only after each
-  replayed week. If the two ever diverge again, the backtest stops being
+  `MissingGameError` — it is never passed through carrying internal
+  measurement's placeholder `side=HOME`.
+- **The backtest and live report run the pipeline that ships.** Both consume
+  `decide_edges`, with backtest history growing only after each replayed week.
+  If the two ever diverge again, the backtest stops being
   evidence about the thing being shipped.
 - **Both ends of the divergence collapse through `consensus_spread`.** A
   per-game dict is last-wins and would grade against whichever book sorted
@@ -384,7 +386,7 @@ permanently into the append-only `lines` table while the real week reported
   `UnknownTeamError`**, 5 rows skipped for null spreads — confirming the CFBD
   null-spread branch is the one that actually fires.
 - **The Odds API:** the real NCAAF feed replayed through `fetch_spreads` ->
-  `compute_edge` -> `render_sheet` with a season-opener window stored 53 market
+  `decide_edges` -> `render_sheet` with a season-opener window stored 53 market
   lines across 6 in-window games and reported all 105 skips by reason (103 out
   of window, 2 untracked FCS teams). Live CFB works end to end.
 - Both keys live in `.env` at the repo root (gitignored) and are read
