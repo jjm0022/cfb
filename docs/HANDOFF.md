@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-19, after the Odds API historical docs check
+**Last updated:** 2026-08-19, after the historical backfill and the first real backtest
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -37,8 +37,9 @@ allocation problem.
 - **Phase A is code-complete.** Tasks 1-15, amendments 9a/12a/13a/14a, the final
   whole-branch review and its fix wave, the scoped re-review and its fix, an
   end-to-end integration test, and the live CFB alias sweep are all done.
-- **What remains is not code.** See "Remaining work" below: a real CBS paste,
-  the opener backfill, and the Phase B decision.
+- **The historical backfill is done and the backtest has a real number.** See
+  "The phase-exit result" below. What remains is a real CBS paste and the
+  Phase B decision it informs.
 - **Do not re-run the SDD task loop.** Every task is committed; `git log` is the
   record.
 
@@ -249,25 +250,29 @@ permanently into the append-only `lines` table while the real week reported
 
 1. **Paste a real CBS block** through `ingest-cbs`, then `poll-odds`, then
    `report`, and read the sheet for anything that looks wrong. This is the last
-   unverified path — the parser has only ever seen fixtures.
-2. **Backfill the historical proxies.** Decided 2026-08-19: buy the Odds API
-   20K tier ($30/mo, cancel after) and source both the frozen-line and
-   submission-time proxies from its archive. NFL first (~7,560 credits), verify,
-   then decide on CFB. Plan and verified facts:
-   `docs/research/2026-08-19-odds-api-historical.md`. Not yet built — the
-   historical endpoint has a snapshot envelope `fetch_spreads` does not parse.
+   unverified path — the parser has only ever seen fixtures. It is also the
+   only way to test the assumption the whole backtest rests on: that CBS's
+   frozen number tracks an early-week market snapshot.
+2. **DONE (2026-08-19).** NFL 2020-2025 is backfilled from the Odds API
+   archive: 22,351 frozen-line and 24,237 submission-time rows over 1,693
+   games, 9,390 credits spent of 20,000. **CFB is still open** — it needs
+   `cfbd_source` kickoff times checked the way Task 1 checked nflverse's, and
+   ~4,500 credits. Decide after reading the NFL result below.
 3. **Make the Phase B decision** from the backtest's Wilson intervals.
 
 ## Known gaps
 
-- **Backtest data gap (spec §9), the big one.** Historical frozen CBS lines do
-  not exist — nobody recorded them, so the backtest proxies them. `pickem
-  backfill` loads nflverse closers only and says so, so `backtest` currently
-  grades nothing and names the reason for every game. **Closing this gap is the
-  active work — see `docs/research/2026-08-19-odds-api-historical.md`** for the
-  verified endpoint facts, the credit budget, and the decision to source BOTH
-  ends of the divergence from the Odds API archive rather than pairing an Odds
-  API opener against the nflverse closer.
+- **Backtest data gap (spec §9) — CLOSED for NFL, still open for CFB.**
+  Historical frozen CBS lines do not exist, so both ends are proxied from the
+  Odds API archive: an early-week snapshot and a per-kickoff pre-game snapshot,
+  same feed and same books, so measured divergence is line movement rather than
+  a difference between sources. See
+  `docs/research/2026-08-19-odds-api-historical.md` for the verified endpoint
+  facts and `docs/superpowers/plans/2026-08-19-odds-api-historical-backfill.md`
+  for how it was built. The nflverse closers stay as a cross-check, not an
+  input: they agree with the archive to 0.141 pts mean absolute difference,
+  100% within a point, which is what validates the joins and the sign
+  convention on real data.
 - **`predict_tiebreaker_total` is unwired, and it is not a loose wire.**
   `odds.py` requests `markets=spreads` only and never populates
   `MarketLine.total`, so wiring it today returns `None` for all live data. Only
@@ -294,11 +299,45 @@ permanently into the append-only `lines` table while the real week reported
   and an unknown abbreviation raises where it once skipped. The sweep proves
   that combination does not occur in 1999-2025.
 
-## Phase B decision (do not skip)
+## The phase-exit result (2026-08-19)
 
-Phase A is deliberately market-only. When `pickem backtest` runs, it reports a
-hit rate with Wilson confidence intervals. If divergence alone lands meaningfully
-above the noise floor, the Phase B modeling stack (opponent-adjusted EPA, injury,
-weather) may be unnecessary. If it lands near 50%, that was learned cheaply.
-~1,600 NFL games from 2020 is enough to detect a large effect and not enough to
-certify a small one — the intervals are there to keep the report honest.
+`pickem backtest --from 2020 --to 2025`, NFL, 1,663 graded games:
+
+```
+overall: 866-762-35 (53.2%, 95% CI 50.8%-55.6%)
+  strong     174-99-2    (63.7%, CI 57.9%-69.2%)
+  lean       244-206-12  (54.2%, CI 49.6%-58.8%)
+  coinflip   448-457-21  (49.5%, CI 46.3%-52.8%)
+```
+
+**Read the tiers, not the overall number.** The overall rate mixes every game
+including the ones with no signal, which is not how the sheet is played.
+
+- **STRONG (>=2.0 pts of divergence) is the finding.** 273 decided picks, 63.7%,
+  and the whole interval sits above 50%. Scoring is flat with no vig, so 50% is
+  the real bar, not a juice-adjusted breakeven.
+- **COINFLIP landing at 49.5% is the control that makes the rest credible.**
+  Those are games where divergence said nothing and the Elo tiebreak picked.
+  Sitting on 50% is evidence the measurement carries no systematic bias.
+- **The ordering is monotonic and was not fitted.** The 2.0/1.0 thresholds were
+  guesses made in Phase A before any data existed.
+- **Every season agrees.** STRONG by season: 60.7, 62.1, 62.5, 68.2, 65.6,
+  65.1. Six for six above 60%, so no single season carries it.
+
+**What this implies for Phase B:** divergence alone clears the noise floor by a
+wide margin in its top tier, which is the condition the spec set for Phase B
+being unnecessary. The modeling stack (opponent-adjusted EPA, injury, weather)
+is not obviously worth building. Prefer widening what is already working —
+CFB coverage, and tuning the STRONG threshold now that there is data to tune
+it on — over adding a model.
+
+**What the number does NOT establish.** The frozen line is proxied by a Tuesday
+market snapshot, not by a real CBS line, because historical CBS numbers were
+never recorded. If CBS's number sits systematically off the Tuesday market, the
+real edge differs from this one in a direction this backtest cannot see. That
+becomes checkable within weeks, once real pastes accumulate next to live
+`poll-odds` snapshots — and it is the single most valuable thing left to do.
+
+30 of 1,693 games are reported ungraded: no line was posted at their Tuesday
+anchor. They cluster in the 2020 weeks 5-6 and 2021 week 16 COVID
+postponements, where the game had no confirmed date to price.
