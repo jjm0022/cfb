@@ -1,7 +1,8 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-19, after the NFL archive backfill and the first real backtest
+**Last updated:** 2026-08-19, after the threshold-tuning null result and the
+CBS calibration instrument
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -25,9 +26,9 @@ You have a working system with a real result. Nothing is half-finished and
 there is no branch to merge. Orient yourself in about two minutes:
 
 ```bash
-uv run pytest -q                              # expect 220 passed
+uv run pytest -q                              # expect 231 passed
 uv run pickem backtest --from 2020 --to 2025  # expect the result below
-uv run pickem --help                          # the whole surface, 7 commands
+uv run pickem --help                          # the whole surface, 8 commands
 ```
 
 Then read "The phase-exit result" at the bottom of this file — it is the
@@ -47,14 +48,16 @@ wrong and are recorded there with their reasons.
    `docs/superpowers/plans/2026-08-19-odds-api-historical-backfill.md` — 6 tasks
 4. **Research:** `docs/research/2026-08-19-odds-api-historical.md` — verified
    Odds API archive facts, credit costs, and why both proxies share a source
-5. **Ledger:** `.superpowers/sdd/2026-08-11-pickem-edge-engine/progress.md` —
+5. **Research:** `docs/research/2026-08-19-threshold-tuning.md` — why the tier
+   thresholds are staying at 2.0/1.0, and why `strong` is not a tuning knob
+6. **Ledger:** `.superpowers/sdd/2026-08-11-pickem-edge-engine/progress.md` —
    Phase A only. Trust it and `git log` over memory.
 
 ## Current state
 
 - **Branch:** all work is on `master`, working tree clean. There is no remote
   configured, so `git log` is the only history and nothing is pushed anywhere.
-- **Tests:** 220 passing, `uv run pytest -q`. The suite is fully offline — HTTP
+- **Tests:** 231 passing, `uv run pytest -q`. The suite is fully offline — HTTP
   is injected via `httpx.MockTransport` and loaders are injected. Keep it that
   way; no test may touch the network.
 - **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`
@@ -140,6 +143,12 @@ src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
 src/pickem/backtest/snapshots.py  Pure planner: a stored schedule becomes the
                                   exact archive requests to make, plus their
                                   credit cost, before anything is spent.
+src/pickem/backtest/calibration.py
+                                  calibrate — the check on the substitution the
+                                  whole backtest rests on. Residual is the CBS
+                                  line minus the market consensus at or before
+                                  its posted_at; bias and dispersion are
+                                  reported separately. Pure; no I/O.
 src/pickem/backtest/runner.py     run_backtest replays the frozen and submission
                                   proxies through compute_edge AND
                                   apply_tiebreaks; both ends collapse through
@@ -160,7 +169,7 @@ src/pickem/cli.py                 Typer commands: ingest-cbs, poll-odds
                                   sync-results (--sport nfl|cfb), backfill,
                                   backfill-history (dry run by default,
                                   --execute to spend, --max-credits ceiling),
-                                  and backtest. Prints every source skip
+                                  backtest, and calibrate. Prints every source skip
                                   visibly; CBS ingest is atomic.
 ```
 
@@ -227,6 +236,12 @@ ledger's structure makes sense.
   the requested one.** The archive returns the closest snapshot at or earlier
   than `date`, so stamping the request misdates rows by up to ten minutes and
   makes a re-run append near-duplicates instead of being a no-op.
+- **The tier thresholds stay at 2.0/1.0** (2026-08-19). Tuning `lean` gains +9
+  correct picks in-sample and +1 out-of-sample against ~15 picks of paired
+  noise, and +8 of the in-sample +9 come from 2020 alone. Every walk-forward
+  fold picks `lean = 0.5`, but stability of a zero-magnitude effect is not
+  evidence. Do not re-run this sweep unless the tiebreak improves — see
+  `docs/research/2026-08-19-threshold-tuning.md`.
 - **Franchise renames are aliases, exactly like era-varying abbreviations.**
   "Washington Football Team" (2020-2021) was missing and silently dropped that
   team's games, because the odds feed reports unknown teams rather than
@@ -279,6 +294,14 @@ ledger's structure makes sense.
 - **Every rendered pick sheet names its provenance and age.** Callers must pass
   `provenance`; absent market timing renders as `unknown/unavailable`, never as
   a missing status line.
+- **`Thresholds.strong` is a display parameter, not a tuning knob.**
+  `compute_edge` sets `side` from the sign of `delta` alone, and
+  `apply_tiebreaks` rewrites it only for COINFLIP and NO_MARKET — so a STRONG
+  and a LEAN edge produce the SAME pick. Moving the STRONG/LEAN boundary
+  relabels games; it never changes one, and no backtest can tune it toward
+  correct picks. Only `lean` moves games between the two deciders (divergence
+  vs the Elo tiebreak). Verified 2026-08-19 across a 56-cell sweep: every cell
+  sharing a `lean` value had a byte-identical win/loss/push record.
 - **Elo never overrides a real divergence signal.** It may resolve only
   `COINFLIP` and `NO_MARKET`; `STRONG` and `LEAN` edges pass through unchanged.
   An edge that needs a tiebreak but has no `Game` record raises
@@ -366,28 +389,30 @@ permanently into the append-only `lines` table while the real week reported
 Ordered by value. Each names what blocks it.
 
 1. **Paste a real CBS block** through `ingest-cbs` -> `poll-odds` -> `report`
-   and read the sheet.
+   -> `calibrate` and read the sheet.
    *Blocked* — as of 2026-08-19 the user expected CBS lines in about two
    weeks, so early September 2026.
    This is the last unverified code path (the parser has only ever seen
    fixtures) **and** the only way to test the assumption the entire backtest
    rests on: that CBS's frozen number tracks an early-week market snapshot.
    Nothing else on this list matters as much.
-2. **Instrument that calibration before the paste arrives.** Nothing currently
-   compares a stored `league_lines` row against the archive snapshots for the
-   same game. Build it now and the first real paste measures the assumption
-   instead of merely exercising the parser. *Not blocked.*
-3. **Tune the tier thresholds.** 2.0/1.0 were guesses made before any data
-   existed. The real objective is total extra correct picks across the whole
-   sheet, not the purity of the STRONG tier — see the volume table below.
-   Must be done on held-out seasons; tuning on the same six that produced the
-   result would overfit it. *Not blocked, costs nothing.*
-4. **Decide on the CFB backfill** — ~4,500 credits of the 10,610 remaining.
+   **Operational requirement:** run `poll-odds` at or before the paste, in the
+   same early-week sitting. `calibrate` compares against market rows captured
+   at or before the league line's `posted_at`, so a week with no early poll is
+   permanently uncalibratable — the archive would have to be bought for it.
+2. **Improve the tiebreak on coinflip games.** This is now the largest
+   remaining prize and the only lever with real headroom: 926 of 1,663 graded
+   games (55.6%) are decided by Elo at ~49.5%, which is noise. A band-by-band
+   comparison (in the tuning research doc) shows divergence beating Elo in six
+   of seven magnitude bands, so if the tiebreak ever beat 50% materially the
+   `lean` threshold would want to rise and the sweep should be re-run. This is
+   the Phase B question — see the phase-exit reading below. *Not blocked.*
+3. **Decide on the CFB backfill** — ~4,500 credits of the 10,610 remaining.
    *Time-sensitive:* the 20K tier is a monthly subscription, and redoing this
    after cancelling costs another ~$30. Needs `cfbd_source` kickoff times
    checked the way `nflverse._kickoff` was (the same date-only bug is plausible
    there), and note the alias table is FBS-only by design.
-5. **Make the Phase B decision.** See the result below — the honest reading is
+4. **Make the Phase B decision.** See the result below — the honest reading is
    more nuanced than "Phase B is unnecessary."
 
 Season timing, for context: the CFB season opens in late August 2026 and NFL
@@ -416,7 +441,10 @@ so the free tier would cover weekly use if the subscription is cancelled.
   in the phase-exit result is NFL only.
 - **No CBS paste has ever been ingested** (`league_lines` is empty), so the
   live weekly path has been exercised only with fixtures and one live CFB odds
-  spot-check.
+  spot-check. `pickem calibrate` is built and tested but has never seen real
+  data: on this machine it correctly reports that nothing could be compared.
+  Its answer is the thing that would confirm or break the phase-exit result,
+  and it stays unanswered until the first paste.
 - **`predict_tiebreaker_total` is unwired, and it is not a loose wire.**
   `odds.py` requests `markets=spreads` only and never populates
   `MarketLine.total`, so wiring it today returns `None` for all live data. Only
@@ -498,9 +526,14 @@ So the honest framing is that Phase A succeeded at what it measured and left
 the bigger half of the problem untouched. Modeling (opponent-adjusted EPA,
 injury, weather) is best justified **as a replacement for the Elo tiebreak on
 coinflip games**, not as a competitor to divergence — which it should never
-override (see "Load-bearing conventions"). Tuning thresholds (item 3 above) is
-cheaper and should come first, since it may reallocate volume between the tiers
-and change this arithmetic.
+override (see "Load-bearing conventions").
+
+Threshold tuning was the cheaper thing to try first, and it has now been tried
+and returned nothing (2026-08-19): the boundary between the tiers cannot be
+moved to any profit, because `strong` changes no pick at all and `lean` only
+trades games between divergence and a tiebreak that is itself a coin flip.
+That closes the cheap option and leaves the tiebreak as the only lever with
+headroom.
 
 **What the number does NOT establish.** The frozen line is proxied by a Tuesday
 market snapshot, not by a real CBS line, because historical CBS numbers were
