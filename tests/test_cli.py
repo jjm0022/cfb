@@ -14,6 +14,7 @@ def test_help_lists_every_command():
         "report",
         "sync-results",
         "backfill",
+        "backfill-history",
         "backtest",
     ]:
         assert command in result.stdout
@@ -180,3 +181,174 @@ def test_poll_odds_refuses_to_run_before_the_week_is_ingested(tmp_path):
     )
     assert result.exit_code == 1
     assert "run ingest-cbs first" in result.output
+
+
+def _seed_two_slots(db):
+    """Two completed 2024 week-3 games at two kickoff slots.
+
+    That shape plans to exactly three snapshots — one frozen anchor plus one
+    per slot — so the credit arithmetic can be asserted without a season-sized
+    fixture.
+    """
+    from datetime import UTC, datetime
+
+    from pickem.models import Game, Sport, make_game_id
+    from pickem.store.db import Store
+
+    games = [
+        Game(
+            game_id=make_game_id(Sport.NFL, 2024, 3, "BUF", "MIA"),
+            sport=Sport.NFL,
+            season=2024,
+            week=3,
+            kickoff_utc=datetime(2024, 9, 22, 17, 0, tzinfo=UTC),
+            home_team_id="MIA",
+            away_team_id="BUF",
+            home_score=30,
+            away_score=20,
+        ),
+        Game(
+            game_id=make_game_id(Sport.NFL, 2024, 3, "DAL", "NYG"),
+            sport=Sport.NFL,
+            season=2024,
+            week=3,
+            kickoff_utc=datetime(2024, 9, 24, 0, 15, tzinfo=UTC),
+            home_team_id="NYG",
+            away_team_id="DAL",
+            home_score=17,
+            away_score=21,
+        ),
+    ]
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games(games)
+
+
+class _StubClient:
+    """An OddsClient that answers without a network or a credit."""
+
+    calls: list = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return None
+
+    def fetch_historical_spreads(self, *args, **kwargs):
+        from pickem.models import MarketLine, MarketLinesResult
+
+        _StubClient.calls.append(kwargs)
+        return MarketLinesResult(
+            lines=[
+                MarketLine(
+                    game_id=game_id,
+                    source=kwargs["source"],
+                    book="pinnacle",
+                    spread_home=-3.0,
+                    captured_at=kwargs["at"],
+                )
+                for game_id in sorted(kwargs["slate"])
+            ],
+            skipped=["some-other-game: not in the slate — not stored"],
+        )
+
+
+def test_backfill_history_dry_run_spends_nothing(tmp_path, monkeypatch):
+    db = tmp_path / "t.duckdb"
+    _seed_two_slots(db)
+
+    def explode(*args, **kwargs):
+        raise AssertionError("a dry run must never construct a client")
+
+    monkeypatch.setattr("pickem.cli.OddsClient", explode)
+    result = runner.invoke(
+        app, ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "dry run" in result.stdout.lower()
+    # One frozen anchor plus two kickoff slots, at 10 credits each.
+    assert "3 snapshots" in result.stdout
+    assert "30 credits" in result.stdout
+
+
+def test_backfill_history_refuses_to_exceed_the_credit_ceiling(tmp_path):
+    db = tmp_path / "t.duckdb"
+    _seed_two_slots(db)
+    result = runner.invoke(
+        app,
+        [
+            "backfill-history",
+            "--from",
+            "2024",
+            "--to",
+            "2024",
+            "--db",
+            str(db),
+            "--execute",
+            "--max-credits",
+            "1",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "exceeds" in result.output.lower()
+
+
+def test_backfill_history_without_stored_games_says_what_to_run_first(tmp_path):
+    from pickem.store.db import Store
+
+    db = tmp_path / "empty.duckdb"
+    with Store(db) as store:
+        store.init_schema()
+    result = runner.invoke(
+        app, ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db)]
+    )
+    assert result.exit_code == 1
+    assert "backfill" in result.output.lower()
+
+
+def test_backfill_history_writes_both_proxies_and_reports_skips(tmp_path, monkeypatch):
+    _StubClient.calls = []
+    db = tmp_path / "t.duckdb"
+    _seed_two_slots(db)
+    monkeypatch.setattr("pickem.cli.OddsClient", _StubClient)
+    monkeypatch.setattr("pickem.config.odds_api_key", lambda: "test-key")
+    result = runner.invoke(
+        app,
+        ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db), "--execute"],
+    )
+    assert result.exit_code == 0, result.output
+    # Nothing a source could not give us is dropped in silence.
+    assert "not in the slate" in result.stdout
+
+    sources = {call["source"] for call in _StubClient.calls}
+    assert sources == {"oddsapi:frozen", "oddsapi:submit"}
+
+    from pickem.store.db import Store
+
+    with Store(db) as store:
+        stored = store.market_lines_for("nfl-2024-03-BUF-at-MIA")
+    assert {line.source for line in stored} == {"oddsapi:frozen", "oddsapi:submit"}
+
+
+def test_backfill_history_stops_on_quota_exhaustion(tmp_path, monkeypatch):
+    from pickem.ingest.odds import QuotaExhausted
+
+    class _Broke(_StubClient):
+        def fetch_historical_spreads(self, *args, **kwargs):
+            raise QuotaExhausted("odds api returned 401")
+
+    db = tmp_path / "t.duckdb"
+    _seed_two_slots(db)
+    monkeypatch.setattr("pickem.cli.OddsClient", _Broke)
+    monkeypatch.setattr("pickem.config.odds_api_key", lambda: "test-key")
+    result = runner.invoke(
+        app,
+        ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db), "--execute"],
+    )
+    # Stopping loudly beats half a backfill nobody knows is half.
+    assert result.exit_code == 1
+    assert "stopped at snapshot 1/3" in result.output
