@@ -45,8 +45,8 @@ def test_every_game_is_extracted_once_despite_the_duplicated_payload(resolver):
     """
     result = parse(resolver=resolver)
 
-    assert len(result.lines) == 3
-    assert len(set(line.game_id for line in result.lines)) == 3
+    assert len(result.games) == 3
+    assert len({parsed.game.game_id for parsed in result.games}) == 3
 
 
 def test_a_home_favourite_keeps_its_negative_spread(resolver):
@@ -57,9 +57,9 @@ def test_a_home_favourite_keeps_its_negative_spread(resolver):
     Alabama -28.5 over East Carolina.
     """
     result = parse(resolver=resolver)
-    by_id = {line.game_id: line for line in result.lines}
+    by_id = {parsed.game.game_id: parsed for parsed in result.games}
 
-    assert by_id["cfb-2026-01-ECU-at-BAMA"].spread_home == -28.5
+    assert by_id["cfb-2026-01-ECU-at-BAMA"].league_line.spread_home == -28.5
 
 
 def test_an_away_favourite_keeps_its_positive_spread(resolver):
@@ -70,12 +70,12 @@ def test_an_away_favourite_keeps_its_positive_spread(resolver):
     slate and be wrong only here.
     """
     result = parse(resolver=resolver)
-    by_id = {line.game_id: line for line in result.lines}
+    by_id = {parsed.game.game_id: parsed for parsed in result.games}
 
-    assert by_id["cfb-2026-01-OKST-at-TLSA"].spread_home == 14.5
+    assert by_id["cfb-2026-01-OKST-at-TLSA"].league_line.spread_home == 14.5
 
 
-def test_kickoffs_are_real_instants_not_midnight(resolver):
+def test_html_result_keeps_real_kickoff_with_its_game(resolver):
     """Catches a date-only kickoff, the bug that already bit nflverse._kickoff.
 
     CBS ships epoch milliseconds, so there is no excuse for a placeholder here.
@@ -83,7 +83,10 @@ def test_kickoffs_are_real_instants_not_midnight(resolver):
     """
     result = parse(resolver=resolver)
 
-    assert result.kickoffs["cfb-2026-01-ECU-at-BAMA"] == datetime(2026, 9, 5, 16, 0, tzinfo=UTC)
+    by_id = {parsed.game.game_id: parsed for parsed in result.games}
+    parsed = by_id["cfb-2026-01-ECU-at-BAMA"]
+    assert parsed.game.kickoff_utc == datetime(2026, 9, 5, 16, 0, tzinfo=UTC)
+    assert parsed.league_line.game_id == parsed.game.game_id
 
 
 def test_an_unknown_school_aborts_the_whole_page(resolver):

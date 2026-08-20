@@ -18,8 +18,8 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from pickem.ingest.cbs import CbsParseError, ParseResult
-from pickem.models import LeagueLine, Sport, make_game_id
+from pickem.ingest.cbs import CbsParseError, ParsedCbsGame, ParseResult, _parsed_game
+from pickem.models import Sport
 from pickem.resolve.resolver import TeamResolver
 
 _MARKER = "ApolloSSRDataTransport"
@@ -133,9 +133,7 @@ def parse_cbs_html(
             "finished loading, or CBS may have stopped server-rendering it"
         )
 
-    lines: list[LeagueLine] = []
-    matchups: list[tuple[str, str]] = []
-    kickoffs: dict[str, datetime] = {}
+    games: list[ParsedCbsGame] = []
     skipped: list[str] = []
     seen: set[str] = set()
 
@@ -165,26 +163,25 @@ def parse_cbs_html(
         # which is this codebase's convention. No flip. Pinned by a test.
         away_id = resolver.resolve(away_name, sport)
         home_id = resolver.resolve(home_name, sport)
-        game_id = make_game_id(sport, season, week, away_id, home_id)
-
-        lines.append(
-            LeagueLine(
-                game_id=game_id,
-                season=season,
-                week=week,
-                spread_home=float(spread),
-                posted_at=posted_at,
-            )
-        )
-        matchups.append((away_id, home_id))
-
+        kickoff_utc = None
         starts_at = event.get("startsAt")
         if isinstance(starts_at, int | float) and not isinstance(starts_at, bool):
-            # Epoch milliseconds. A real instant, so nothing downstream has to
-            # settle for a midnight placeholder.
-            kickoffs[game_id] = datetime.fromtimestamp(starts_at / 1000, tz=UTC)
+            kickoff_utc = datetime.fromtimestamp(starts_at / 1000, tz=UTC)
 
-    if not lines:
+        games.append(
+            _parsed_game(
+                sport=sport,
+                season=season,
+                week=week,
+                away_team_id=away_id,
+                home_team_id=home_id,
+                spread_home=float(spread),
+                posted_at=posted_at,
+                kickoff_utc=kickoff_utc,
+            )
+        )
+
+    if not games:
         raise CbsParseError("the CBS payload was found but carried no priced games")
 
-    return ParseResult(lines=lines, matchups=matchups, kickoffs=kickoffs, skipped=skipped)
+    return ParseResult(games=games, skipped=skipped)

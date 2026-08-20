@@ -20,7 +20,7 @@ from pickem.ingest.cbs_html import parse_cbs_html
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import CFB_KEY, NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
-from pickem.models import FROZEN_SOURCE, SUBMISSION_SOURCE, Game, Sport, make_game_id
+from pickem.models import FROZEN_SOURCE, SUBMISSION_SOURCE, Game, Sport
 from pickem.report.sheet import render_sheet
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
@@ -70,33 +70,19 @@ def ingest_cbs(
         typer.secho(f"nothing parsed from the paste: {exc}", fg="red", err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"parsed {len(parsed.lines)} games for {sport.value} {season} week {week}")
+    typer.echo(f"parsed {len(parsed.games)} games for {sport.value} {season} week {week}")
     for skipped in parsed.skipped:
         typer.secho(f"  skipped: {skipped!r}", fg="yellow")
     if parsed.skipped:
         raise typer.Exit(code=1)
 
     store = _store(db)
-    games = [
-        Game(
-            game_id=make_game_id(sport, season, week, away, home),
-            sport=sport,
-            season=season,
-            week=week,
-            # A saved page carries the real instant; the pasted block does not,
-            # and `now` stays the documented placeholder for that path.
-            kickoff_utc=parsed.kickoffs.get(make_game_id(sport, season, week, away, home), now),
-            home_team_id=home,
-            away_team_id=away,
-        )
-        for away, home in parsed.matchups
-    ]
     with store:
         # Insert-only: the paste carries no scores, so it must never overwrite
         # what sync-results already established.
-        store.insert_games_if_absent(games)
-        store.upsert_league_lines(parsed.lines)
-        typer.echo(f"ingested {len(parsed.lines)} games for {sport.value} {season} week {week}")
+        store.insert_games_if_absent([parsed_game.game for parsed_game in parsed.games])
+        store.upsert_league_lines([parsed_game.league_line for parsed_game in parsed.games])
+        typer.echo(f"ingested {len(parsed.games)} games for {sport.value} {season} week {week}")
 
 
 @app.command("poll-odds")

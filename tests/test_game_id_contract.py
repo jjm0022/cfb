@@ -90,7 +90,7 @@ def test_cbs_nflverse_and_the_odds_feed_agree_on_one_id():
     )
 
     produced = {
-        cbs.lines[0].game_id,
+        cbs.games[0].league_line.game_id,
         games[0].game_id,
         closers.lines[0].game_id,
         odds.lines[0].game_id,

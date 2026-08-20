@@ -12,7 +12,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from pickem.models import LeagueLine, Sport, make_game_id
+from pickem.models import Game, LeagueLine, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver
 
 # "<away> [spread] at <home> [spread]" — the number may sit on either team.
@@ -27,13 +27,46 @@ class CbsParseError(ValueError):
     """The block contained no parsable games at all."""
 
 
+class ParsedCbsGame(BaseModel):
+    game: Game
+    league_line: LeagueLine
+
+
 class ParseResult(BaseModel):
-    lines: list[LeagueLine]
-    matchups: list[tuple[str, str]]
-    # Real kickoff instants, keyed by game id, when the source carries them.
-    # The pasted text block does not; a saved page does.
-    kickoffs: dict[str, datetime] = {}
+    games: list[ParsedCbsGame]
     skipped: list[str]
+
+
+def _parsed_game(
+    *,
+    sport: Sport,
+    season: int,
+    week: int,
+    away_team_id: str,
+    home_team_id: str,
+    spread_home: float,
+    posted_at: datetime,
+    kickoff_utc: datetime | None = None,
+) -> ParsedCbsGame:
+    game_id = make_game_id(sport, season, week, away_team_id, home_team_id)
+    return ParsedCbsGame(
+        game=Game(
+            game_id=game_id,
+            sport=sport,
+            season=season,
+            week=week,
+            kickoff_utc=kickoff_utc or posted_at,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+        ),
+        league_line=LeagueLine(
+            game_id=game_id,
+            season=season,
+            week=week,
+            spread_home=spread_home,
+            posted_at=posted_at,
+        ),
+    )
 
 
 def _to_spread(token: str | None) -> float | None:
@@ -53,8 +86,7 @@ def parse_cbs_block(
     week: int,
     posted_at: datetime,
 ) -> ParseResult:
-    lines: list[LeagueLine] = []
-    matchups: list[tuple[str, str]] = []
+    games: list[ParsedCbsGame] = []
     skipped: list[str] = []
 
     for raw in text.splitlines():
@@ -82,18 +114,19 @@ def parse_cbs_block(
         away_id = resolver.resolve(match.group("away"), sport)
         home_id = resolver.resolve(match.group("home"), sport)
 
-        lines.append(
-            LeagueLine(
-                game_id=make_game_id(sport, season, week, away_id, home_id),
+        games.append(
+            _parsed_game(
+                sport=sport,
                 season=season,
                 week=week,
+                away_team_id=away_id,
+                home_team_id=home_id,
                 spread_home=spread_home,
                 posted_at=posted_at,
             )
         )
-        matchups.append((away_id, home_id))
 
-    if not lines:
+    if not games:
         raise CbsParseError("no games parsed from the pasted block")
 
-    return ParseResult(lines=lines, matchups=matchups, skipped=skipped)
+    return ParseResult(games=games, skipped=skipped)
