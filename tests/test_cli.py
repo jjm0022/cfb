@@ -1,6 +1,7 @@
 from typer.testing import CliRunner
 
 from pickem.cli import app
+from pickem.models import Sport
 
 runner = CliRunner()
 
@@ -330,7 +331,8 @@ def test_backfill_history_writes_both_proxies_and_reports_skips(tmp_path, monkey
     from pickem.store.db import Store
 
     with Store(db) as store:
-        stored = store.market_lines_for("nfl-2024-03-BUF-at-MIA")
+        dataset = store.load_week(Sport.NFL, 2024, 3)
+        stored = [line for line in dataset.market_lines if line.game_id == "nfl-2024-03-BUF-at-MIA"]
     assert {line.source for line in stored} == {"oddsapi:frozen", "oddsapi:submit"}
 
 

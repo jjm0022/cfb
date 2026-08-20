@@ -145,8 +145,9 @@ def test_the_cli_stores_the_page_with_its_real_kickoffs(tmp_path):
 
     assert result.exit_code == 0, result.output
     with Store(db) as store:
-        stored = {g.game_id: g for g in store.games_for_week(Sport.CFB, 2026, 1)}
-        lines = store.league_lines_for_week(Sport.CFB, 2026, 1)
+        dataset = store.load_week(Sport.CFB, 2026, 1)
+        stored = {g.game_id: g for g in dataset.games}
+        lines = dataset.league_lines
 
     assert len(lines) == 3
     assert stored["cfb-2026-01-ECU-at-BAMA"].kickoff_utc == datetime(2026, 9, 5, 16, 0, tzinfo=UTC)

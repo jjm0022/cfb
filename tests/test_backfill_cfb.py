@@ -67,7 +67,7 @@ def test_final_scores_land_so_the_rating_has_history(fake_cfbd, tmp_path):
     )
 
     with Store(db) as store:
-        games = store.games_for_week(Sport.CFB, 2021, 1)
+        games = store.load_week(Sport.CFB, 2021, 1).games
 
     assert len(games) == 1
     assert (games[0].home_score, games[0].away_score) == (31, 17)

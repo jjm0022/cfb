@@ -152,40 +152,6 @@ class Store:
         # INSERT OR IGNORE, never REPLACE: an existing snapshot is history.
         self._executemany("INSERT OR IGNORE INTO lines VALUES (?, ?, ?, ?, ?, ?)", rows)
 
-    def market_lines_for(self, game_id: str, before: datetime | None = None) -> list[MarketLine]:
-        sql = (
-            "SELECT game_id, source, book, spread_home, total, captured_at "
-            "FROM lines WHERE game_id = ?"
-        )
-        params: list[object] = [game_id]
-        if before is not None:
-            sql += " AND captured_at < ?"
-            params.append(before)
-        rows = self._con.execute(sql, params).fetchall()
-        return [_market_line_from_row(row) for row in rows]
-
-    def league_lines_for_week(self, sport: Sport, season: int, week: int) -> list[LeagueLine]:
-        rows = self._con.execute(
-            """
-            SELECT l.game_id, l.season, l.week, l.spread_home, l.posted_at
-            FROM league_lines l JOIN games g USING (game_id)
-            WHERE g.sport = ? AND l.season = ? AND l.week = ?
-            """,
-            [sport.value, season, week],
-        ).fetchall()
-        return [_league_line_from_row(row) for row in rows]
-
-    def games_for_week(self, sport: Sport, season: int, week: int) -> list[Game]:
-        rows = self._con.execute(
-            """
-            SELECT game_id, sport, season, week, kickoff_utc,
-                   home_team_id, away_team_id, home_score, away_score
-            FROM games WHERE sport = ? AND season = ? AND week = ?
-            """,
-            [sport.value, season, week],
-        ).fetchall()
-        return [_game_from_row(row) for row in rows]
-
     def games_before(self, sport: Sport, season: int, week: int) -> list[Game]:
         """Every game already played before this week, including prior seasons.
 

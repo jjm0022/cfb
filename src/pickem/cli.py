@@ -102,7 +102,8 @@ def poll_odds(
         # The feed returns events across several weeks. Only the games already
         # ingested for this week may be stored, or the append-only lines table
         # takes on rows stamped with the wrong week forever.
-        slate = [line.game_id for line in store.league_lines_for_week(sport, season, week)]
+        dataset = store.load_week(sport, season, week)
+        slate = [line.game_id for line in dataset.league_lines]
         if not slate:
             typer.secho(
                 f"no {sport.value} {season} week {week} games in the store; run ingest-cbs first",
@@ -156,17 +157,14 @@ def report(
     """Render the ranked pick sheet."""
     with _store(db) as store:
         now = datetime.now(tz=UTC)
-        league_lines = store.league_lines_for_week(sport, season, week)
-        games = store.games_for_week(sport, season, week)
+        dataset = store.load_week(sport, season, week)
+        league_lines = dataset.league_lines
+        games = dataset.games
 
         # Games the market never repriced fall through to the rating, built
         # from every completed game already stored — prior seasons included,
         # without which every early-season rating is still the initial value.
-        market = [
-            snapshot
-            for league in league_lines
-            for snapshot in store.market_lines_for(league.game_id)
-        ]
+        market = dataset.market_lines
         newest = max((line.captured_at for line in market), default=None)
         history = store.games_before(sport, season, week)
         untrained = not any(
@@ -318,10 +316,8 @@ def backfill_history(
     forever, and credits are not refundable.
     """
     with _store(db) as store:
-        games: list[Game] = []
-        for season in range(start, end + 1):
-            for week in range(1, 23):
-                games.extend(store.games_for_week(Sport.NFL, season, week))
+        dataset = store.load_seasons(Sport.NFL, start, end)
+        games = dataset.games
         if not games:
             typer.secho(
                 f"no NFL games stored for {start}-{end}; run `pickem backfill` first",
@@ -390,13 +386,9 @@ def backtest(
 ) -> None:
     """Replay history through the live edge code."""
     with _store(db) as store:
-        games: list[Game] = []
-        for season in range(start, end + 1):
-            for week in range(1, 23):
-                games.extend(store.games_for_week(Sport.NFL, season, week))
-
-        stored = [line for game in games for line in store.market_lines_for(game.game_id)]
-        frozen, submission, unclassified = split_proxies(stored)
+        dataset = store.load_seasons(Sport.NFL, start, end)
+        games = dataset.games
+        frozen, submission, unclassified = split_proxies(dataset.market_lines)
         result = run_backtest(games, frozen, submission)
         typer.echo(
             f"overall: {result.overall.wins}-{result.overall.losses}-{result.overall.pushes} "
@@ -436,14 +428,10 @@ def calibrate_cmd(
     This is the check on that substitution.
     """
     with _store(db) as store:
-        league_lines = []
-        for week in range(from_week, to_week + 1):
-            league_lines.extend(store.league_lines_for_week(sport, season, week))
-
-        market = [line for lg in league_lines for line in store.market_lines_for(lg.game_id)]
+        dataset = store.load_weeks(sport, season, from_week, to_week)
         result = calibrate(
-            league_lines,
-            market,
+            dataset.league_lines,
+            dataset.market_lines,
             source=source,
             tolerance=timedelta(minutes=tolerance_minutes),
         )

@@ -119,11 +119,8 @@ def test_paste_to_pick_sheet(tmp_path, fake_odds):
     assert "strong" in sheet
 
     with Store(db) as store:
-        stored = {
-            line.game_id
-            for game in store.games_for_week(Sport.NFL, 2025, 3)
-            for line in store.market_lines_for(game.game_id)
-        }
+        dataset = store.load_week(Sport.NFL, 2025, 3)
+        stored = {line.game_id for line in dataset.market_lines}
         assert stored == {"nfl-2025-03-BUF-at-MIA", "nfl-2025-03-DAL-at-NYJ"}
         assert not any("CHI" in gid or "GB" in gid for gid in stored)
 
@@ -145,7 +142,8 @@ def test_a_second_poll_appends_history_rather_than_overwriting(tmp_path, fake_od
     # Line movement is the signal: a re-poll at a new instant is history, not an
     # update. Identical (game, source, book, captured_at) tuples still collapse.
     with Store(db) as store:
-        lines = store.market_lines_for("nfl-2025-03-BUF-at-MIA")
+        dataset = store.load_week(Sport.NFL, 2025, 3)
+        lines = [line for line in dataset.market_lines if line.game_id == "nfl-2025-03-BUF-at-MIA"]
     assert len(lines) >= 2
     assert len({line.captured_at for line in lines}) >= 1
 
@@ -161,13 +159,13 @@ def test_reingesting_the_paste_does_not_destroy_synced_scores(tmp_path, fake_odd
     from pickem.models import Game
 
     with Store(db) as store:
-        game = store.games_for_week(Sport.NFL, 2025, 3)[0]
+        game = store.load_week(Sport.NFL, 2025, 3).games[0]
         store.upsert_games([game.model_copy(update={"home_score": 24, "away_score": 17})])
 
     _run("ingest-cbs", "--file", str(paste), *week)
 
     with Store(db) as store:
-        after = {g.game_id: g for g in store.games_for_week(Sport.NFL, 2025, 3)}
+        after = {g.game_id: g for g in store.load_week(Sport.NFL, 2025, 3).games}
     assert (after[game.game_id].home_score, after[game.game_id].away_score) == (24, 17)
     assert isinstance(after[game.game_id], Game)
 
