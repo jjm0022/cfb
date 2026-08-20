@@ -3,7 +3,14 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from pickem.ingest.odds import NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
+from pickem.ingest.odds import (
+    FROZEN_SOURCE,
+    NFL_KEY,
+    SUBMISSION_SOURCE,
+    OddsApiError,
+    OddsClient,
+    QuotaExhausted,
+)
 from pickem.models import Sport
 from pickem.resolve.resolver import TeamResolver
 
@@ -279,3 +286,115 @@ def test_a_team_we_do_not_track_is_reported_not_raised():
     assert {line.game_id for line in result.lines} == {"nfl-2025-03-BUF-at-MIA"}
     assert any("not a team we track" in row for row in result.skipped)
     assert any("Towson" in row for row in result.skipped)
+
+
+# --- historical archive ------------------------------------------------------
+
+SNAPSHOT_AT = datetime(2025, 9, 21, 16, 55, tzinfo=UTC)
+SNAPSHOT_TAKEN = datetime(2025, 9, 21, 16, 50, tzinfo=UTC)
+
+ENVELOPE = {
+    "timestamp": "2025-09-21T16:50:00Z",
+    "previous_timestamp": "2025-09-21T16:40:00Z",
+    "next_timestamp": "2025-09-21T17:00:00Z",
+    "data": PAYLOAD,
+}
+
+
+def historical(client, slate=SLATE, window=WINDOW, source=SUBMISSION_SOURCE):
+    return client.fetch_historical_spreads(
+        NFL_KEY,
+        resolver=TeamResolver.default(),
+        sport=Sport.NFL,
+        season=2025,
+        week=3,
+        at=SNAPSHOT_AT,
+        slate=slate,
+        window=window,
+        source=source,
+    )
+
+
+def test_historical_unwraps_the_snapshot_envelope():
+    result = historical(client_returning(ENVELOPE))
+    assert len(result.lines) == 2
+    assert {line.book for line in result.lines} == {"pinnacle", "draftkings"}
+
+
+def test_captured_at_is_the_snapshot_timestamp_not_the_requested_one():
+    result = historical(client_returning(ENVELOPE))
+    # The archive answers with the closest snapshot at or earlier. Storing the
+    # requested instant would misdate the row by up to ten minutes and make a
+    # re-run append near-duplicates to an append-only table.
+    assert {line.captured_at for line in result.lines} == {SNAPSHOT_TAKEN}
+
+
+def test_source_labels_which_proxy_a_row_is():
+    frozen = historical(client_returning(ENVELOPE), source=FROZEN_SOURCE)
+    assert {line.source for line in frozen.lines} == {FROZEN_SOURCE}
+    submission = historical(client_returning(ENVELOPE), source=SUBMISSION_SOURCE)
+    assert {line.source for line in submission.lines} == {SUBMISSION_SOURCE}
+
+
+def test_historical_does_not_flip_the_home_point():
+    result = historical(client_returning(ENVELOPE))
+    assert sorted(line.spread_home for line in result.lines) == [-6.5, -6.0]
+
+
+def test_historical_applies_the_slate_guard():
+    result = historical(client_returning(ENVELOPE), slate={"nfl-2025-03-XXX-at-YYY"})
+    assert result.lines == []
+    assert any("slate" in row for row in result.skipped)
+
+
+def test_historical_applies_the_window_guard():
+    far = (SNAPSHOT_AT + timedelta(days=30), SNAPSHOT_AT + timedelta(days=37))
+    result = historical(client_returning(ENVELOPE), window=far)
+    assert result.lines == []
+    assert any("outside" in row for row in result.skipped)
+
+
+def test_an_empty_snapshot_is_not_an_error():
+    result = historical(client_returning({"timestamp": "2025-09-21T16:50:00Z", "data": []}))
+    assert result.lines == []
+    assert result.skipped == []
+
+
+def test_an_unreadable_snapshot_timestamp_raises_rather_than_guessing():
+    # Guessing would write a misdated row into an append-only table.
+    with pytest.raises(OddsApiError, match="timestamp"):
+        historical(client_returning({"timestamp": "not-a-time", "data": PAYLOAD}))
+
+
+def test_a_missing_data_key_is_treated_as_an_empty_snapshot():
+    result = historical(client_returning({"timestamp": "2025-09-21T16:50:00Z"}))
+    assert result.lines == []
+
+
+def test_historical_quota_exhaustion_is_distinct():
+    with pytest.raises(QuotaExhausted):
+        historical(client_returning({"message": "out of credits"}, status=401))
+
+
+def test_historical_requests_the_archive_path_with_a_date():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=ENVELOPE)
+
+    client = OddsClient("key", transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    historical(client)
+    assert "/v4/historical/sports/americanfootball_nfl/odds" in seen["url"]
+    assert "date=2025-09-21T16%3A55%3A00Z" in seen["url"]
+
+
+def test_live_and_historical_agree_on_game_ids_and_spreads():
+    # The two paths share one parser on purpose. If they ever disagreed, the
+    # backtest would stop being evidence about the code that ships.
+    live = fetch(client_returning(PAYLOAD))
+    archived = historical(client_returning(ENVELOPE))
+    assert {line.game_id for line in live.lines} == {line.game_id for line in archived.lines}
+    assert sorted(line.spread_home for line in live.lines) == sorted(
+        line.spread_home for line in archived.lines
+    )

@@ -9,8 +9,14 @@ silently dropped: `fetch_spreads` returns a `MarketLinesResult` and records a
 one-liner in `skipped` naming the game and book, mirroring
 `ingest.cbs.ParseResult`.
 
+`fetch_spreads` reads the live feed and `fetch_historical_spreads` reads the
+archive, which wraps its events in a snapshot envelope. Everything beneath that
+— both guards, resolution, per-book extraction, skip reporting — is shared in
+`_parse_events`. If the two paths ever parsed differently, the backtest would
+stop being evidence about the code that ships.
+
 The endpoint returns every event with posted odds, which spans more than one
-week. `fetch_spreads` therefore takes two independent guards, and needs both:
+week. Both methods therefore take two independent guards, and need both:
 
 * a kickoff `window`, applied to each event's `commence_time` BEFORE the team
   names are resolved. Resolving first would abort the whole poll on the first
@@ -43,6 +49,14 @@ CFB_KEY = "americanfootball_ncaaf"
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = 0.5
 
+# `source` says which role a stored row plays; `book` keeps the real bookmaker
+# key either way, so per-book detail survives and `consensus_spread` still
+# works. The backtest classifies its two proxies on these, which is what keeps
+# an in-season poll (LIVE_SOURCE) from ever being graded as one.
+LIVE_SOURCE = "oddsapi"
+FROZEN_SOURCE = "oddsapi:frozen"
+SUBMISSION_SOURCE = "oddsapi:submit"
+
 
 def _api_time(value: datetime) -> str:
     """The Odds API wants second-precision ISO8601 with a literal Z."""
@@ -57,6 +71,105 @@ def _commence_time(value: object) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _parse_events(
+    events: list[dict],
+    *,
+    resolver: TeamResolver,
+    sport: Sport,
+    season: int,
+    week: int,
+    slate: Collection[str],
+    window: tuple[datetime, datetime],
+    captured_at: datetime,
+    source: str,
+) -> MarketLinesResult:
+    """Both guards, team resolution and per-book extraction, in one place.
+
+    Shared by the live and historical paths deliberately. If the two ever
+    parsed differently, the backtest would stop being evidence about the code
+    that ships.
+    """
+    window_start, window_end = window
+    wanted = set(slate)
+    lines: list[MarketLine] = []
+    skipped: list[str] = []
+    for event in events:
+        home_name = event["home_team"]
+        away_name = event["away_team"]
+
+        # Before resolution, deliberately. The NCAAF feed covers the whole
+        # country while aliases.yaml covers the schools we actually pick, so
+        # resolving first would abort the poll on a school we never wanted.
+        kickoff = _commence_time(event.get("commence_time"))
+        if kickoff is None:
+            skipped.append(
+                f"{away_name} at {home_name}: unreadable commence_time "
+                f"{event.get('commence_time')!r} — not stored"
+            )
+            continue
+        if not window_start <= kickoff <= window_end:
+            skipped.append(
+                f"{away_name} at {home_name}: kickoff {kickoff.isoformat()} is outside "
+                f"the {sport.value} {season} week {week} window — not stored"
+            )
+            continue
+
+        # A name we cannot map is REPORTED here, not raised. This feed is a
+        # firehose: its NCAAF coverage includes every FCS matchup with a
+        # posted line, none of which this system picks, so an unknown name
+        # is expected rather than exceptional. It cannot be in the slate
+        # either — slate ids are built from names that already resolved.
+        # The CBS paste keeps raising, because there every line IS a game we
+        # must pick. Either way nothing is dropped in silence: poll-odds
+        # prints these, and a game left without a market shows as NO_MARKET.
+        try:
+            home = resolver.resolve(home_name, sport)
+            away = resolver.resolve(away_name, sport)
+        except UnknownTeamError as exc:
+            skipped.append(f"{away_name} at {home_name}: not a team we track ({exc}) — not stored")
+            continue
+        game_id = make_game_id(sport, season, week, away, home)
+
+        if game_id not in wanted:
+            skipped.append(
+                f"{game_id}: not in the {sport.value} {season} week {week} slate "
+                f"(kickoff {kickoff.isoformat()}) — not stored"
+            )
+            continue
+
+        for book in event.get("bookmakers", []):
+            book_key = book.get("key")
+            spreads = next(
+                (market for market in book.get("markets", []) if market.get("key") == "spreads"),
+                None,
+            )
+            if spreads is None:
+                skipped.append(f"{game_id}: {book_key} — no spreads market")
+                continue
+            outcome = next(
+                (
+                    outcome
+                    for outcome in spreads.get("outcomes", [])
+                    if outcome.get("name") == home_name
+                ),
+                None,
+            )
+            if outcome is None or outcome.get("point") is None:
+                skipped.append(f"{game_id}: {book_key} — no spread")
+                continue
+            lines.append(
+                MarketLine(
+                    game_id=game_id,
+                    source=source,
+                    book=book_key,
+                    # Already home-perspective; do not flip.
+                    spread_home=float(outcome["point"]),
+                    captured_at=captured_at,
+                )
+            )
+    return MarketLinesResult(lines=lines, skipped=skipped)
 
 
 class OddsApiError(RuntimeError):
@@ -149,87 +262,74 @@ class OddsClient:
         if response.status_code >= 400:
             raise OddsApiError(f"odds api returned {response.status_code}: {response.text}")
 
-        wanted = set(slate)
-        lines: list[MarketLine] = []
-        skipped: list[str] = []
-        for event in response.json():
-            home_name = event["home_team"]
-            away_name = event["away_team"]
+        return _parse_events(
+            response.json(),
+            resolver=resolver,
+            sport=sport,
+            season=season,
+            week=week,
+            slate=slate,
+            window=window,
+            captured_at=now,
+            source=LIVE_SOURCE,
+        )
 
-            # Before resolution, deliberately. The NCAAF feed covers the whole
-            # country while aliases.yaml covers the schools we actually pick, so
-            # resolving first would abort the poll on a school we never wanted.
-            kickoff = _commence_time(event.get("commence_time"))
-            if kickoff is None:
-                skipped.append(
-                    f"{away_name} at {home_name}: unreadable commence_time "
-                    f"{event.get('commence_time')!r} — not stored"
-                )
-                continue
-            if not window_start <= kickoff <= window_end:
-                skipped.append(
-                    f"{away_name} at {home_name}: kickoff {kickoff.isoformat()} is outside "
-                    f"the {sport.value} {season} week {week} window — not stored"
-                )
-                continue
+    def fetch_historical_spreads(
+        self,
+        sport_key: str,
+        *,
+        resolver: TeamResolver,
+        sport: Sport,
+        season: int,
+        week: int,
+        at: datetime,
+        slate: Collection[str],
+        window: tuple[datetime, datetime],
+        source: str,
+    ) -> MarketLinesResult:
+        """One archived snapshot, taken at or earlier than `at`.
 
-            # A name we cannot map is REPORTED here, not raised. This feed is a
-            # firehose: its NCAAF coverage includes every FCS matchup with a
-            # posted line, none of which this system picks, so an unknown name
-            # is expected rather than exceptional. It cannot be in the slate
-            # either — slate ids are built from names that already resolved.
-            # The CBS paste keeps raising, because there every line IS a game we
-            # must pick. Either way nothing is dropped in silence: poll-odds
-            # prints these, and a game left without a market shows as NO_MARKET.
-            try:
-                home = resolver.resolve(home_name, sport)
-                away = resolver.resolve(away_name, sport)
-            except UnknownTeamError as exc:
-                skipped.append(
-                    f"{away_name} at {home_name}: not a team we track ({exc}) — not stored"
-                )
-                continue
-            game_id = make_game_id(sport, season, week, away, home)
+        Costs 10 credits per call — ten times a live request — so callers plan
+        their requests before making them rather than discovering the bill.
 
-            if game_id not in wanted:
-                skipped.append(
-                    f"{game_id}: not in the {sport.value} {season} week {week} slate "
-                    f"(kickoff {kickoff.isoformat()}) — not stored"
-                )
-                continue
+        Both guards still apply: the archive is the same nationwide firehose as
+        the live feed, and a backfill has no weekly sheet being read afterwards
+        to make a wrong game id noticeable.
+        """
+        response = self._get(
+            f"/historical/sports/{sport_key}/odds",
+            params={
+                "apiKey": self._api_key,
+                "regions": "us",
+                "markets": "spreads",
+                "oddsFormat": "american",
+                "date": _api_time(at),
+            },
+        )
+        if response.status_code in (401, 429):
+            raise QuotaExhausted(f"odds api returned {response.status_code}: {response.text}")
+        if response.status_code >= 400:
+            raise OddsApiError(f"odds api returned {response.status_code}: {response.text}")
 
-            for book in event.get("bookmakers", []):
-                book_key = book.get("key")
-                spreads = next(
-                    (
-                        market
-                        for market in book.get("markets", [])
-                        if market.get("key") == "spreads"
-                    ),
-                    None,
-                )
-                if spreads is None:
-                    skipped.append(f"{game_id}: {book_key} — no spreads market")
-                    continue
-                outcome = next(
-                    (
-                        outcome
-                        for outcome in spreads.get("outcomes", [])
-                        if outcome.get("name") == home_name
-                    ),
-                    None,
-                )
-                if outcome is None or outcome.get("point") is None:
-                    skipped.append(f"{game_id}: {book_key} — no spread")
-                    continue
-                lines.append(
-                    MarketLine(
-                        game_id=game_id,
-                        source="oddsapi",
-                        book=book_key,
-                        # Already home-perspective; do not flip.
-                        spread_home=float(outcome["point"]),
-                        captured_at=now,
-                    )
-                )
-        return MarketLinesResult(lines=lines, skipped=skipped)
+        envelope = response.json()
+        # The snapshot's own timestamp, never `at`: the archive answers with the
+        # closest snapshot at or earlier, so stamping the requested instant
+        # would misdate the row and make a re-run append near-duplicates to an
+        # append-only table. An unreadable one raises rather than guessing.
+        captured_at = _commence_time(envelope.get("timestamp"))
+        if captured_at is None:
+            raise OddsApiError(
+                f"unreadable snapshot timestamp {envelope.get('timestamp')!r} — nothing stored"
+            )
+
+        return _parse_events(
+            envelope.get("data") or [],
+            resolver=resolver,
+            sport=sport,
+            season=season,
+            week=week,
+            slate=slate,
+            window=window,
+            captured_at=captured_at,
+            source=source,
+        )
