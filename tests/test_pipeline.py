@@ -47,9 +47,35 @@ def test_strong_divergence_returns_its_final_side_without_rating_override():
     assert edge.tier is Tier.STRONG
 
 
+def test_lean_divergence_returns_its_final_side_without_rating_override():
+    [edge] = decide_edges([league(-3.0)], [market(-1.5)], [game()], HISTORY)
+    assert edge.side is Side.AWAY
+    assert edge.tier is Tier.LEAN
+    assert "rating" not in edge.rationale.lower()
+
+
+@pytest.mark.parametrize(
+    ("market_spread", "expected_side", "expected_tier"),
+    [(-6.0, Side.HOME, Tier.STRONG), (-1.5, Side.AWAY, Tier.LEAN)],
+)
+def test_settled_divergence_does_not_require_a_matching_game(
+    market_spread, expected_side, expected_tier
+):
+    [edge] = decide_edges([league(-3.0)], [market(market_spread)], [], HISTORY)
+    assert edge.side is expected_side
+    assert edge.tier is expected_tier
+
+
 def test_coinflip_returns_the_rating_side_not_a_placeholder():
     [edge] = decide_edges([league(-3.0)], [market(-3.5)], [game()], HISTORY)
     assert edge.side is Side.HOME
+    assert edge.tier is Tier.COINFLIP
+    assert "rating" in edge.rationale.lower()
+
+
+def test_coinflip_with_a_heavy_home_number_returns_the_rating_away_side():
+    [edge] = decide_edges([league(-40.0)], [market(-40.0)], [game()], HISTORY)
+    assert edge.side is Side.AWAY
     assert edge.tier is Tier.COINFLIP
     assert "rating" in edge.rationale.lower()
 
