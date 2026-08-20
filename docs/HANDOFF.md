@@ -1,8 +1,8 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-20, after the first real CBS week was ingested and
-calibrated
+**Last updated:** 2026-08-20, after the CFB results backfill trained the
+tiebreak — and showed why it cannot help much
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -26,9 +26,9 @@ You have a working system with a real result. Nothing is half-finished and
 there is no branch to merge. Orient yourself in about two minutes:
 
 ```bash
-uv run pytest -q                              # expect 243 passed
+uv run pytest -q                              # expect 246 passed
 uv run pickem backtest --from 2020 --to 2025  # expect the result below
-uv run pickem --help                          # the whole surface, 8 commands
+uv run pickem --help                          # the whole surface, 9 commands
 ```
 
 Then read "The phase-exit result" at the bottom of this file — it is the
@@ -57,7 +57,7 @@ wrong and are recorded there with their reasons.
 
 - **Branch:** all work is on `master`, working tree clean. There is no remote
   configured, so `git log` is the only history and nothing is pushed anywhere.
-- **Tests:** 243 passing, `uv run pytest -q`. The suite is fully offline — HTTP
+- **Tests:** 246 passing, `uv run pytest -q`. The suite is fully offline — HTTP
   is injected via `httpx.MockTransport` and loaders are injected. Keep it that
   way; no test may touch the network.
 - **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`
@@ -77,7 +77,7 @@ backfill costs another ~$30 and an hour to rebuild.
 
 | table | rows | note |
 |---|---|---|
-| `games` | 1,708 | NFL 2020-2025 plus CFB 2026 week 1, real kickoff instants |
+| `games` | 6,166 | NFL 2020-2025 (1,693) + CFB 2020-2025 and 2026 wk 1 (4,473; 4,457 scored) |
 | `lines` / `oddsapi:frozen` | 22,351 | early-week proxy, ~10 books per game |
 | `lines` / `oddsapi:submit` | 24,237 | pre-kickoff proxy, ~10 books per game |
 | `lines` / `nflverse` | 1,693 | closing lines, kept as a cross-check only |
@@ -175,7 +175,8 @@ src/pickem/cli.py                 Typer commands: ingest-cbs, poll-odds
                                   sync-results (--sport nfl|cfb), backfill,
                                   backfill-history (dry run by default,
                                   --execute to spend, --max-credits ceiling),
-                                  backtest, and calibrate. Prints every source skip
+                                  backtest, backfill-cfb, and calibrate. Prints
+                                  every source skip
                                   visibly; CBS ingest is atomic.
 ```
 
@@ -413,13 +414,7 @@ permanently into the append-only `lines` table while the real week reported
 
 Ordered by value. Each names what blocks it.
 
-1. **Train the CFB Elo before week 1 kicks off (2026-09-05).** Until a CFB
-   result is stored, the tiebreak decides every coinflip by taking the
-   underdog — 12 of 15 picks on the current sheet. Scores come from CFBD on the
-   free key, so this costs nothing but a loop over past seasons through
-   `sync-results --sport cfb --week N`. Highest value per unit of effort on
-   this list, and it has a deadline. *Not blocked.*
-2. **Run the weekly loop for NFL week 1** (early September 2026) the way CFB
+1. **Run the weekly loop for NFL week 1** (early September 2026) the way CFB
    week 1 was run: `ingest-cbs --html` -> `poll-odds` -> `report` ->
    `calibrate`. The NFL sheet is the one the phase-exit result actually
    describes, and its CBS-vs-market agreement is still unmeasured.
@@ -427,19 +422,19 @@ Ordered by value. Each names what blocks it.
    `calibrate` only counts market rows captured within an hour of the paste,
    so a week with no poll beside it is permanently uncalibratable — the
    archive would have to be bought to reconstruct it.
-3. **Improve the tiebreak on coinflip games.** This is now the largest
+2. **Improve the tiebreak on coinflip games.** This is now the largest
    remaining prize and the only lever with real headroom: 926 of 1,663 graded
    games (55.6%) are decided by Elo at ~49.5%, which is noise. A band-by-band
    comparison (in the tuning research doc) shows divergence beating Elo in six
    of seven magnitude bands, so if the tiebreak ever beat 50% materially the
    `lean` threshold would want to rise and the sweep should be re-run. This is
    the Phase B question — see the phase-exit reading below. *Not blocked.*
-4. **Decide on the CFB backfill** — ~4,500 credits of the 10,610 remaining.
+3. **Decide on the CFB backfill** — ~4,500 credits of the 10,610 remaining.
    *Time-sensitive:* the 20K tier is a monthly subscription, and redoing this
    after cancelling costs another ~$30. Needs `cfbd_source` kickoff times
    checked the way `nflverse._kickoff` was (the same date-only bug is plausible
    there), and note the alias table is FBS-only by design.
-5. **Make the Phase B decision.** See the result below — the honest reading is
+4. **Make the Phase B decision.** See the result below — the honest reading is
    more nuanced than "Phase B is unnecessary."
 
 Season timing, for context: the CFB season opens in late August 2026 and NFL
@@ -487,21 +482,47 @@ so the free tier would cover weekly use if the subscription is cancelled.
   naming; `Miami (OH)` stays distinct as MIAOH. If a CBS paste ever writes bare
   "Miami" meaning the RedHawks it will silently resolve to the wrong school —
   the one place in the table where that is possible.
-- **CFB Elo ratings are untrained, and week 1 shows what that costs.** With no
-  completed CFB game in the store every rating is the initial value, so the
-  projected margin is 0 for every matchup and the tiebreak reduces to "take
-  whichever side the spread points away from" — i.e. the underdog, every time.
-  On the 2026 week 1 sheet that decided **12 of 15 picks**, including ECU
-  +28.5 at Alabama. `report` warns and folds the caveat into the provenance,
-  but the picks still ship. CFB scores arrive through
-  `sync-results --sport cfb --week N`, which needs only the free CFBD key and
-  runs a week at a time; there is no bulk CFB equivalent of `backfill` yet.
+- **CFB Elo is now trained (4,457 results, 2020-2025) and still takes the
+  underdog on most big spreads.** This is not a bug and refitting will not fix
+  it — see "Why the tiebreak cannot rescue coinflips" below. `report` no longer
+  warns, because there is real history; the picks are informed but weak.
 - **nflverse's null-spread branch is defensive only.** A real 1999-2025 sweep
   loaded 7,276 closing lines with ZERO null spreads and no `UnknownTeamError`,
   so only the injected-loader unit test covers it. Kept as a guard. Relevant
   because resolution now precedes the null check: a row with both a null spread
   and an unknown abbreviation raises where it once skipped. The sweep proves
   that combination does not occur in 1999-2025.
+
+## Why the tiebreak cannot rescue coinflips (2026-08-20)
+
+Measured after the CFB backfill, training on 2020-2024 and holding out 2025
+(807 games):
+
+```
+straight-up winner picked:  64.8%      <- the rating knows who is better
+mean |projected margin|:     9.35
+mean |actual margin|:       16.40      <- projections are compressed
+mean signed error:          -2.23
+```
+
+The compression looks like a mis-scaled constant, and it is not. A
+least-squares fit of actual margin on rating difference over the training
+seasons returns `points_per_elo = 0.0341` against the current default of
+`0.0400` — i.e. the honest fit is *more* compressed, not less, and on held-out
+2025 it moves mean absolute error only 14.45 -> 14.25. **Do not "fix" the
+compression by rescaling.** A conditional mean from a weak predictor shrinks
+toward zero; that is correct behaviour, not a calibration error.
+
+The consequence is structural. `tiebreak_side` compares a shrunken projection
+against a sharp market spread, so on any sizeable spread the projection sits
+inside the number and the rule resolves to "take the underdog" — 11 of 15
+coinflips on the 2026 CFB week 1 sheet. Since ATS underdogs are close to a coin
+flip, this reproduces exactly the 49.5% COINFLIP rate the NFL backtest measured.
+
+**So the coinflip problem is not a tuning problem and cannot be closed by a
+better-fitted Elo.** Beating it needs a predictor strong enough that its
+conditional mean can cross a sharp line — which is the Phase B modelling
+question, not a parameter change.
 
 ## The calibration result (2026-08-20)
 
