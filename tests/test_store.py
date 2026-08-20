@@ -194,3 +194,42 @@ def test_every_writer_accepts_an_empty_sequence(tmp_path):
         store.append_market_lines([])
         store.record_picks(season=2025, week=3, edges=[], generated_at=now)
         assert store.games_for_week(Sport.NFL, 2025, 3) == []
+
+
+def test_load_week_returns_games_league_lines_and_market_history_together(store):
+    store.upsert_games([game()])
+    store.upsert_league_lines(
+        [LeagueLine(game_id=GID, season=2025, week=3, spread_home=-3.0, posted_at=KICK)]
+    )
+    store.append_market_lines([market(-3.0, KICK), market(-6.0, KICK.replace(day=22))])
+
+    dataset = store.load_week(Sport.NFL, 2025, 3)
+
+    assert [item.game_id for item in dataset.games] == [GID]
+    assert [item.game_id for item in dataset.league_lines] == [GID]
+    assert sorted(item.spread_home for item in dataset.market_lines) == [-6.0, -3.0]
+
+
+def test_load_weeks_excludes_neighboring_weeks(store):
+    week_three = game()
+    week_four = game().model_copy(update={"game_id": "nfl-2025-04-BUF-at-MIA", "week": 4})
+    store.upsert_games([week_three, week_four])
+
+    dataset = store.load_weeks(Sport.NFL, 2025, 4, 4)
+
+    assert [item.game_id for item in dataset.games] == [week_four.game_id]
+
+
+def test_load_seasons_excludes_other_sports_and_seasons(store):
+    nfl = game()
+    cfb = game().model_copy(
+        update={
+            "game_id": "cfb-2025-03-BUF-at-MIA",
+            "sport": Sport.CFB,
+        }
+    )
+    store.upsert_games([nfl, cfb])
+
+    dataset = store.load_seasons(Sport.NFL, 2025, 2025)
+
+    assert [item.game_id for item in dataset.games] == [nfl.game_id]

@@ -12,8 +12,46 @@ from importlib import resources
 from pathlib import Path
 
 import duckdb
+from pydantic import BaseModel
 
 from pickem.models import Edge, Game, LeagueLine, MarketLine, Sport
+
+
+class StoredDataset(BaseModel):
+    games: list[Game]
+    league_lines: list[LeagueLine]
+    market_lines: list[MarketLine]
+
+
+def _game_from_row(row: tuple) -> Game:
+    return Game(
+        game_id=row[0],
+        sport=Sport(row[1]),
+        season=row[2],
+        week=row[3],
+        kickoff_utc=row[4],
+        home_team_id=row[5],
+        away_team_id=row[6],
+        home_score=row[7],
+        away_score=row[8],
+    )
+
+
+def _league_line_from_row(row: tuple) -> LeagueLine:
+    return LeagueLine(
+        game_id=row[0], season=row[1], week=row[2], spread_home=row[3], posted_at=row[4]
+    )
+
+
+def _market_line_from_row(row: tuple) -> MarketLine:
+    return MarketLine(
+        game_id=row[0],
+        source=row[1],
+        book=row[2],
+        spread_home=row[3],
+        total=row[4],
+        captured_at=row[5],
+    )
 
 
 class Store:
@@ -124,12 +162,7 @@ class Store:
             sql += " AND captured_at < ?"
             params.append(before)
         rows = self._con.execute(sql, params).fetchall()
-        return [
-            MarketLine(
-                game_id=r[0], source=r[1], book=r[2], spread_home=r[3], total=r[4], captured_at=r[5]
-            )
-            for r in rows
-        ]
+        return [_market_line_from_row(row) for row in rows]
 
     def league_lines_for_week(self, sport: Sport, season: int, week: int) -> list[LeagueLine]:
         rows = self._con.execute(
@@ -140,10 +173,7 @@ class Store:
             """,
             [sport.value, season, week],
         ).fetchall()
-        return [
-            LeagueLine(game_id=r[0], season=r[1], week=r[2], spread_home=r[3], posted_at=r[4])
-            for r in rows
-        ]
+        return [_league_line_from_row(row) for row in rows]
 
     def games_for_week(self, sport: Sport, season: int, week: int) -> list[Game]:
         rows = self._con.execute(
@@ -154,20 +184,7 @@ class Store:
             """,
             [sport.value, season, week],
         ).fetchall()
-        return [
-            Game(
-                game_id=r[0],
-                sport=Sport(r[1]),
-                season=r[2],
-                week=r[3],
-                kickoff_utc=r[4],
-                home_team_id=r[5],
-                away_team_id=r[6],
-                home_score=r[7],
-                away_score=r[8],
-            )
-            for r in rows
-        ]
+        return [_game_from_row(row) for row in rows]
 
     def games_before(self, sport: Sport, season: int, week: int) -> list[Game]:
         """Every game already played before this week, including prior seasons.
@@ -184,20 +201,49 @@ class Store:
             """,
             [sport.value, season, season, week],
         ).fetchall()
-        return [
-            Game(
-                game_id=r[0],
-                sport=Sport(r[1]),
-                season=r[2],
-                week=r[3],
-                kickoff_utc=r[4],
-                home_team_id=r[5],
-                away_team_id=r[6],
-                home_score=r[7],
-                away_score=r[8],
-            )
-            for r in rows
-        ]
+        return [_game_from_row(row) for row in rows]
+
+    def _load_dataset(self, where: str, params: list[object]) -> StoredDataset:
+        games = self._con.execute(
+            "SELECT game_id, sport, season, week, kickoff_utc, "
+            "home_team_id, away_team_id, home_score, away_score FROM games g WHERE " + where,
+            params,
+        ).fetchall()
+        league_lines = self._con.execute(
+            "SELECT l.game_id, l.season, l.week, l.spread_home, l.posted_at "
+            "FROM league_lines l JOIN games g USING (game_id) WHERE " + where,
+            params,
+        ).fetchall()
+        market_lines = self._con.execute(
+            "SELECT l.game_id, l.source, l.book, l.spread_home, l.total, l.captured_at "
+            "FROM lines l JOIN games g USING (game_id) WHERE " + where,
+            params,
+        ).fetchall()
+        return StoredDataset(
+            games=[_game_from_row(row) for row in games],
+            league_lines=[_league_line_from_row(row) for row in league_lines],
+            market_lines=[_market_line_from_row(row) for row in market_lines],
+        )
+
+    def load_week(self, sport: Sport, season: int, week: int) -> StoredDataset:
+        return self._load_dataset(
+            "g.sport = ? AND g.season = ? AND g.week = ?",
+            [sport.value, season, week],
+        )
+
+    def load_weeks(
+        self, sport: Sport, season: int, start_week: int, end_week: int
+    ) -> StoredDataset:
+        return self._load_dataset(
+            "g.sport = ? AND g.season = ? AND g.week BETWEEN ? AND ?",
+            [sport.value, season, start_week, end_week],
+        )
+
+    def load_seasons(self, sport: Sport, start_season: int, end_season: int) -> StoredDataset:
+        return self._load_dataset(
+            "g.sport = ? AND g.season BETWEEN ? AND ?",
+            [sport.value, start_season, end_season],
+        )
 
     def record_picks(
         self, edges: Sequence[Edge], season: int, week: int, generated_at: datetime
