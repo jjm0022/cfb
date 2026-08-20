@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-11, after the live CFB alias sweep (`fd03baa`)
+**Last updated:** 2026-08-19, after the Odds API historical docs check
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -250,19 +250,24 @@ permanently into the append-only `lines` table while the real week reported
 1. **Paste a real CBS block** through `ingest-cbs`, then `poll-odds`, then
    `report`, and read the sheet for anything that looks wrong. This is the last
    unverified path — the parser has only ever seen fixtures.
-2. **Backfill openers, or accept the gap.** See below; until then `backtest`
-   correctly reports every game as excluded and says why.
+2. **Backfill the historical proxies.** Decided 2026-08-19: buy the Odds API
+   20K tier ($30/mo, cancel after) and source both the frozen-line and
+   submission-time proxies from its archive. NFL first (~7,560 credits), verify,
+   then decide on CFB. Plan and verified facts:
+   `docs/research/2026-08-19-odds-api-historical.md`. Not yet built — the
+   historical endpoint has a snapshot envelope `fetch_spreads` does not parse.
 3. **Make the Phase B decision** from the backtest's Wilson intervals.
 
 ## Known gaps
 
 - **Backtest data gap (spec §9), the big one.** Historical frozen CBS lines do
-  not exist — nobody recorded them. The backtest proxies the frozen line with
-  the market OPENING line and submission-time with the CLOSING line. nflverse
-  gives closing lines free back to 1999; **openers need one month of a paid Odds
-  API tier (~$29)** to backfill 2020-2025 snapshots, then cancel. `pickem
-  backfill` loads closers only and says so, so `backtest` currently grades
-  nothing and names the reason for every game.
+  not exist — nobody recorded them, so the backtest proxies them. `pickem
+  backfill` loads nflverse closers only and says so, so `backtest` currently
+  grades nothing and names the reason for every game. **Closing this gap is the
+  active work — see `docs/research/2026-08-19-odds-api-historical.md`** for the
+  verified endpoint facts, the credit budget, and the decision to source BOTH
+  ends of the divergence from the Odds API archive rather than pairing an Odds
+  API opener against the nflverse closer.
 - **`predict_tiebreaker_total` is unwired, and it is not a loose wire.**
   `odds.py` requests `markets=spreads` only and never populates
   `MarketLine.total`, so wiring it today returns `None` for all live data. Only
