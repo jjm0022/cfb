@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -28,8 +29,27 @@ def _default_loader(seasons: Sequence[int]) -> pl.DataFrame:
     return nflreadpy.load_schedules(seasons=list(seasons))
 
 
-def _kickoff(gameday: str) -> datetime:
-    return datetime.fromisoformat(str(gameday)).replace(tzinfo=UTC)
+# nflverse states every kickoff in US Eastern, including neutral-site
+# internationals: a London game reads 09:30, not its 14:30 local time.
+EASTERN = ZoneInfo("America/New_York")
+
+
+def _kickoff(gameday: str, gametime: str | None = None) -> datetime:
+    """The true kickoff instant.
+
+    The date lives in `gameday` and the local clock time in `gametime`. The
+    offset must be derived from the date rather than fixed, so a January
+    playoff game gets EST and a September game gets EDT.
+
+    A missing `gametime` degrades to midnight UTC rather than raising: a poor
+    timestamp, but a legible one, and one malformed row cannot abort a whole
+    season's load.
+    """
+    day = datetime.fromisoformat(str(gameday))
+    if not gametime:
+        return day.replace(tzinfo=UTC)
+    hour, _, minute = str(gametime).partition(":")
+    return day.replace(hour=int(hour), minute=int(minute), tzinfo=EASTERN).astimezone(UTC)
 
 
 def load_nfl_games(
@@ -46,7 +66,7 @@ def load_nfl_games(
                 sport=Sport.NFL,
                 season=row["season"],
                 week=row["week"],
-                kickoff_utc=_kickoff(row["gameday"]),
+                kickoff_utc=_kickoff(row["gameday"], row.get("gametime")),
                 home_team_id=home,
                 away_team_id=away,
                 home_score=row["home_score"],
@@ -79,6 +99,12 @@ def load_nfl_closing_lines(
                 book="close",
                 spread_home=-float(row["spread_line"]),
                 total=row["total_line"],
+                # Deliberately date-only, though _kickoff can now do better.
+                # captured_at is part of the `lines` primary key and these rows
+                # are already stored; refining it would append a near-duplicate
+                # of every one of them to an append-only table. These closers
+                # are a cross-check for the archive backfill, not an input, so
+                # the coarse timestamp costs nothing.
                 captured_at=_kickoff(row["gameday"]),
             )
         )
