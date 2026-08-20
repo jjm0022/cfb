@@ -82,3 +82,17 @@ def test_an_fcs_school_still_fails_loud(resolver):
     # stop the ingest rather than resolve to something that looks close.
     with pytest.raises(UnknownTeamError):
         resolver.resolve("Villanova", Sport.CFB)
+
+
+@pytest.mark.parametrize(
+    ("cbs_spelling", "expected"),
+    [("Boise St.", "BOIS"), ("Colorado St.", "CSU"), ("Washington St.", "WSU")],
+)
+def test_the_cbs_st_abbreviation_resolves(resolver, cbs_spelling, expected):
+    """Catches the spelling CBS actually ships.
+
+    The saved week-1 2026 page writes `Boise St.` where the table was generated
+    from CFBD's `Boise State`. An unknown name aborts the whole ingest, so a
+    missing spelling costs a week rather than a row.
+    """
+    assert resolver.resolve(cbs_spelling, Sport.CFB) == expected

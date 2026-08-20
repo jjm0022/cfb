@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from typer.testing import CliRunner
 
@@ -226,3 +226,38 @@ def test_the_cli_says_so_plainly_when_no_paste_has_been_ingested(tmp_path):
     assert result.exit_code == 0, result.output
     assert "no CBS line could be compared" in result.output
     assert "0.00" not in result.output
+
+
+def test_a_poll_taken_just_after_the_paste_still_counts():
+    """Catches a rule the real workflow cannot satisfy.
+
+    `poll-odds` derives its slate from `league_lines`, so the market snapshot
+    is always captured AFTER the paste it is being compared against — by
+    construction, never before. A strict at-or-before rule makes every real
+    week uncalibratable; the first live run missed by 11 seconds.
+    """
+    just_after = POSTED + timedelta(seconds=11)
+    report = calibrate(
+        league_lines=[league(-2.0)],
+        market_lines=[line(-3.0, at=just_after)],
+    )
+
+    assert report.compared == 1
+    assert report.mean_residual == 1.0
+
+
+def test_a_poll_taken_long_after_the_paste_is_still_excluded():
+    """Catches a tolerance so wide it readmits real line movement.
+
+    The point of the cutoff is that later movement is what the strategy trades
+    against, not what it is calibrated against. Widening it to admit the
+    same-sitting poll must not widen it to admit the next day's number.
+    """
+    much_later = POSTED + timedelta(days=1)
+    report = calibrate(
+        league_lines=[league(-2.0)],
+        market_lines=[line(-9.0, at=much_later)],
+    )
+
+    assert report.compared == 0
+    assert len(report.skipped) == 1

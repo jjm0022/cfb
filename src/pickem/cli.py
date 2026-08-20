@@ -10,12 +10,13 @@ from pathlib import Path
 import typer
 
 from pickem import config
-from pickem.backtest.calibration import calibrate
+from pickem.backtest.calibration import DEFAULT_TOLERANCE, calibrate
 from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.backtest.snapshots import SnapshotKind, estimate_credits, plan_snapshots
 from pickem.edge.divergence import compute_edge, rank_edges
 from pickem.edge.pipeline import MissingGameError, apply_tiebreaks
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
+from pickem.ingest.cbs_html import parse_cbs_html
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import CFB_KEY, NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
@@ -49,15 +50,17 @@ def ingest_cbs(
     sport: Sport = typer.Option(...),
     season: int = typer.Option(...),
     week: int = typer.Option(...),
+    html: bool = typer.Option(False, "--html", help="Read a saved CBS page instead of pasted text"),
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
-    """Parse the CBS pick sheet paste into frozen league lines."""
+    """Parse the CBS pick sheet into frozen league lines."""
     text = file.read_text() if file else sys.stdin.read()
     resolver = TeamResolver.default()
     now = datetime.now(tz=UTC)
+    parser = parse_cbs_html if html else parse_cbs_block
 
     try:
-        parsed = parse_cbs_block(
+        parsed = parser(
             text, resolver=resolver, sport=sport, season=season, week=week, posted_at=now
         )
     except UnknownTeamError as exc:
@@ -80,15 +83,17 @@ def ingest_cbs(
             sport=sport,
             season=season,
             week=week,
-            kickoff_utc=now,
+            # A saved page carries the real instant; the pasted block does not,
+            # and `now` stays the documented placeholder for that path.
+            kickoff_utc=parsed.kickoffs.get(make_game_id(sport, season, week, away, home), now),
             home_team_id=home,
             away_team_id=away,
         )
         for away, home in parsed.matchups
     ]
     with store:
-        # Insert-only: the paste carries a placeholder kickoff and no scores, so
-        # it must never overwrite what sync-results already established.
+        # Insert-only: the paste carries no scores, so it must never overwrite
+        # what sync-results already established.
         store.insert_games_if_absent(games)
         store.upsert_league_lines(parsed.lines)
         typer.echo(f"ingested {len(parsed.lines)} games for {sport.value} {season} week {week}")
@@ -390,6 +395,11 @@ def calibrate_cmd(
     from_week: int = typer.Option(1, "--from-week"),
     to_week: int = typer.Option(22, "--to-week"),
     source: str = typer.Option(None, help="Restrict the market end to one source label"),
+    tolerance_minutes: int = typer.Option(
+        int(DEFAULT_TOLERANCE.total_seconds() // 60),
+        "--tolerance-minutes",
+        help="How long after the paste a market snapshot may still be compared",
+    ),
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
     """Measure how closely the frozen CBS line tracks the market behind it.
@@ -403,14 +413,19 @@ def calibrate_cmd(
             league_lines.extend(store.league_lines_for_week(sport, season, week))
 
         market = [line for lg in league_lines for line in store.market_lines_for(lg.game_id)]
-        result = calibrate(league_lines, market, source=source)
+        result = calibrate(
+            league_lines,
+            market,
+            source=source,
+            tolerance=timedelta(minutes=tolerance_minutes),
+        )
 
     if result.compared == 0:
         # A zero here is the expected state until a real paste is ingested, and
         # saying so beats printing a bias of 0.0 that reads as perfect agreement.
         typer.secho(
-            "no CBS line could be compared — ingest a paste with `ingest-cbs`, and "
-            "make sure `poll-odds` ran at or before it",
+            "no CBS line could be compared — ingest a paste with `ingest-cbs`, then "
+            "run `poll-odds` in the same sitting",
             fg="yellow",
         )
         _warn_skipped("league lines not calibrated", result.skipped)

@@ -13,18 +13,26 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from datetime import timedelta
 
 from pydantic import BaseModel
 
 from pickem.edge.divergence import consensus_spread
 from pickem.models import LeagueLine, MarketLine
 
+# `poll-odds` derives its slate from `league_lines`, so the market snapshot is
+# always captured after the paste it is compared against — never before. The
+# cutoff therefore has to admit the same-sitting poll while still excluding the
+# later movement the strategy exists to trade against.
+DEFAULT_TOLERANCE = timedelta(hours=1)
+
 ASSUMPTIONS = [
     "A league line's `posted_at` is the moment the CBS block was pasted at "
     "ingest, not the moment CBS froze the number; a late paste widens the "
     "residual through our own delay rather than through any disagreement.",
-    "The market end is the consensus across books at or before that moment, "
-    "collapsed by the same `consensus_spread` the strategy itself uses.",
+    "The market end is the consensus across books captured within the "
+    "tolerance window around that moment, collapsed by the same "
+    "`consensus_spread` the strategy itself uses.",
     "Bias and dispersion are reported separately: a systematic offset re-tiers "
     "the whole sheet, while symmetric noise around zero largely washes out.",
 ]
@@ -59,11 +67,16 @@ def calibrate(
     league_lines: Sequence[LeagueLine],
     market_lines: Sequence[MarketLine],
     source: str | None = None,
+    tolerance: timedelta = DEFAULT_TOLERANCE,
 ) -> CalibrationReport:
     """Compare each league line against the market consensus behind it.
 
     ``source`` restricts the market end to one capture regime — the archive
     proxy or the live polls — so the two are never averaged together.
+
+    ``tolerance`` is how far after a league line's ``posted_at`` a market row
+    may still be counted. It exists because the weekly workflow cannot poll
+    before it pastes, not to admit later line movement.
     """
     by_game: dict[str, list[MarketLine]] = defaultdict(list)
     for line in market_lines:
@@ -74,15 +87,14 @@ def calibrate(
     residuals: list[GameResidual] = []
     skipped: list[str] = []
     for league in league_lines:
-        # At or before only: a later snapshot is what the strategy trades
-        # against, not what CBS could have been looking at.
-        available = [
-            line for line in by_game.get(league.game_id, []) if line.captured_at <= league.posted_at
-        ]
+        # Bounded to the paste: a snapshot well after it is what the strategy
+        # trades against, not what CBS could have been looking at.
+        cutoff = league.posted_at + tolerance
+        available = [line for line in by_game.get(league.game_id, []) if line.captured_at <= cutoff]
         consensus = consensus_spread(available)
         if consensus is None:
             skipped.append(
-                f"{league.game_id}: no market line captured at or before "
+                f"{league.game_id}: no market line captured within {tolerance} of "
                 f"{league.posted_at.isoformat()} — nothing to calibrate against"
             )
             continue

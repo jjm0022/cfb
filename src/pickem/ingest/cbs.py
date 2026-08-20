@@ -30,6 +30,9 @@ class CbsParseError(ValueError):
 class ParseResult(BaseModel):
     lines: list[LeagueLine]
     matchups: list[tuple[str, str]]
+    # Real kickoff instants, keyed by game id, when the source carries them.
+    # The pasted text block does not; a saved page does.
+    kickoffs: dict[str, datetime] = {}
     skipped: list[str]
 
 
