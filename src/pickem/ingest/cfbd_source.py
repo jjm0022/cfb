@@ -25,7 +25,8 @@ import httpx
 from pydantic import BaseModel, SecretStr
 
 from pickem import config
-from pickem.models import Game, MarketLine, MarketLinesResult, Sport, make_game_id
+from pickem.models import Game, MarketLine, MarketLinesResult, Sport
+from pickem.resolve.matchup import resolve_matchup
 from pickem.resolve.resolver import TeamResolver
 
 BASE_URL = "https://api.collegefootballdata.com"
@@ -148,17 +149,23 @@ def load_cfb_games(
 ) -> list[Game]:
     games: list[Game] = []
     for row in fetcher(season, week):
-        home = resolver.resolve(row["home_team"], Sport.CFB)
-        away = resolver.resolve(row["away_team"], Sport.CFB)
+        matchup = resolve_matchup(
+            resolver=resolver,
+            sport=Sport.CFB,
+            season=season,
+            week=week,
+            away_name=row["away_team"],
+            home_name=row["home_team"],
+        )
         games.append(
             Game(
-                game_id=make_game_id(Sport.CFB, season, week, away, home),
-                sport=Sport.CFB,
-                season=season,
-                week=week,
+                game_id=matchup.game_id,
+                sport=matchup.sport,
+                season=matchup.season,
+                week=matchup.week,
                 kickoff_utc=_kickoff(row["start_date"]),
-                home_team_id=home,
-                away_team_id=away,
+                home_team_id=matchup.home_team_id,
+                away_team_id=matchup.away_team_id,
                 home_score=row.get("home_points"),
                 away_score=row.get("away_points"),
             )
@@ -185,16 +192,21 @@ def load_cfb_lines(
     lines: list[MarketLine] = []
     skipped: list[str] = []
     for row in fetcher(season, week):
-        home = resolver.resolve(row["home_team"], Sport.CFB)
-        away = resolver.resolve(row["away_team"], Sport.CFB)
-        game_id = make_game_id(Sport.CFB, season, week, away, home)
+        matchup = resolve_matchup(
+            resolver=resolver,
+            sport=Sport.CFB,
+            season=season,
+            week=week,
+            away_name=row["away_team"],
+            home_name=row["home_team"],
+        )
         for provider in row.get("lines") or []:
             if provider.get("spread") is None:
-                skipped.append(f"{game_id}: {provider.get('provider')} — no spread")
+                skipped.append(f"{matchup.game_id}: {provider.get('provider')} — no spread")
                 continue
             lines.append(
                 MarketLine(
-                    game_id=game_id,
+                    game_id=matchup.game_id,
                     source="cfbd",
                     book=provider["provider"],
                     spread_home=float(provider["spread"]),

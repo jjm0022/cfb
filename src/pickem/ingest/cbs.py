@@ -12,7 +12,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from pickem.models import Game, LeagueLine, Sport, make_game_id
+from pickem.models import Game, LeagueLine, Sport
+from pickem.resolve.matchup import CanonicalMatchup, resolve_matchup
 from pickem.resolve.resolver import TeamResolver
 
 # "<away> [spread] at <home> [spread]" — the number may sit on either team.
@@ -39,30 +40,25 @@ class ParseResult(BaseModel):
 
 def _parsed_game(
     *,
-    sport: Sport,
-    season: int,
-    week: int,
-    away_team_id: str,
-    home_team_id: str,
+    matchup: CanonicalMatchup,
     spread_home: float,
     posted_at: datetime,
     kickoff_utc: datetime | None = None,
 ) -> ParsedCbsGame:
-    game_id = make_game_id(sport, season, week, away_team_id, home_team_id)
     return ParsedCbsGame(
         game=Game(
-            game_id=game_id,
-            sport=sport,
-            season=season,
-            week=week,
+            game_id=matchup.game_id,
+            sport=matchup.sport,
+            season=matchup.season,
+            week=matchup.week,
             kickoff_utc=kickoff_utc or posted_at,
-            home_team_id=home_team_id,
-            away_team_id=away_team_id,
+            home_team_id=matchup.home_team_id,
+            away_team_id=matchup.away_team_id,
         ),
         league_line=LeagueLine(
-            game_id=game_id,
-            season=season,
-            week=week,
+            game_id=matchup.game_id,
+            season=matchup.season,
+            week=matchup.week,
             spread_home=spread_home,
             posted_at=posted_at,
         ),
@@ -111,16 +107,18 @@ def parse_cbs_block(
         # sign to express the same line from the home team's perspective.
         spread_home = home_num if home_num is not None else -away_num
 
-        away_id = resolver.resolve(match.group("away"), sport)
-        home_id = resolver.resolve(match.group("home"), sport)
+        matchup = resolve_matchup(
+            resolver=resolver,
+            sport=sport,
+            season=season,
+            week=week,
+            away_name=match.group("away"),
+            home_name=match.group("home"),
+        )
 
         games.append(
             _parsed_game(
-                sport=sport,
-                season=season,
-                week=week,
-                away_team_id=away_id,
-                home_team_id=home_id,
+                matchup=matchup,
                 spread_home=spread_home,
                 posted_at=posted_at,
             )

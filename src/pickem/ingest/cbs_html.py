@@ -20,6 +20,7 @@ from typing import Any
 
 from pickem.ingest.cbs import CbsParseError, ParsedCbsGame, ParseResult, _parsed_game
 from pickem.models import Sport
+from pickem.resolve.matchup import resolve_matchup
 from pickem.resolve.resolver import TeamResolver
 
 _MARKER = "ApolloSSRDataTransport"
@@ -161,8 +162,14 @@ def parse_cbs_html(
 
         # `homeTeamSpread` is already home-perspective favourite-negative,
         # which is this codebase's convention. No flip. Pinned by a test.
-        away_id = resolver.resolve(away_name, sport)
-        home_id = resolver.resolve(home_name, sport)
+        matchup = resolve_matchup(
+            resolver=resolver,
+            sport=sport,
+            season=season,
+            week=week,
+            away_name=away_name,
+            home_name=home_name,
+        )
         kickoff_utc = None
         starts_at = event.get("startsAt")
         if isinstance(starts_at, int | float) and not isinstance(starts_at, bool):
@@ -170,11 +177,7 @@ def parse_cbs_html(
 
         games.append(
             _parsed_game(
-                sport=sport,
-                season=season,
-                week=week,
-                away_team_id=away_id,
-                home_team_id=home_id,
+                matchup=matchup,
                 spread_home=float(spread),
                 posted_at=posted_at,
                 kickoff_utc=kickoff_utc,

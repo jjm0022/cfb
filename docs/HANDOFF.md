@@ -106,14 +106,9 @@ src/pickem/resolve/resolver.py    TeamResolver, UnknownTeamError (fail-loud).
                                   and punctuation.
 src/pickem/resolve/aliases.yaml   canonical team IDs -> every source's spelling.
                                   All 32 NFL teams and all 136 FBS schools.
-src/pickem/store/db.py            Store — the only module that talks to DuckDB.
-                                  Context manager. upsert_games COALESCEs
-                                  scores; insert_games_if_absent for CBS. Every
-                                  writer goes through _executemany, which
-                                  treats "nothing to write" as normal.
+src/pickem/store/db.py            Safe writes plus coherent week/range reads.
 src/pickem/store/schema.sql       DuckDB DDL; `lines` is append-only
-src/pickem/ingest/cbs.py          parse_cbs_block -> ParseResult (lines,
-                                  matchups, kickoffs, skipped); CbsParseError
+src/pickem/ingest/cbs.py          Complete CBS game + league-line intake records.
 src/pickem/ingest/cbs_html.py     parse_cbs_html — the saved CBS page. Reads the
                                   Apollo SSR blob the page server-renders, not
                                   the DOM. Same ParseResult, plus real kickoff
@@ -123,11 +118,8 @@ src/pickem/edge/divergence.py     Thresholds, consensus_spread, compute_edge,
                                   rank_edges. Pure; no I/O.
 src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
                                   tiebreak_side. Pure; no I/O.
-src/pickem/edge/pipeline.py       apply_tiebreaks resolves only COINFLIP and
-                                  NO_MARKET edges with Elo; strong/lean edges
-                                  pass through, and an unmatched game raises
-                                  MissingGameError. predict_tiebreaker_total
-                                  returns the median available market total.
+src/pickem/edge/pipeline.py       The only public edge decision interface; every
+                                  returned Edge is a final pick.
 src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
                                   `loader` is injected so tests stay offline.
                                   _kickoff combines gameday + gametime through
@@ -149,6 +141,7 @@ src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
 src/pickem/backtest/snapshots.py  Pure planner: a stored schedule becomes the
                                   exact archive requests to make, plus their
                                   credit cost, before anything is spent.
+src/pickem/backtest/archive.py    Paid archive planning/execution policy.
 src/pickem/backtest/calibration.py
                                   calibrate — the check on the substitution the
                                   whole backtest rests on. Residual is the CBS
@@ -170,6 +163,7 @@ src/pickem/config.py              Default DuckDB path and environment-sourced
                                   Odds API / CFBD keys. Loads `.env` on import
                                   with override=False, so an exported variable
                                   always wins over the file.
+src/pickem/resolve/matchup.py     Canonical matchup identity shared by all adapters.
 src/pickem/cli.py                 Typer commands: ingest-cbs, poll-odds
                                   (--days for the kickoff window), report,
                                   sync-results (--sport nfl|cfb), backfill,
@@ -295,6 +289,9 @@ ledger's structure makes sense.
   be in the slate anyway, since slate ids are built from names that already
   resolved. Both paths are visible; neither is silent. Missing market lines are
   reported as `NO_MARKET`, never skipped. Never fabricate or interpolate a line.
+- **Source adapters own source-specific intake behavior.** Canonical matchup
+  identity is shared, while each adapter retains its own skip/fail policy and
+  spread normalization convention.
 - **Team-name matching folds diacritics and punctuation.** CFBD writes
   "San José State" and "Hawai'i" where the odds feed writes "San Jose State"
   and "Hawaii". `_normalize` folds these so the alias table does not need a row
@@ -377,7 +374,7 @@ permanently into the append-only `lines` table while the real week reported
 2. a **`slate`** of canonical game ids, checked after resolution. It catches
    in-window events that are simply not on our sheet.
 
-`poll-odds` derives the slate from `league_lines_for_week`, takes `--days`
+`poll-odds` derives the slate from `load_week(...).league_lines`, takes `--days`
 (default 7) for the window, and refuses to run before `ingest-cbs`.
 
 ## Verified against the live APIs (2026-08-11)

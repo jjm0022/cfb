@@ -17,7 +17,8 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from pickem.models import Game, MarketLine, MarketLinesResult, Sport, make_game_id
+from pickem.models import Game, MarketLine, MarketLinesResult, Sport
+from pickem.resolve.matchup import resolve_matchup
 from pickem.resolve.resolver import TeamResolver
 
 Loader = Callable[[Sequence[int]], pl.DataFrame]
@@ -58,17 +59,23 @@ def load_nfl_games(
     frame = (loader or _default_loader)(seasons)
     games: list[Game] = []
     for row in frame.iter_rows(named=True):
-        home = resolver.resolve(row["home_team"], Sport.NFL)
-        away = resolver.resolve(row["away_team"], Sport.NFL)
+        matchup = resolve_matchup(
+            resolver=resolver,
+            sport=Sport.NFL,
+            season=row["season"],
+            week=row["week"],
+            away_name=row["away_team"],
+            home_name=row["home_team"],
+        )
         games.append(
             Game(
-                game_id=make_game_id(Sport.NFL, row["season"], row["week"], away, home),
-                sport=Sport.NFL,
-                season=row["season"],
-                week=row["week"],
+                game_id=matchup.game_id,
+                sport=matchup.sport,
+                season=matchup.season,
+                week=matchup.week,
                 kickoff_utc=_kickoff(row["gameday"], row.get("gametime")),
-                home_team_id=home,
-                away_team_id=away,
+                home_team_id=matchup.home_team_id,
+                away_team_id=matchup.away_team_id,
                 home_score=row["home_score"],
                 away_score=row["away_score"],
             )
@@ -85,16 +92,21 @@ def load_nfl_closing_lines(
     for row in frame.iter_rows(named=True):
         # Resolve teams first (unknown teams must still raise, never become a
         # skipped line) so a missing spread can be named by game_id below.
-        home = resolver.resolve(row["home_team"], Sport.NFL)
-        away = resolver.resolve(row["away_team"], Sport.NFL)
-        game_id = make_game_id(Sport.NFL, row["season"], row["week"], away, home)
+        matchup = resolve_matchup(
+            resolver=resolver,
+            sport=Sport.NFL,
+            season=row["season"],
+            week=row["week"],
+            away_name=row["away_team"],
+            home_name=row["home_team"],
+        )
         if row["spread_line"] is None:
             # never default a missing line to 0.0; that reads as a pick'em
-            skipped.append(f"{game_id}: close — no spread")
+            skipped.append(f"{matchup.game_id}: close — no spread")
             continue
         lines.append(
             MarketLine(
-                game_id=game_id,
+                game_id=matchup.game_id,
                 source="nflverse",
                 book="close",
                 spread_home=-float(row["spread_line"]),

@@ -46,8 +46,8 @@ from pickem.models import (
     MarketLine,
     MarketLinesResult,
     Sport,
-    make_game_id,
 )
+from pickem.resolve.matchup import resolve_matchup
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 BASE_URL = "https://api.the-odds-api.com/v4"
@@ -134,12 +134,18 @@ def _parse_events(
         # must pick. Either way nothing is dropped in silence: poll-odds
         # prints these, and a game left without a market shows as NO_MARKET.
         try:
-            home = resolver.resolve(home_name, sport)
-            away = resolver.resolve(away_name, sport)
+            matchup = resolve_matchup(
+                resolver=resolver,
+                sport=sport,
+                season=season,
+                week=week,
+                away_name=away_name,
+                home_name=home_name,
+            )
         except UnknownTeamError as exc:
             skipped.append(f"{away_name} at {home_name}: not a team we track ({exc}) — not stored")
             continue
-        game_id = make_game_id(sport, season, week, away, home)
+        game_id = matchup.game_id
 
         if game_id not in wanted:
             skipped.append(

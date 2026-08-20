@@ -15,6 +15,7 @@ from pickem.ingest.cfbd_source import load_cfb_lines
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import NFL_KEY, OddsClient
 from pickem.models import Sport, make_game_id
+from pickem.resolve.matchup import resolve_matchup
 from pickem.resolve.resolver import TeamResolver
 
 NOW = datetime(2025, 9, 21, 12, 0, tzinfo=UTC)
@@ -23,6 +24,18 @@ EXPECTED = "nfl-2025-03-BUF-at-MIA"
 
 def resolver():
     return TeamResolver.default()
+
+
+def test_canonical_matchup_is_the_contract_all_adapters_share():
+    matchup = resolve_matchup(
+        resolver=TeamResolver.default(),
+        sport=Sport.NFL,
+        season=2025,
+        week=3,
+        away_name="Buffalo Bills",
+        home_name="Miami Dolphins",
+    )
+    assert matchup.game_id == "nfl-2025-03-BUF-at-MIA"
 
 
 def test_cbs_nflverse_and_the_odds_feed_agree_on_one_id():
