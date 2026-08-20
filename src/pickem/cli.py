@@ -273,6 +273,49 @@ def backfill(
         )
 
 
+@app.command("backfill-cfb")
+def backfill_cfb(
+    start: int = typer.Option(2020, "--from"),
+    end: int = typer.Option(2025, "--to"),
+    weeks: int = typer.Option(15, help="Regular-season weeks to sweep per season"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Load historical CFB results, which is what trains the Elo tiebreak.
+
+    Scores only — this touches no paid quota. CFBD is free, and the odds
+    archive backfill is a separate, paid decision.
+    """
+    resolver = TeamResolver.default()
+    fetcher = default_games_fetcher(CfbdConfig.from_env())
+
+    total = 0
+    with_scores = 0
+    with _store(db) as store:
+        for season in range(start, end + 1):
+            season_games: list[Game] = []
+            for week in range(1, weeks + 1):
+                # An unknown school RAISES here, as everywhere CFBD is read: this
+                # is a curated FBS-vs-FBS feed, not the odds firehose, so a name
+                # we cannot place means the alias table is wrong.
+                season_games.extend(
+                    load_cfb_games(season, week, resolver=resolver, fetcher=fetcher)
+                )
+            store.upsert_games(season_games)
+            scored = sum(1 for g in season_games if g.home_score is not None)
+            total += len(season_games)
+            with_scores += scored
+            typer.echo(f"  {season}: {len(season_games)} games, {scored} with final scores")
+
+    # Counted separately: a cancelled game is still a real fixture and is
+    # stored, but it contributes nothing to the rating.
+    typer.echo(f"loaded {total} games, {with_scores} with final scores")
+    if total and not with_scores:
+        typer.secho(
+            "no final scores loaded, so the tiebreak rating is still untrained",
+            fg="yellow",
+        )
+
+
 @app.command("backfill-history")
 def backfill_history(
     start: int = typer.Option(2020, "--from"),
