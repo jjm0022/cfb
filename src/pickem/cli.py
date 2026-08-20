@@ -10,9 +10,15 @@ from pathlib import Path
 import typer
 
 from pickem import config
+from pickem.backtest.archive import (
+    ArchiveBackfill,
+    ArchiveProgress,
+    ArchiveRunInterrupted,
+    CreditLimitExceeded,
+    NoHistoricalGames,
+)
 from pickem.backtest.calibration import DEFAULT_TOLERANCE, calibrate
 from pickem.backtest.runner import run_backtest, split_proxies
-from pickem.backtest.snapshots import SnapshotKind, estimate_credits, plan_snapshots
 from pickem.edge.divergence import rank_edges
 from pickem.edge.pipeline import MissingGameError, decide_edges
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
@@ -20,7 +26,7 @@ from pickem.ingest.cbs_html import parse_cbs_html
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import CFB_KEY, NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
-from pickem.models import FROZEN_SOURCE, SUBMISSION_SOURCE, Game, Sport
+from pickem.models import Game, Sport
 from pickem.report.sheet import render_sheet
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
@@ -42,6 +48,15 @@ def _warn_skipped(header: str, skipped: list[str]) -> None:
     typer.secho(f"{header} ({len(skipped)}):", fg="yellow")
     for row in skipped:
         typer.secho(f"  skipped: {row}", fg="yellow")
+
+
+def _archive_progress(progress: ArchiveProgress) -> None:
+    request = progress.request
+    typer.echo(
+        f"[{progress.index}/{progress.total}] {request.season} "
+        f"wk{request.week:02d} {request.kind.value}: {progress.line_count} lines"
+    )
+    _warn_skipped(f"snapshot {progress.index} rows not stored", progress.skipped)
 
 
 @app.command("ingest-cbs")
@@ -317,65 +332,38 @@ def backfill_history(
     """
     with _store(db) as store:
         dataset = store.load_seasons(Sport.NFL, start, end)
-        games = dataset.games
-        if not games:
-            typer.secho(
-                f"no NFL games stored for {start}-{end}; run `pickem backfill` first",
-                fg="red",
-                err=True,
-            )
-            raise typer.Exit(code=1)
 
-        plan = plan_snapshots(games)
-        cost = estimate_credits(plan)
-        frozen_count = sum(1 for request in plan if request.kind is SnapshotKind.FROZEN)
-        weeks = len({(request.season, request.week) for request in plan})
-        typer.echo(
-            f"{len(plan)} snapshots ({frozen_count} frozen, {len(plan) - frozen_count} "
-            f"submission) across {weeks} weeks = {cost} credits"
-        )
-        if cost > max_credits:
-            typer.secho(
-                f"plan exceeds the {max_credits}-credit ceiling; narrow --from/--to",
-                fg="red",
-                err=True,
+        def client_factory() -> OddsClient:
+            return OddsClient(config.odds_api_key())
+
+        archive = ArchiveBackfill(store, TeamResolver.default(), client_factory)
+        try:
+            report = archive.run(
+                dataset.games,
+                max_credits=max_credits,
+                execute=execute,
+                on_progress=_archive_progress,
             )
-            raise typer.Exit(code=1)
+        except NoHistoricalGames as exc:
+            typer.secho(f"{exc}; run `pickem backfill` first", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        except CreditLimitExceeded as exc:
+            typer.secho(str(exc), fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        except ArchiveRunInterrupted as exc:
+            typer.secho(str(exc), fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+
+        typer.echo(
+            f"{report.total_snapshots} snapshots ({report.frozen_snapshots} frozen, "
+            f"{report.submission_snapshots} submission) across {report.weeks} weeks "
+            f"= {report.credits} credits"
+        )
         if not execute:
             typer.secho(
                 "dry run — pass --execute to spend credits and write rows",
                 fg="yellow",
             )
-            return
-
-        with OddsClient(config.odds_api_key()) as client:
-            for index, request in enumerate(plan, start=1):
-                source = FROZEN_SOURCE if request.kind is SnapshotKind.FROZEN else SUBMISSION_SOURCE
-                try:
-                    result = client.fetch_historical_spreads(
-                        NFL_KEY,
-                        resolver=TeamResolver.default(),
-                        sport=Sport.NFL,
-                        season=request.season,
-                        week=request.week,
-                        at=request.at,
-                        slate=request.slate,
-                        window=request.window,
-                        source=source,
-                    )
-                except QuotaExhausted as exc:
-                    # Half a backfill is fine; half a backfill nobody knows is
-                    # half is not.
-                    typer.secho(
-                        f"stopped at snapshot {index}/{len(plan)}: {exc}", fg="red", err=True
-                    )
-                    raise typer.Exit(code=1) from exc
-                store.append_market_lines(result.lines)
-                typer.echo(
-                    f"[{index}/{len(plan)}] {request.season} wk{request.week:02d} "
-                    f"{request.kind.value}: {len(result.lines)} lines"
-                )
-                _warn_skipped(f"snapshot {index} rows not stored", result.skipped)
 
 
 @app.command("backtest")

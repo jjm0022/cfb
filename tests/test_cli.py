@@ -1,7 +1,7 @@
 from typer.testing import CliRunner
 
+from pickem.backtest.archive import ArchiveRunInterrupted
 from pickem.cli import app
-from pickem.models import Sport
 
 runner = CliRunner()
 
@@ -225,58 +225,26 @@ def _seed_two_slots(db):
         store.upsert_games(games)
 
 
-class _StubClient:
-    """An OddsClient that answers without a network or a credit."""
-
-    calls: list = []
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc_info):
-        return None
-
-    def fetch_historical_spreads(self, *args, **kwargs):
-        from pickem.models import MarketLine, MarketLinesResult
-
-        _StubClient.calls.append(kwargs)
-        return MarketLinesResult(
-            lines=[
-                MarketLine(
-                    game_id=game_id,
-                    source=kwargs["source"],
-                    book="pinnacle",
-                    spread_home=-3.0,
-                    captured_at=kwargs["at"],
-                )
-                for game_id in sorted(kwargs["slate"])
-            ],
-            skipped=["some-other-game: not in the slate — not stored"],
-        )
-
-
-def test_backfill_history_dry_run_spends_nothing(tmp_path, monkeypatch):
+def test_backfill_history_dry_run_prints_plan_without_spending(tmp_path, monkeypatch):
+    # Catches eagerly reading the paid-adapter key for a dry run.
     db = tmp_path / "t.duckdb"
     _seed_two_slots(db)
 
-    def explode(*args, **kwargs):
-        raise AssertionError("a dry run must never construct a client")
+    def explode():
+        raise AssertionError("dry run read the paid-adapter key")
 
-    monkeypatch.setattr("pickem.cli.OddsClient", explode)
+    monkeypatch.setattr("pickem.config.odds_api_key", explode)
     result = runner.invoke(
         app, ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db)]
     )
     assert result.exit_code == 0, result.output
-    assert "dry run" in result.stdout.lower()
-    # One frozen anchor plus two kickoff slots, at 10 credits each.
-    assert "3 snapshots" in result.stdout
-    assert "30 credits" in result.stdout
+    assert "3 snapshots" in result.output
+    assert "30 credits" in result.output
+    assert "dry run" in result.output.lower()
 
 
-def test_backfill_history_refuses_to_exceed_the_credit_ceiling(tmp_path):
+def test_backfill_history_translates_credit_limit_to_exit_one(tmp_path):
+    # Catches leaking ArchiveBackfill's credit-limit exception as a traceback.
     db = tmp_path / "t.duckdb"
     _seed_two_slots(db)
     result = runner.invoke(
@@ -295,62 +263,22 @@ def test_backfill_history_refuses_to_exceed_the_credit_ceiling(tmp_path):
         ],
     )
     assert result.exit_code == 1
-    assert "exceeds" in result.output.lower()
+    assert "credit ceiling" in result.output.lower()
 
 
-def test_backfill_history_without_stored_games_says_what_to_run_first(tmp_path):
-    from pickem.store.db import Store
-
-    db = tmp_path / "empty.duckdb"
-    with Store(db) as store:
-        store.init_schema()
-    result = runner.invoke(
-        app, ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db)]
-    )
-    assert result.exit_code == 1
-    assert "backfill" in result.output.lower()
-
-
-def test_backfill_history_writes_both_proxies_and_reports_skips(tmp_path, monkeypatch):
-    _StubClient.calls = []
+def test_backfill_history_translates_interruption_to_exit_one(tmp_path, monkeypatch):
+    # Catches leaking an interrupted archive run instead of presenting its position.
     db = tmp_path / "t.duckdb"
     _seed_two_slots(db)
-    monkeypatch.setattr("pickem.cli.OddsClient", _StubClient)
-    monkeypatch.setattr("pickem.config.odds_api_key", lambda: "test-key")
+    monkeypatch.setattr(
+        "pickem.cli.ArchiveBackfill.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ArchiveRunInterrupted(2, 3, "test quota exhausted")
+        ),
+    )
     result = runner.invoke(
         app,
         ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db), "--execute"],
     )
-    assert result.exit_code == 0, result.output
-    # Nothing a source could not give us is dropped in silence.
-    assert "not in the slate" in result.stdout
-
-    sources = {call["source"] for call in _StubClient.calls}
-    assert sources == {"oddsapi:frozen", "oddsapi:submit"}
-
-    from pickem.store.db import Store
-
-    with Store(db) as store:
-        dataset = store.load_week(Sport.NFL, 2024, 3)
-        stored = [line for line in dataset.market_lines if line.game_id == "nfl-2024-03-BUF-at-MIA"]
-    assert {line.source for line in stored} == {"oddsapi:frozen", "oddsapi:submit"}
-
-
-def test_backfill_history_stops_on_quota_exhaustion(tmp_path, monkeypatch):
-    from pickem.ingest.odds import QuotaExhausted
-
-    class _Broke(_StubClient):
-        def fetch_historical_spreads(self, *args, **kwargs):
-            raise QuotaExhausted("odds api returned 401")
-
-    db = tmp_path / "t.duckdb"
-    _seed_two_slots(db)
-    monkeypatch.setattr("pickem.cli.OddsClient", _Broke)
-    monkeypatch.setattr("pickem.config.odds_api_key", lambda: "test-key")
-    result = runner.invoke(
-        app,
-        ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db), "--execute"],
-    )
-    # Stopping loudly beats half a backfill nobody knows is half.
     assert result.exit_code == 1
-    assert "stopped at snapshot 1/3" in result.output
+    assert "stopped at snapshot 2/3" in result.output
