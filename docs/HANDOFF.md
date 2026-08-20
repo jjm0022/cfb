@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-19, after the historical backfill and the first real backtest
+**Last updated:** 2026-08-19, after the NFL archive backfill and the first real backtest
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -19,36 +19,84 @@ Scoring is flat (1 point per correct pick) with a tiebreaker, so the goal is
 simply to maximize expected correct picks. There is no confidence-point
 allocation problem.
 
+## Start here
+
+You have a working system with a real result. Nothing is half-finished and
+there is no branch to merge. Orient yourself in about two minutes:
+
+```bash
+uv run pytest -q                              # expect 220 passed
+uv run pickem backtest --from 2020 --to 2025  # expect the result below
+uv run pickem --help                          # the whole surface, 7 commands
+```
+
+Then read "The phase-exit result" at the bottom of this file — it is the
+finding everything else now serves — and "Remaining work" for what to do next.
+
+**The strategy is not a prediction model and should not become one by
+accident.** Every instinct to "improve the picks" should be checked against
+"Load-bearing conventions" first; several obvious improvements are known to be
+wrong and are recorded there with their reasons.
+
 ## Read these, in order
 
 1. **Spec:** `docs/superpowers/specs/2026-08-11-pickem-edge-design.md`
-2. **Plan:** `docs/superpowers/plans/2026-08-11-pickem-edge-engine.md` — 15 TDD
-   tasks, each with complete test and implementation code
-3. **Ledger:** `.superpowers/sdd/2026-08-11-pickem-edge-engine/progress.md` —
-   authoritative record of what is done. Trust it and `git log` over memory.
+2. **Plan (Phase A, complete):**
+   `docs/superpowers/plans/2026-08-11-pickem-edge-engine.md` — 15 TDD tasks
+3. **Plan (backfill, complete):**
+   `docs/superpowers/plans/2026-08-19-odds-api-historical-backfill.md` — 6 tasks
+4. **Research:** `docs/research/2026-08-19-odds-api-historical.md` — verified
+   Odds API archive facts, credit costs, and why both proxies share a source
+5. **Ledger:** `.superpowers/sdd/2026-08-11-pickem-edge-engine/progress.md` —
+   Phase A only. Trust it and `git log` over memory.
 
 ## Current state
 
-- **Branch:** all work is on `master`. `phase-a-edge-engine` was merged and
-  deleted on 2026-08-11. There is no remote configured.
-- **Tests:** 174 passing, `uv run pytest -q` (the suite is fully offline)
+- **Branch:** all work is on `master`, working tree clean. There is no remote
+  configured, so `git log` is the only history and nothing is pushed anywhere.
+- **Tests:** 220 passing, `uv run pytest -q`. The suite is fully offline — HTTP
+  is injected via `httpx.MockTransport` and loaders are injected. Keep it that
+  way; no test may touch the network.
 - **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`
   are both clean repo-wide.
-- **Phase A is code-complete.** Tasks 1-15, amendments 9a/12a/13a/14a, the final
-  whole-branch review and its fix wave, the scoped re-review and its fix, an
-  end-to-end integration test, and the live CFB alias sweep are all done.
-- **The historical backfill is done and the backtest has a real number.** See
-  "The phase-exit result" below. What remains is a real CBS paste and the
-  Phase B decision it informs.
-- **Do not re-run the SDD task loop.** Every task is committed; `git log` is the
-  record.
+- **Phase A is code-complete** (tasks 1-15, amendments 9a/12a/13a/14a, a final
+  whole-branch review, its fix wave, and a scoped re-review).
+- **The NFL archive backfill is complete and the backtest has a real number.**
+  See "The phase-exit result" at the bottom.
+- **Do not re-run either SDD task loop.** Every task in both plans is
+  committed; `git log` is the record.
+
+### Data state (2026-08-19)
+
+`data/pickem.duckdb` is gitignored, exists only on this machine, and represents
+9,390 non-refundable API credits. There is no backup — if it is lost, the
+backfill costs another ~$30 and an hour to rebuild.
+
+| table | rows | note |
+|---|---|---|
+| `games` | 1,693 | NFL 2020-2025, real kickoff instants. **No CFB games at all.** |
+| `lines` / `oddsapi:frozen` | 22,351 | early-week proxy, ~10 books per game |
+| `lines` / `oddsapi:submit` | 24,237 | pre-kickoff proxy, ~10 books per game |
+| `lines` / `nflverse` | 1,693 | closing lines, kept as a cross-check only |
+| `league_lines` | 0 | **no CBS paste has ever been ingested** |
+| `picks` | 0 | no sheet has been rendered against real data |
+
+Integrity checks that were run and must keep holding: zero lines orphaned from
+`games`, and zero `oddsapi:submit` rows captured at or after their own kickoff.
+
+**Odds API:** paid 20K tier, **9,390 credits used, 10,610 remaining**. Historical
+requests cost 10 credits each; live ones cost 1. `/v4/sports` is free and
+reports the balance in `x-requests-remaining`.
 
 ## What is built
 
 ```
 src/pickem/models.py              Sport/Side/Tier StrEnums, make_game_id, Game,
                                   LeagueLine, MarketLine, MarketLinesResult,
-                                  Edge
+                                  Edge. Also owns the market `source` labels
+                                  (LIVE/FROZEN/SUBMISSION) so ingest and
+                                  backtest share a vocabulary without either
+                                  importing the other.
 src/pickem/resolve/resolver.py    TeamResolver, UnknownTeamError (fail-loud).
                                   _normalize folds case, whitespace, diacritics
                                   and punctuation.
@@ -56,7 +104,9 @@ src/pickem/resolve/aliases.yaml   canonical team IDs -> every source's spelling.
                                   All 32 NFL teams and all 136 FBS schools.
 src/pickem/store/db.py            Store — the only module that talks to DuckDB.
                                   Context manager. upsert_games COALESCEs
-                                  scores; insert_games_if_absent for CBS.
+                                  scores; insert_games_if_absent for CBS. Every
+                                  writer goes through _executemany, which
+                                  treats "nothing to write" as normal.
 src/pickem/store/schema.sql       DuckDB DDL; `lines` is append-only
 src/pickem/ingest/cbs.py          parse_cbs_block -> ParseResult (lines,
                                   matchups, skipped); CbsParseError
@@ -71,24 +121,32 @@ src/pickem/edge/pipeline.py       apply_tiebreaks resolves only COINFLIP and
                                   returns the median available market total.
 src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
                                   `loader` is injected so tests stay offline.
+                                  _kickoff combines gameday + gametime through
+                                  US/Eastern for the true UTC instant.
 src/pickem/ingest/cfbd_source.py  CfbdConfig, load_cfb_games, load_cfb_lines.
                                   `fetcher` is injected. Talks to the CFBD REST
                                   API over httpx — NOT the `cfbd` SDK, which
                                   pins pydantic<2. Retries 429 with backoff.
                                   Both loaders keep FBS-vs-FBS games only.
-src/pickem/ingest/odds.py         OddsClient.fetch_spreads for live book lines;
-                                  injectable HTTP transport keeps tests offline.
-                                  Requires BOTH a kickoff `window` and a `slate`
-                                  of game ids. QuotaExhausted is distinct from
-                                  feed errors. Retries transport/5xx with
-                                  backoff. Context manager.
+src/pickem/ingest/odds.py         OddsClient.fetch_spreads (live) and
+                                  fetch_historical_spreads (archive, 10 credits
+                                  a call). Both share _parse_events, so the two
+                                  paths cannot drift. Both require a kickoff
+                                  `window` and a `slate` of game ids.
+                                  QuotaExhausted is distinct from feed errors.
+                                  Retries transport/5xx. Context manager.
 src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
                                   Wilson score intervals. Pure; no I/O.
-src/pickem/backtest/runner.py     run_backtest replays opener/closer proxies
-                                  through compute_edge AND apply_tiebreaks;
-                                  split_proxies classifies stored lines;
-                                  BacktestReport carries tier records,
-                                  assumptions and skip reasons. Pure; no I/O.
+src/pickem/backtest/snapshots.py  Pure planner: a stored schedule becomes the
+                                  exact archive requests to make, plus their
+                                  credit cost, before anything is spent.
+src/pickem/backtest/runner.py     run_backtest replays the frozen and submission
+                                  proxies through compute_edge AND
+                                  apply_tiebreaks; both ends collapse through
+                                  consensus_spread. split_proxies classifies
+                                  stored lines by `source`. BacktestReport
+                                  carries tier records, assumptions and skip
+                                  reasons. Pure; no I/O.
 src/pickem/report/sheet.py        render_sheet ranks edges into auditable
                                   markdown with named picks, both spreads,
                                   visible NO_MARKET rows, required provenance,
@@ -99,9 +157,11 @@ src/pickem/config.py              Default DuckDB path and environment-sourced
                                   always wins over the file.
 src/pickem/cli.py                 Typer commands: ingest-cbs, poll-odds
                                   (--days for the kickoff window), report,
-                                  sync-results (--sport nfl|cfb), backfill, and
-                                  backtest. Prints every source skip visibly;
-                                  CBS ingest is atomic.
+                                  sync-results (--sport nfl|cfb), backfill,
+                                  backfill-history (dry run by default,
+                                  --execute to spend, --max-credits ceiling),
+                                  and backtest. Prints every source skip
+                                  visibly; CBS ingest is atomic.
 ```
 
 Tests worth knowing about, beyond the per-module ones:
@@ -153,6 +213,25 @@ ledger's structure makes sense.
 - **Every pick sheet carries provenance and age** (human ruling 13a).
 - **CBS ingestion is atomic** (human ruling 14a): on any skipped row the CLI
   prints the offending rows, exits non-zero, and never opens the database.
+- **Both backtest proxies come from the Odds API archive, never one from
+  nflverse** (2026-08-19). Mixing sources across the two ends puts differing
+  book composition inside the measured divergence, and divergence is the entire
+  strategy. The nflverse closers stay as an independent cross-check.
+- **The frozen proxy is a fixed Tuesday 14:00 UTC anchor, not a market
+  "opening line."** CBS freezes early in the week, which is what is being
+  imitated; a true opener is whenever each book first posted, a different and
+  less relevant moment. The anchor is fixed in UTC rather than tracked against
+  Eastern so re-runs are byte-identical — `captured_at` is part of the `lines`
+  primary key.
+- **`captured_at` for an archived row is the snapshot's own timestamp, never
+  the requested one.** The archive returns the closest snapshot at or earlier
+  than `date`, so stamping the request misdates rows by up to ten minutes and
+  makes a re-run append near-duplicates instead of being a no-op.
+- **Franchise renames are aliases, exactly like era-varying abbreviations.**
+  "Washington Football Team" (2020-2021) was missing and silently dropped that
+  team's games, because the odds feed reports unknown teams rather than
+  raising. Whenever the archive range spans a rename, the old names are live
+  data.
 
 ## Load-bearing conventions — do not "improve" these
 
@@ -209,6 +288,27 @@ ledger's structure makes sense.
   `apply_tiebreaks` the report does, with history that grows only after each
   replayed week. If the two ever diverge again, the backtest stops being
   evidence about the thing being shipped.
+- **Both ends of the divergence collapse through `consensus_spread`.** A
+  per-game dict is last-wins and would grade against whichever book sorted
+  last while the other end took a median, manufacturing and erasing edges
+  silently. A regression test pins this: books at -1.0/-3.0/-9.0 against a
+  -3.0 submission line is a COINFLIP, not a 6-point STRONG edge.
+- **Proxies are classified by `source`, never by book name.** Both carry real
+  bookmaker keys. `oddsapi:frozen` and `oddsapi:submit` are the two proxies;
+  anything else — an in-season `oddsapi` poll, an `nflverse` closer — lands in
+  `split_proxies`' explicit catch-all and is reported as ungraded. That
+  catch-all is what stops live polling from contaminating a replay, so never
+  give it a default branch.
+- **The submission snapshot leads kickoff by 15 minutes, and 5 is not enough.**
+  The Odds API's `commence_time` and nflverse's kickoff disagree by -5 to +2
+  minutes (measured, 2026-08-19). At a 5-minute lead the request lands on the
+  real kickoff for the worst case, and the archive's at-or-earlier rule can
+  then return in-play odds into a proxy that must predate the game. Verified
+  after the fact: every stored `oddsapi:submit` row sits exactly 20 minutes
+  before its kickoff, and none at or after.
+- **"Nothing to store" is not an error.** DuckDB's `executemany` rejects an
+  empty parameter list, so an unguarded writer turns a fully-skipped snapshot
+  into a crash mid-backfill, after the credits for it are spent.
 
 ## The odds poll has two guards, and both are needed
 
@@ -242,23 +342,57 @@ permanently into the append-only `lines` table while the real week reported
   lines across 6 in-window games and reported all 105 skips by reason (103 out
   of window, 2 untracked FCS teams). Live CFB works end to end.
 - Both keys live in `.env` at the repo root (gitignored) and are read
-  automatically. Free tier is 500 credits/month; 4 were used verifying this.
+  automatically. This was on the free tier (500/month); 4 credits were used.
 - Note: polling before the season opens returns nothing, correctly — the
   default window is 7 days. Use `--days` to widen it.
 
+## Verified against the live archive (2026-08-19)
+
+- **926 snapshots fetched, 1,693 NFL games covered, zero orphaned rows.** Every
+  game 2020-2025 has both proxies except 30 with no frozen snapshot (below).
+- **The archive agrees with nflverse.** Comparing the `oddsapi:submit` consensus
+  against nflverse closers on 2024: 71% exact, 97% within 0.5 pts, 100% within
+  1.0 pt, mean absolute difference **0.141**. This is what validates the
+  cross-source joins and the sign convention on real data — a flipped sign
+  would show a mean difference near 9 points, not 0.14.
+- **`tests/fixtures/odds_historical_nfl.json`** is a real captured archive
+  response (2024-09-22T16:55Z, 31 events, 10 books, 10 credits). Two tests
+  replay it offline. Prefer extending it over hand-writing new fixtures: the
+  bugs that cost the most here were all in assumptions a hand-built fixture
+  would have encoded rather than caught.
+
 ## Remaining work
 
-1. **Paste a real CBS block** through `ingest-cbs`, then `poll-odds`, then
-   `report`, and read the sheet for anything that looks wrong. This is the last
-   unverified path — the parser has only ever seen fixtures. It is also the
-   only way to test the assumption the whole backtest rests on: that CBS's
-   frozen number tracks an early-week market snapshot.
-2. **DONE (2026-08-19).** NFL 2020-2025 is backfilled from the Odds API
-   archive: 22,351 frozen-line and 24,237 submission-time rows over 1,693
-   games, 9,390 credits spent of 20,000. **CFB is still open** — it needs
-   `cfbd_source` kickoff times checked the way Task 1 checked nflverse's, and
-   ~4,500 credits. Decide after reading the NFL result below.
-3. **Make the Phase B decision** from the backtest's Wilson intervals.
+Ordered by value. Each names what blocks it.
+
+1. **Paste a real CBS block** through `ingest-cbs` -> `poll-odds` -> `report`
+   and read the sheet.
+   *Blocked* — as of 2026-08-19 the user expected CBS lines in about two
+   weeks, so early September 2026.
+   This is the last unverified code path (the parser has only ever seen
+   fixtures) **and** the only way to test the assumption the entire backtest
+   rests on: that CBS's frozen number tracks an early-week market snapshot.
+   Nothing else on this list matters as much.
+2. **Instrument that calibration before the paste arrives.** Nothing currently
+   compares a stored `league_lines` row against the archive snapshots for the
+   same game. Build it now and the first real paste measures the assumption
+   instead of merely exercising the parser. *Not blocked.*
+3. **Tune the tier thresholds.** 2.0/1.0 were guesses made before any data
+   existed. The real objective is total extra correct picks across the whole
+   sheet, not the purity of the STRONG tier — see the volume table below.
+   Must be done on held-out seasons; tuning on the same six that produced the
+   result would overfit it. *Not blocked, costs nothing.*
+4. **Decide on the CFB backfill** — ~4,500 credits of the 10,610 remaining.
+   *Time-sensitive:* the 20K tier is a monthly subscription, and redoing this
+   after cancelling costs another ~$30. Needs `cfbd_source` kickoff times
+   checked the way `nflverse._kickoff` was (the same date-only bug is plausible
+   there), and note the alias table is FBS-only by design.
+5. **Make the Phase B decision.** See the result below — the honest reading is
+   more nuanced than "Phase B is unnecessary."
+
+Season timing, for context: the CFB season opens in late August 2026 and NFL
+week 1 is early September 2026. In-season polling is cheap (1 credit per call),
+so the free tier would cover weekly use if the subscription is cancelled.
 
 ## Known gaps
 
@@ -273,6 +407,16 @@ permanently into the append-only `lines` table while the real week reported
   input: they agree with the archive to 0.141 pts mean absolute difference,
   100% within a point, which is what validates the joins and the sign
   convention on real data.
+- **30 of 1,693 games have no frozen snapshot and are reported ungraded.**
+  No line was posted at their Tuesday anchor. They cluster in the 2020 weeks
+  5-6 and 2021 week 16 COVID postponements, where the game had no confirmed
+  date to price. This is correct behaviour, not a gap to close: no early-week
+  market existed, which is the same situation CBS would have faced.
+- **CFB has never been backfilled and `games` holds zero CFB rows.** Everything
+  in the phase-exit result is NFL only.
+- **No CBS paste has ever been ingested** (`league_lines` is empty), so the
+  live weekly path has been exercised only with fixtures and one live CFB odds
+  spot-check.
 - **`predict_tiebreaker_total` is unwired, and it is not a loose wire.**
   `odds.py` requests `markets=spreads` only and never populates
   `MarketLine.total`, so wiring it today returns `None` for all live data. Only
@@ -324,12 +468,39 @@ including the ones with no signal, which is not how the sheet is played.
 - **Every season agrees.** STRONG by season: 60.7, 62.1, 62.5, 68.2, 65.6,
   65.1. Six for six above 60%, so no single season carries it.
 
-**What this implies for Phase B:** divergence alone clears the noise floor by a
-wide margin in its top tier, which is the condition the spec set for Phase B
-being unnecessary. The modeling stack (opponent-adjusted EPA, injury, weather)
-is not obviously worth building. Prefer widening what is already working —
-CFB coverage, and tuning the STRONG threshold now that there is data to tune
-it on — over adding a model.
+### Tier volume is the other half of the result
+
+The hit rates alone overstate what this buys, because the league makes you pick
+**every** game. What matters is how much of the sheet each tier covers:
+
+| tier | share of sheet | rate | extra correct picks/season |
+|---|---|---|---|
+| strong | 16.8% (273 decided) | 63.7% | **+6.2** |
+| lean | 27.6% (450) | 54.2% | +3.2 |
+| coinflip | **55.6% (905)** | 49.5% | -0.8 |
+| | | | **+8.7 total** |
+
+STRONG fires on about **2.1 games per week** out of ~12.4 decided. So the
+realized season is the overall 53.2%, worth roughly **+8.7 correct picks over a
+coin flip per season**. Against the ~8.2-pick standard deviation of a 272-game
+season that is about one sigma: a real edge that wins more often than not, not
+a dominant one.
+
+**What this implies for Phase B — read this carefully, an earlier version of
+this document got it wrong.** The tempting reading is "divergence clears the
+noise floor, so the modeling stack is unnecessary." That is too quick.
+Divergence works where it fires but is **silent on 55.6% of the sheet**, and
+those coinflip games sit at 49.5% — pure noise. That silent majority is now the
+largest untapped pool: moving coinflips from 49.5% to even 52.5% would add
+roughly what the entire STRONG tier contributes today.
+
+So the honest framing is that Phase A succeeded at what it measured and left
+the bigger half of the problem untouched. Modeling (opponent-adjusted EPA,
+injury, weather) is best justified **as a replacement for the Elo tiebreak on
+coinflip games**, not as a competitor to divergence — which it should never
+override (see "Load-bearing conventions"). Tuning thresholds (item 3 above) is
+cheaper and should come first, since it may reallocate volume between the tiers
+and change this arithmetic.
 
 **What the number does NOT establish.** The frozen line is proxied by a Tuesday
 market snapshot, not by a real CBS line, because historical CBS numbers were
@@ -338,6 +509,30 @@ real edge differs from this one in a direction this backtest cannot see. That
 becomes checkable within weeks, once real pastes accumulate next to live
 `poll-odds` snapshots — and it is the single most valuable thing left to do.
 
-30 of 1,693 games are reported ungraded: no line was posted at their Tuesday
-anchor. They cluster in the 2020 weeks 5-6 and 2021 week 16 COVID
-postponements, where the game had no confirmed date to price.
+## Bugs the real data found, and what they teach
+
+All four were found by running against real APIs and real stored data, not by
+tests. Three of them could not have been caught by fixtures, because the
+fixtures encoded the same wrong assumption as the code.
+
+1. **`_kickoff` parsed `gameday` only**, so every NFL kickoff was midnight UTC.
+   Phase A deferred this as "operationally inert" and it genuinely was, until a
+   feature was built that depended on kickoff times. *A deferral is only valid
+   against the code that exists when it is made.*
+2. **`run_backtest` kept one arbitrary opener per game** (a last-wins dict
+   comprehension). Correct with one nflverse line per game; silently wrong the
+   moment a multi-book snapshot arrived. *Found by reading the code while
+   planning, not by any test — the plan document paid for itself here.*
+3. **The 5-minute submission lead** collided with the sources' kickoff
+   disagreement. *Found by buying one snapshot for 10 credits and diffing it
+   against the schedule, before spending 9,000 more.*
+4. **The missing "Washington Football Team" alias** silently dropped that
+   team's games, and only surfaced because an unrelated empty-writer crash
+   halted the run. *The loud crash was lucky; the silent alias gap was the real
+   bug. Prefer checks that fail loudly over ones that produce a
+   complete-looking result.*
+
+The general lesson, worth keeping: **spend a small amount of real money early to
+check assumptions, before spending a large amount.** Task 6 of the backfill plan
+was ordered cheapest-verification-first for this reason, and it is why the total
+damage from all four bugs was ~110 wasted credits.
