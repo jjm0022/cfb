@@ -157,19 +157,19 @@ def test_report_shows_provenance_and_records_its_picks(tmp_path):
 
 
 def test_backtest_explains_why_nothing_was_graded(tmp_path):
-    # After `backfill` there are no opening lines at all, so every game is
-    # excluded. A bare 0-0-0 with no reason is the silent degradation the
-    # project forbids.
+    # Before `backfill-history` there are no frozen-line snapshots at all, so
+    # every game is excluded. A bare 0-0-0 with no reason is the silent
+    # degradation the project forbids.
     db = tmp_path / "test.duckdb"
     _seed(db)
     result = runner.invoke(app, ["backtest", "--from", "2025", "--to", "2025", "--db", str(db)])
     assert result.exit_code == 0, result.output
     assert "0-0-0" in result.stdout
     assert "games not graded" in result.stdout
-    assert "missing opening line" in result.stdout
-    # The stored oddsapi snapshot is neither proxy and must be named, not
-    # silently graded as a closing line.
-    assert "neither proxy" in result.stdout
+    assert "missing frozen-line snapshot" in result.stdout
+    # The stored in-season oddsapi snapshot is neither proxy and must be named,
+    # not silently graded as a submission-time line.
+    assert "neither the frozen-line nor the submission-time proxy" in result.stdout
 
 
 def test_poll_odds_refuses_to_run_before_the_week_is_ingested(tmp_path):

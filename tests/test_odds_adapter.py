@@ -3,15 +3,8 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from pickem.ingest.odds import (
-    FROZEN_SOURCE,
-    NFL_KEY,
-    SUBMISSION_SOURCE,
-    OddsApiError,
-    OddsClient,
-    QuotaExhausted,
-)
-from pickem.models import Sport
+from pickem.ingest.odds import NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
+from pickem.models import FROZEN_SOURCE, SUBMISSION_SOURCE, Sport
 from pickem.resolve.resolver import TeamResolver
 
 NOW = datetime(2025, 9, 21, 12, 0, tzinfo=UTC)

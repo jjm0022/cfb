@@ -67,6 +67,15 @@ class LeagueLine(BaseModel):
     posted_at: datetime
 
 
+# `source` says which role a stored market row plays; `book` keeps the real
+# bookmaker key in every case, so per-book detail survives and consensus_spread
+# still collapses correctly. The backtest classifies its two proxies on these,
+# which is what keeps an in-season poll from ever being graded as one.
+LIVE_SOURCE = "oddsapi"
+FROZEN_SOURCE = "oddsapi:frozen"
+SUBMISSION_SOURCE = "oddsapi:submit"
+
+
 class MarketLine(BaseModel):
     """One book's spread at one moment. Append-only; never updated in place."""
 

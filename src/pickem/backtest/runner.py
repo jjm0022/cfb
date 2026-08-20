@@ -13,25 +13,35 @@ from collections.abc import Sequence
 from pydantic import BaseModel
 
 from pickem.backtest.stats import Result, grade_pick, wilson_interval
-from pickem.edge.divergence import Thresholds, compute_edge
+from pickem.edge.divergence import Thresholds, compute_edge, consensus_spread
 from pickem.edge.elo import EloConfig
 from pickem.edge.pipeline import apply_tiebreaks
-from pickem.models import Game, LeagueLine, MarketLine, Tier
+from pickem.models import (
+    FROZEN_SOURCE,
+    SUBMISSION_SOURCE,
+    Game,
+    LeagueLine,
+    MarketLine,
+    Tier,
+)
 
 ASSUMPTIONS = [
-    "The frozen league line is proxied by the market OPENING line; the real CBS "
-    "number was never recorded historically and tracks the opener closely but is "
-    "not identical.",
-    "The market at submission time is proxied by the CLOSING line.",
+    "The frozen league line is proxied by an early-week market snapshot taken "
+    "the Tuesday before kickoff; the real CBS number was never recorded "
+    "historically and is also set early in the week, but is not identical.",
+    "The market at submission time is proxied by the last archived snapshot "
+    "before each game's own kickoff.",
+    "Both proxies come from the same feed and the same books, so the measured "
+    "divergence is line movement rather than a difference between sources.",
     "Pushes are excluded from the hit rate rather than counted as half-wins.",
     "Coinflip and no-market games are resolved by the same Elo tiebreak the "
     "weekly report applies, using only games completed before the replayed "
     "week so no future result informs its own pick.",
 ]
 
-OPENER_BOOK = "open"
-CLOSER_SOURCE = "nflverse"
-CLOSER_BOOK = "close"
+# Classified by source, not by book: both proxies carry real bookmaker keys.
+FROZEN_PROXY_SOURCE = FROZEN_SOURCE
+SUBMISSION_PROXY_SOURCE = SUBMISSION_SOURCE
 
 
 # Reported most-confident first, which is the order the tiers are read in.
@@ -75,46 +85,55 @@ def _record(tier: Tier | None, results: Sequence[Result]) -> TierRecord:
 def split_proxies(
     lines: Sequence[MarketLine],
 ) -> tuple[list[MarketLine], list[MarketLine], list[str]]:
-    """Sort stored lines into opening and closing proxies.
+    """Sort stored lines into the frozen-line and submission-time proxies.
 
-    Classification is explicit in both directions. A default bucket would let
-    in-season `poll-odds` snapshots — which share the database with the
-    backfill — be graded as closing lines and quietly contaminate the result.
+    Classification is explicit in both directions and keyed on `source`. A
+    default bucket would let in-season `poll-odds` snapshots — which share the
+    database with the backfill — be graded as a proxy and quietly contaminate
+    the result. nflverse closers land in the same bucket on purpose: they are
+    a cross-check on the archive, not an input, because sourcing the two ends
+    differently would put book composition inside the measured divergence.
     """
-    openers: list[MarketLine] = []
-    closers: list[MarketLine] = []
+    frozen: list[MarketLine] = []
+    submission: list[MarketLine] = []
     skipped: list[str] = []
     for line in lines:
-        if line.book == OPENER_BOOK:
-            openers.append(line)
-        elif line.source == CLOSER_SOURCE and line.book == CLOSER_BOOK:
-            closers.append(line)
+        if line.source == FROZEN_PROXY_SOURCE:
+            frozen.append(line)
+        elif line.source == SUBMISSION_PROXY_SOURCE:
+            submission.append(line)
         else:
             skipped.append(
                 f"{line.game_id}: {line.source}/{line.book} snapshot at "
-                f"{line.captured_at.isoformat()} is neither an opening nor a "
-                f"closing proxy — not graded"
+                f"{line.captured_at.isoformat()} is neither the frozen-line nor "
+                f"the submission-time proxy — not graded"
             )
-    return openers, closers, skipped
+    return frozen, submission, skipped
 
 
 def run_backtest(
     games: Sequence[Game],
-    openers: Sequence[MarketLine],
-    closers: Sequence[MarketLine],
+    frozen: Sequence[MarketLine],
+    submission: Sequence[MarketLine],
     thresholds: Thresholds | None = None,
     elo_config: EloConfig | None = None,
 ) -> BacktestReport:
-    """Replay completed games using opening and closing line proxies.
+    """Replay completed games using the two same-source snapshot proxies.
 
-    Spreads remain home-perspective throughout: an opening market line becomes
-    the frozen league line, while closing snapshots form the live consensus.
+    Spreads remain home-perspective throughout: the early-week snapshot becomes
+    the frozen league line, and the pre-kickoff snapshots form the consensus it
+    is measured against.
     """
     games_by_id = {game.game_id: game for game in games}
-    openers_by_game: dict[str, MarketLine] = {line.game_id: line for line in openers}
-    closers_by_game: dict[str, list[MarketLine]] = defaultdict(list)
-    for line in closers:
-        closers_by_game[line.game_id].append(line)
+    # Both ends are collapsed by the SAME function. A per-game dict here would
+    # be last-wins, silently grading against whichever book sorted last while
+    # the other end took a median — which manufactures and erases edges.
+    frozen_by_game: dict[str, list[MarketLine]] = defaultdict(list)
+    for line in frozen:
+        frozen_by_game[line.game_id].append(line)
+    submission_by_game: dict[str, list[MarketLine]] = defaultdict(list)
+    for line in submission:
+        submission_by_game[line.game_id].append(line)
 
     all_results: list[Result] = []
     by_tier: dict[Tier, list[Result]] = defaultdict(list)
@@ -131,27 +150,28 @@ def run_backtest(
 
     for key in sorted(by_week):
         week_games = by_week[key]
-        frozen_by_game: dict[str, LeagueLine] = {}
+        league_by_game: dict[str, LeagueLine] = {}
         edges = []
 
         for game in week_games:
             if game.home_score is None or game.away_score is None:
                 skipped.append(f"{game.game_id}: unplayed game (missing final score)")
                 continue
-            opener = openers_by_game.get(game.game_id)
-            if opener is None:
-                skipped.append(f"{game.game_id}: missing opening line for frozen proxy")
+            frozen_lines = frozen_by_game.get(game.game_id, [])
+            frozen_spread = consensus_spread(frozen_lines)
+            if frozen_spread is None:
+                skipped.append(f"{game.game_id}: missing frozen-line snapshot for the proxy")
                 continue
 
-            frozen = LeagueLine(
+            league = LeagueLine(
                 game_id=game.game_id,
                 season=game.season,
                 week=game.week,
-                spread_home=opener.spread_home,
-                posted_at=opener.captured_at,
+                spread_home=frozen_spread,
+                posted_at=max(line.captured_at for line in frozen_lines),
             )
-            frozen_by_game[game.game_id] = frozen
-            edges.append(compute_edge(frozen, closers_by_game.get(game.game_id, []), thresholds))
+            league_by_game[game.game_id] = league
+            edges.append(compute_edge(league, submission_by_game.get(game.game_id, []), thresholds))
 
         # The report resolves coinflip and no-market games with the rating, so
         # the backtest must too — otherwise it is not measuring what ships.
@@ -160,7 +180,7 @@ def run_backtest(
             result = grade_pick(
                 edge.side,
                 game.home_score - game.away_score,
-                frozen_by_game[edge.game_id].spread_home,
+                league_by_game[edge.game_id].spread_home,
             )
             all_results.append(result)
             by_tier[edge.tier].append(result)

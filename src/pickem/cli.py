@@ -280,8 +280,8 @@ def backtest(
                 games.extend(store.games_for_week(Sport.NFL, season, week))
 
         stored = [line for game in games for line in store.market_lines_for(game.game_id)]
-        openers, closers, unclassified = split_proxies(stored)
-        result = run_backtest(games, openers, closers)
+        frozen, submission, unclassified = split_proxies(stored)
+        result = run_backtest(games, frozen, submission)
         typer.echo(
             f"overall: {result.overall.wins}-{result.overall.losses}-{result.overall.pushes} "
             f"({result.overall.hit_rate:.1%}, 95% CI "

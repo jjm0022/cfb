@@ -39,7 +39,15 @@ from datetime import UTC, datetime
 
 import httpx
 
-from pickem.models import MarketLine, MarketLinesResult, Sport, make_game_id
+from pickem.models import (
+    FROZEN_SOURCE,
+    LIVE_SOURCE,
+    SUBMISSION_SOURCE,
+    MarketLine,
+    MarketLinesResult,
+    Sport,
+    make_game_id,
+)
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 BASE_URL = "https://api.the-odds-api.com/v4"
@@ -49,13 +57,14 @@ CFB_KEY = "americanfootball_ncaaf"
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = 0.5
 
-# `source` says which role a stored row plays; `book` keeps the real bookmaker
-# key either way, so per-book detail survives and `consensus_spread` still
-# works. The backtest classifies its two proxies on these, which is what keeps
-# an in-season poll (LIVE_SOURCE) from ever being graded as one.
-LIVE_SOURCE = "oddsapi"
-FROZEN_SOURCE = "oddsapi:frozen"
-SUBMISSION_SOURCE = "oddsapi:submit"
+__all__ = [
+    "FROZEN_SOURCE",
+    "LIVE_SOURCE",
+    "SUBMISSION_SOURCE",
+    "OddsApiError",
+    "OddsClient",
+    "QuotaExhausted",
+]
 
 
 def _api_time(value: datetime) -> str:
