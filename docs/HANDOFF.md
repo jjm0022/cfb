@@ -1,8 +1,8 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-19, after the threshold-tuning null result and the
-CBS calibration instrument
+**Last updated:** 2026-08-20, after the first real CBS week was ingested and
+calibrated
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -26,7 +26,7 @@ You have a working system with a real result. Nothing is half-finished and
 there is no branch to merge. Orient yourself in about two minutes:
 
 ```bash
-uv run pytest -q                              # expect 231 passed
+uv run pytest -q                              # expect 243 passed
 uv run pickem backtest --from 2020 --to 2025  # expect the result below
 uv run pickem --help                          # the whole surface, 8 commands
 ```
@@ -57,7 +57,7 @@ wrong and are recorded there with their reasons.
 
 - **Branch:** all work is on `master`, working tree clean. There is no remote
   configured, so `git log` is the only history and nothing is pushed anywhere.
-- **Tests:** 231 passing, `uv run pytest -q`. The suite is fully offline — HTTP
+- **Tests:** 243 passing, `uv run pytest -q`. The suite is fully offline — HTTP
   is injected via `httpx.MockTransport` and loaders are injected. Keep it that
   way; no test may touch the network.
 - **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`
@@ -77,12 +77,13 @@ backfill costs another ~$30 and an hour to rebuild.
 
 | table | rows | note |
 |---|---|---|
-| `games` | 1,693 | NFL 2020-2025, real kickoff instants. **No CFB games at all.** |
+| `games` | 1,708 | NFL 2020-2025 plus CFB 2026 week 1, real kickoff instants |
 | `lines` / `oddsapi:frozen` | 22,351 | early-week proxy, ~10 books per game |
 | `lines` / `oddsapi:submit` | 24,237 | pre-kickoff proxy, ~10 books per game |
 | `lines` / `nflverse` | 1,693 | closing lines, kept as a cross-check only |
-| `league_lines` | 0 | **no CBS paste has ever been ingested** |
-| `picks` | 0 | no sheet has been rendered against real data |
+| `lines` / `oddsapi` | 147 | live poll, CFB 2026 week 1, 7-11 books per game |
+| `league_lines` | 15 | CFB 2026 week 1, from the saved CBS page (2026-08-20) |
+| `picks` | 15 | CFB 2026 week 1, recorded when the sheet was rendered |
 
 Integrity checks that were run and must keep holding: zero lines orphaned from
 `games`, and zero `oddsapi:submit` rows captured at or after their own kickoff.
@@ -112,7 +113,12 @@ src/pickem/store/db.py            Store — the only module that talks to DuckDB
                                   treats "nothing to write" as normal.
 src/pickem/store/schema.sql       DuckDB DDL; `lines` is append-only
 src/pickem/ingest/cbs.py          parse_cbs_block -> ParseResult (lines,
-                                  matchups, skipped); CbsParseError
+                                  matchups, kickoffs, skipped); CbsParseError
+src/pickem/ingest/cbs_html.py     parse_cbs_html — the saved CBS page. Reads the
+                                  Apollo SSR blob the page server-renders, not
+                                  the DOM. Same ParseResult, plus real kickoff
+                                  instants. Deduplicates: CBS emits every game
+                                  in two blobs.
 src/pickem/edge/divergence.py     Thresholds, consensus_spread, compute_edge,
                                   rank_edges. Pure; no I/O.
 src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
@@ -242,6 +248,19 @@ ledger's structure makes sense.
   fold picks `lean = 0.5`, but stability of a zero-magnitude effect is not
   evidence. Do not re-run this sweep unless the tiebreak improves — see
   `docs/research/2026-08-19-threshold-tuning.md`.
+- **The CBS page is read as data, not scraped.** The pick'em page
+  server-renders its GraphQL result into an Apollo SSR blob, so `--html` parses
+  that rather than the DOM. Its CSS classes are hashed per build
+  (`mui-1m0pb6d`) and change on every CBS deploy; the JSON field names are what
+  their own client consumes. The blob contains the JS literal `undefined`,
+  which is not valid JSON and is rewritten outside string literals only. Every
+  game appears in two blobs and is deduplicated on CBS's event id.
+- **CBS's `homeTeamSpread` is already home-perspective favourite-negative**, so
+  it passes through unflipped. Pinned by the one away-favourite in the slate —
+  the only game in a week where a sign error is visible at all.
+- **CBS writes `Boise St.` where CFBD writes `Boise State`** (2026-08-20). Added
+  as aliases of the existing ids for all 30 State schools, not just the three
+  that failed. Same convention as era-varying NFL abbreviations.
 - **Franchise renames are aliases, exactly like era-varying abbreviations.**
   "Washington Football Team" (2020-2021) was missing and silently dropped that
   team's games, because the odds feed reports unknown teams rather than
@@ -302,6 +321,12 @@ ledger's structure makes sense.
   correct picks. Only `lean` moves games between the two deciders (divergence
   vs the Elo tiebreak). Verified 2026-08-19 across a 56-cell sweep: every cell
   sharing a `lean` value had a byte-identical win/loss/push record.
+- **`calibrate`'s cutoff is a tolerance, not a strict at-or-before.**
+  `poll-odds` derives its slate from `league_lines`, so the market snapshot is
+  always captured AFTER the paste it is compared against — by construction,
+  never before. The first live run missed a strict cutoff by 11 seconds. The
+  window admits the same-sitting poll; widening it far enough to admit the next
+  day's number would readmit exactly the line movement the strategy trades on.
 - **Elo never overrides a real divergence signal.** It may resolve only
   `COINFLIP` and `NO_MARKET`; `STRONG` and `LEAN` edges pass through unchanged.
   An edge that needs a tiebreak but has no `Game` record raises
@@ -388,31 +413,33 @@ permanently into the append-only `lines` table while the real week reported
 
 Ordered by value. Each names what blocks it.
 
-1. **Paste a real CBS block** through `ingest-cbs` -> `poll-odds` -> `report`
-   -> `calibrate` and read the sheet.
-   *Blocked* — as of 2026-08-19 the user expected CBS lines in about two
-   weeks, so early September 2026.
-   This is the last unverified code path (the parser has only ever seen
-   fixtures) **and** the only way to test the assumption the entire backtest
-   rests on: that CBS's frozen number tracks an early-week market snapshot.
-   Nothing else on this list matters as much.
-   **Operational requirement:** run `poll-odds` at or before the paste, in the
-   same early-week sitting. `calibrate` compares against market rows captured
-   at or before the league line's `posted_at`, so a week with no early poll is
-   permanently uncalibratable — the archive would have to be bought for it.
-2. **Improve the tiebreak on coinflip games.** This is now the largest
+1. **Train the CFB Elo before week 1 kicks off (2026-09-05).** Until a CFB
+   result is stored, the tiebreak decides every coinflip by taking the
+   underdog — 12 of 15 picks on the current sheet. Scores come from CFBD on the
+   free key, so this costs nothing but a loop over past seasons through
+   `sync-results --sport cfb --week N`. Highest value per unit of effort on
+   this list, and it has a deadline. *Not blocked.*
+2. **Run the weekly loop for NFL week 1** (early September 2026) the way CFB
+   week 1 was run: `ingest-cbs --html` -> `poll-odds` -> `report` ->
+   `calibrate`. The NFL sheet is the one the phase-exit result actually
+   describes, and its CBS-vs-market agreement is still unmeasured.
+   **Operational requirement:** paste and poll in the same sitting.
+   `calibrate` only counts market rows captured within an hour of the paste,
+   so a week with no poll beside it is permanently uncalibratable — the
+   archive would have to be bought to reconstruct it.
+3. **Improve the tiebreak on coinflip games.** This is now the largest
    remaining prize and the only lever with real headroom: 926 of 1,663 graded
    games (55.6%) are decided by Elo at ~49.5%, which is noise. A band-by-band
    comparison (in the tuning research doc) shows divergence beating Elo in six
    of seven magnitude bands, so if the tiebreak ever beat 50% materially the
    `lean` threshold would want to rise and the sweep should be re-run. This is
    the Phase B question — see the phase-exit reading below. *Not blocked.*
-3. **Decide on the CFB backfill** — ~4,500 credits of the 10,610 remaining.
+4. **Decide on the CFB backfill** — ~4,500 credits of the 10,610 remaining.
    *Time-sensitive:* the 20K tier is a monthly subscription, and redoing this
    after cancelling costs another ~$30. Needs `cfbd_source` kickoff times
    checked the way `nflverse._kickoff` was (the same date-only bug is plausible
    there), and note the alias table is FBS-only by design.
-4. **Make the Phase B decision.** See the result below — the honest reading is
+5. **Make the Phase B decision.** See the result below — the honest reading is
    more nuanced than "Phase B is unnecessary."
 
 Season timing, for context: the CFB season opens in late August 2026 and NFL
@@ -437,14 +464,14 @@ so the free tier would cover weekly use if the subscription is cancelled.
   5-6 and 2021 week 16 COVID postponements, where the game had no confirmed
   date to price. This is correct behaviour, not a gap to close: no early-week
   market existed, which is the same situation CBS would have faced.
-- **CFB has never been backfilled and `games` holds zero CFB rows.** Everything
-  in the phase-exit result is NFL only.
-- **No CBS paste has ever been ingested** (`league_lines` is empty), so the
-  live weekly path has been exercised only with fixtures and one live CFB odds
-  spot-check. `pickem calibrate` is built and tested but has never seen real
-  data: on this machine it correctly reports that nothing could be compared.
-  Its answer is the thing that would confirm or break the phase-exit result,
-  and it stays unanswered until the first paste.
+- **CFB history has never been backfilled;** the only CFB rows are 2026 week 1.
+  Everything in the phase-exit result is NFL only.
+- **The CBS paste gap is CLOSED for CFB 2026 week 1, still open for NFL.**
+  The saved page ingested, polled, rendered and calibrated on 2026-08-20 — see
+  "The calibration result" below. The NFL weekly path still has never run
+  against a real CBS sheet, and the archive proxy the phase-exit result rests
+  on is NFL. The CFB agreement is strong evidence for the method but is not
+  the same slate.
 - **`predict_tiebreaker_total` is unwired, and it is not a loose wire.**
   `odds.py` requests `markets=spreads` only and never populates
   `MarketLine.total`, so wiring it today returns `None` for all live data. Only
@@ -460,16 +487,50 @@ so the free tier would cover weekly use if the subscription is cancelled.
   naming; `Miami (OH)` stays distinct as MIAOH. If a CBS paste ever writes bare
   "Miami" meaning the RedHawks it will silently resolve to the wrong school —
   the one place in the table where that is possible.
-- **CFB Elo ratings are untrained until results are synced.** CFB scores arrive
-  only through `sync-results --sport cfb --week N`, which needs a CFBD key and
-  runs a week at a time. `report` prints a warning, and folds the caveat into
-  the sheet's provenance, when no completed game is in the store.
+- **CFB Elo ratings are untrained, and week 1 shows what that costs.** With no
+  completed CFB game in the store every rating is the initial value, so the
+  projected margin is 0 for every matchup and the tiebreak reduces to "take
+  whichever side the spread points away from" — i.e. the underdog, every time.
+  On the 2026 week 1 sheet that decided **12 of 15 picks**, including ECU
+  +28.5 at Alabama. `report` warns and folds the caveat into the provenance,
+  but the picks still ship. CFB scores arrive through
+  `sync-results --sport cfb --week N`, which needs only the free CFBD key and
+  runs a week at a time; there is no bulk CFB equivalent of `backfill` yet.
 - **nflverse's null-spread branch is defensive only.** A real 1999-2025 sweep
   loaded 7,276 closing lines with ZERO null spreads and no `UnknownTeamError`,
   so only the injected-loader unit test covers it. Kept as a guard. Relevant
   because resolution now precedes the null check: a row with both a null spread
   and an unknown abbreviation raises where it once skipped. The sweep proves
   that combination does not occur in 1999-2025.
+
+## The calibration result (2026-08-20)
+
+**The assumption the backtest rests on survived its first real test.** CFB 2026
+week 1: the saved CBS page ingested, polled against the live odds feed 11
+seconds later, and calibrated on all 15 games.
+
+```
+bias (mean residual):         -0.07 pts
+dispersion (mean |residual|):  0.33 pts
+agreement: 73.3% exact, 80.0% within 0.5, 93.3% within 1.0
+```
+
+A bias of -0.07 is as close to unbiased as 15 games can show. For comparison,
+the archive-vs-nflverse cross-check that validated the joins came in at 0.141
+mean ABSOLUTE difference; this is 0.33 absolute, wider but on a fifteenth of
+the sample and on a sport with thinner books.
+
+**What it does NOT establish.** (1) It is CFB, and the phase-exit result is
+NFL; the two slates have different book coverage. (2) It is one week, n=15 —
+one more UCLA-sized disagreement would move the bias by 0.17. (3) It compares
+CBS against the market *at paste time*, which is the right comparison for the
+proxy but says nothing about whether CBS's number was frozen days earlier or
+minutes earlier. (4) Most of the agreement is CBS simply copying the market:
+11 of 15 matched exactly, so the sample of informative disagreements is 4.
+
+The one real disagreement was UCLA at California — CBS -1.5, market +1.0, a
+2.5-point gap and the only STRONG edge on the sheet. That is the strategy
+firing exactly as designed, on the first real week it ever saw.
 
 ## The phase-exit result (2026-08-19)
 
