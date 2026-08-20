@@ -174,3 +174,23 @@ def test_store_closes_its_handle_when_the_body_raises(tmp_path):
         raise RuntimeError("boom")
     with pytest.raises(duckdb.Error):
         store.games_for_week(Sport.NFL, 2025, 3)
+
+
+def test_every_writer_accepts_an_empty_sequence(tmp_path):
+    """A snapshot where every row was skipped is normal, not an error.
+
+    DuckDB's executemany rejects an empty parameter list, so an unguarded
+    writer turns "nothing to store" into a crash — mid-backfill, after credits
+    are already spent.
+    """
+    from datetime import UTC, datetime
+
+    now = datetime(2025, 9, 21, tzinfo=UTC)
+    with Store(tmp_path / "empty.duckdb") as store:
+        store.init_schema()
+        store.upsert_games([])
+        store.insert_games_if_absent([])
+        store.upsert_league_lines([])
+        store.append_market_lines([])
+        store.record_picks(season=2025, week=3, edges=[], generated_at=now)
+        assert store.games_for_week(Sport.NFL, 2025, 3) == []

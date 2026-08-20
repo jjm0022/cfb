@@ -38,6 +38,17 @@ class Store:
         # behind on a file database and break the next command.
         self.close()
 
+    def _executemany(self, sql: str, rows: Sequence[tuple]) -> None:
+        """executemany, but "nothing to write" is not an error.
+
+        DuckDB rejects an empty parameter list. A snapshot in which every row
+        was skipped is an ordinary outcome, not a failure, and must not abort a
+        backfill after the credits for it are already spent.
+        """
+        if not rows:
+            return
+        self._con.executemany(sql, rows)
+
     def upsert_games(self, games: Sequence[Game]) -> None:
         rows = [
             (
@@ -56,7 +67,7 @@ class Store:
         # Never blind-REPLACE: a source that does not carry scores (a CBS
         # paste) must not erase the finals `sync-results` already wrote, or the
         # Elo history silently shrinks and the tiebreak quietly degrades.
-        self._con.executemany(
+        self._executemany(
             """
             INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (game_id) DO UPDATE SET
@@ -92,18 +103,16 @@ class Store:
             )
             for g in games
         ]
-        self._con.executemany(
-            "INSERT OR IGNORE INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
-        )
+        self._executemany("INSERT OR IGNORE INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
     def upsert_league_lines(self, lines: Sequence[LeagueLine]) -> None:
         rows = [(x.game_id, x.season, x.week, x.spread_home, x.posted_at) for x in lines]
-        self._con.executemany("INSERT OR REPLACE INTO league_lines VALUES (?, ?, ?, ?, ?)", rows)
+        self._executemany("INSERT OR REPLACE INTO league_lines VALUES (?, ?, ?, ?, ?)", rows)
 
     def append_market_lines(self, lines: Sequence[MarketLine]) -> None:
         rows = [(x.game_id, x.source, x.book, x.spread_home, x.total, x.captured_at) for x in lines]
         # INSERT OR IGNORE, never REPLACE: an existing snapshot is history.
-        self._con.executemany("INSERT OR IGNORE INTO lines VALUES (?, ?, ?, ?, ?, ?)", rows)
+        self._executemany("INSERT OR IGNORE INTO lines VALUES (?, ?, ?, ?, ?, ?)", rows)
 
     def market_lines_for(self, game_id: str, before: datetime | None = None) -> list[MarketLine]:
         sql = (
@@ -202,7 +211,7 @@ class Store:
             (season, week, e.game_id, e.side.value, e.delta, e.tier.value, generated_at)
             for e in edges
         ]
-        self._con.executemany("INSERT OR IGNORE INTO picks VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+        self._executemany("INSERT OR IGNORE INTO picks VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
 
     def picks_for_week(self, season: int, week: int) -> list[tuple]:
         return self._con.execute(

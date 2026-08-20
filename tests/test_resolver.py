@@ -71,3 +71,21 @@ def test_duplicate_alias_raises_at_load_time(tmp_path):
     conflicting_yaml.write_text('nfl:\n  MIA: ["Dolphins"]\n  BUF: ["Dolphins"]\n')
     with pytest.raises(ValueError):
         TeamResolver.from_yaml(conflicting_yaml)
+
+
+def test_washington_resolves_under_every_name_the_franchise_has_used():
+    """The odds archive spans a rename, so era-varying names are era-varying data.
+
+    Washington was the Football Team for 2020-2021, which is inside the
+    backfill range. A missing spelling here does not raise on the odds feed —
+    it silently drops that team's games from the backtest.
+    """
+    resolver = TeamResolver.default()
+    for name in [
+        "Washington Commanders",
+        "Washington Football Team",
+        "Washington Redskins",
+        "Washington",
+        "WAS",
+    ]:
+        assert resolver.resolve(name, Sport.NFL) == "WAS"

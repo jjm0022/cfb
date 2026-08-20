@@ -6,7 +6,10 @@ nfl:
   LAR: ["Los Angeles Rams", "LA Rams", "LAR", "LA", "Rams", "St. Louis Rams", "STL"]
   LAC: ["Los Angeles Chargers", "LA Chargers", "LAC", "Chargers", "San Diego Chargers", "SD"]
   LV:  ["Las Vegas Raiders", "Raiders", "LV", "LVR", "OAK", "Oakland Raiders"]
-  WAS: ["Washington Commanders", "Washington", "WAS", "WSH", "Commanders"]
+  # The franchise was the Football Team for 2020-2021 and the Redskins before
+  # that. The odds archive spans those years, so the old names are live data.
+  WAS: ["Washington Commanders", "Washington Football Team", "Washington Redskins",
+        "Washington", "WAS", "WSH", "Commanders", "Football Team"]
   NE:  ["New England Patriots", "New England", "NE", "NWE", "Patriots"]
   KC:  ["Kansas City Chiefs", "Kansas City", "KC", "KAN", "Chiefs"]
   SF:  ["San Francisco 49ers", "San Francisco", "SF", "SFO", "49ers", "Niners"]
