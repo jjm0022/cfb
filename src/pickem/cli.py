@@ -10,6 +10,7 @@ from pathlib import Path
 import typer
 
 from pickem import config
+from pickem.backtest.calibration import calibrate
 from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.backtest.snapshots import SnapshotKind, estimate_credits, plan_snapshots
 from pickem.edge.divergence import compute_edge, rank_edges
@@ -380,6 +381,66 @@ def backtest(
         # A backtest that hides its exclusions reports 0-0-0 without saying why.
         _warn_skipped("games not graded", result.skipped)
         _warn_skipped("stored lines that are neither proxy", unclassified)
+
+
+@app.command("calibrate")
+def calibrate_cmd(
+    sport: Sport = typer.Option(Sport.NFL),
+    season: int = typer.Option(...),
+    from_week: int = typer.Option(1, "--from-week"),
+    to_week: int = typer.Option(22, "--to-week"),
+    source: str = typer.Option(None, help="Restrict the market end to one source label"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Measure how closely the frozen CBS line tracks the market behind it.
+
+    The backtest substitutes an early-week market snapshot for the CBS number.
+    This is the check on that substitution.
+    """
+    with _store(db) as store:
+        league_lines = []
+        for week in range(from_week, to_week + 1):
+            league_lines.extend(store.league_lines_for_week(sport, season, week))
+
+        market = [line for lg in league_lines for line in store.market_lines_for(lg.game_id)]
+        result = calibrate(league_lines, market, source=source)
+
+    if result.compared == 0:
+        # A zero here is the expected state until a real paste is ingested, and
+        # saying so beats printing a bias of 0.0 that reads as perfect agreement.
+        typer.secho(
+            "no CBS line could be compared — ingest a paste with `ingest-cbs`, and "
+            "make sure `poll-odds` ran at or before it",
+            fg="yellow",
+        )
+        _warn_skipped("league lines not calibrated", result.skipped)
+        raise typer.Exit(0)
+
+    noun = "line" if result.compared == 1 else "lines"
+    typer.echo(f"calibrated {result.compared} CBS {noun} against the market consensus behind them")
+    typer.echo(f"  bias (mean residual):         {result.mean_residual:+.2f} pts")
+    typer.echo(f"  dispersion (mean |residual|):  {result.mean_abs_residual:.2f} pts")
+    typer.echo(
+        f"  agreement: {result.share_exact:.1%} exact, "
+        f"{result.share_within_half:.1%} within 0.5, "
+        f"{result.share_within_one:.1%} within 1.0"
+    )
+    typer.echo("\n  positive bias = the league line sits above the market, which tilts")
+    typer.echo("  picks toward the home side.")
+
+    worst = sorted(result.residuals, key=lambda r: abs(r.residual), reverse=True)[:5]
+    if worst:
+        typer.echo("\nLargest residuals:")
+        for r in worst:
+            typer.echo(
+                f"  {r.game_id}: CBS {r.league_spread:+.1f} vs market "
+                f"{r.market_spread:+.1f} ({r.residual:+.1f})"
+            )
+
+    typer.echo("\nAssumptions:")
+    for assumption in result.assumptions:
+        typer.echo(f"  - {assumption}")
+    _warn_skipped("league lines not calibrated", result.skipped)
 
 
 if __name__ == "__main__":
