@@ -18,12 +18,12 @@ The two proxies are timed differently on purpose:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-import hashlib
-import json
 
 from pydantic import BaseModel
 
