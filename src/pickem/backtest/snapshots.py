@@ -22,10 +22,12 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+import hashlib
+import json
 
 from pydantic import BaseModel
 
-from pickem.models import Game
+from pickem.models import Game, Sport
 
 # The Odds API archive begins here. An earlier request returns nothing.
 ARCHIVE_START = datetime(2020, 6, 6, 10, 5, tzinfo=UTC)
@@ -84,7 +86,40 @@ def _frozen_anchor(first_kickoff: datetime) -> datetime:
     return candidate
 
 
-def plan_snapshots(games: Sequence[Game]) -> list[SnapshotRequest]:
+def _submission_batches(
+    games: Sequence[Game], max_submission_age: timedelta
+) -> list[tuple[datetime, list[Game]]]:
+    if max_submission_age < _SUBMISSION_LEAD:
+        raise ValueError("max submission age must be at least the 15 minutes safety lead")
+    remaining = sorted(games, key=lambda game: (game.kickoff_utc, game.game_id))
+    batches: list[tuple[datetime, list[Game]]] = []
+    while remaining:
+        first = remaining[0].kickoff_utc
+        request_at = first - _SUBMISSION_LEAD
+        latest = request_at + max_submission_age
+        batch = [game for game in remaining if game.kickoff_utc <= latest]
+        batches.append((request_at, batch))
+        selected = {game.game_id for game in batch}
+        remaining = [game for game in remaining if game.game_id not in selected]
+    return batches
+
+
+def snapshot_request_id(sport: Sport, request: SnapshotRequest) -> str:
+    payload = {
+        "sport": sport.value,
+        "season": request.season,
+        "week": request.week,
+        "kind": request.kind.value,
+        "at": request.at.astimezone(UTC).isoformat(),
+        "slate": sorted(request.slate),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def plan_snapshots(
+    games: Sequence[Game], max_submission_age: timedelta = timedelta(minutes=15)
+) -> list[SnapshotRequest]:
     """Every archive request needed to backfill both proxies for `games`.
 
     Unplayed games are dropped: the backtest cannot grade them, so paying to
@@ -123,18 +158,15 @@ def plan_snapshots(games: Sequence[Game]) -> list[SnapshotRequest]:
             )
         )
 
-        by_slot: dict[datetime, list[Game]] = defaultdict(list)
-        for game in week_games:
-            by_slot[game.kickoff_utc].append(game)
-        for slot, slot_games in sorted(by_slot.items()):
+        for request_at, batch in _submission_batches(week_games, max_submission_age):
             requests.append(
                 SnapshotRequest(
                     kind=SnapshotKind.SUBMISSION,
-                    at=slot - _SUBMISSION_LEAD,
+                    at=request_at,
                     window=window,
                     # Narrowed to this slot, so a game can never be graded
                     # against a snapshot taken after it kicked off.
-                    slate=frozenset(g.game_id for g in slot_games),
+                    slate=frozenset(g.game_id for g in batch),
                     season=season,
                     week=week,
                 )

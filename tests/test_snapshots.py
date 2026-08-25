@@ -8,6 +8,7 @@ from pickem.backtest.snapshots import (
     SnapshotKind,
     estimate_credits,
     plan_snapshots,
+    snapshot_request_id,
 )
 from pickem.models import Game, Sport, make_game_id
 
@@ -29,6 +30,20 @@ def game(week, kickoff, away, home, season=2024, played=True):
 SUN_EARLY = datetime(2024, 9, 22, 17, 0, tzinfo=UTC)  # Sun 13:00 ET
 SUN_LATE = datetime(2024, 9, 22, 20, 25, tzinfo=UTC)  # Sun 16:25 ET
 MON_NIGHT = datetime(2024, 9, 24, 0, 15, tzinfo=UTC)  # Mon 20:15 ET
+
+
+def cfb_game(kickoff: datetime, away: str, home: str) -> Game:
+    return Game(
+        game_id=make_game_id(Sport.CFB, 2024, 3, away, home),
+        sport=Sport.CFB,
+        season=2024,
+        week=3,
+        kickoff_utc=kickoff,
+        home_team_id=home,
+        away_team_id=away,
+        home_score=24,
+        away_score=17,
+    )
 
 
 def test_frozen_anchor_is_the_tuesday_before_the_first_kickoff():
@@ -142,3 +157,47 @@ def test_submission_lead_outruns_the_sources_disagreeing_about_kickoff():
     plan = plan_snapshots([game(3, SUN_EARLY, "BUF", "MIA")])
     submission = next(r for r in plan if r.kind is SnapshotKind.SUBMISSION)
     assert submission.at < SUN_EARLY - worst_disagreement
+
+
+def test_default_planner_keeps_distinct_nfl_slots_separate():
+    submissions = [
+        r for r in plan_snapshots([game(3, SUN_EARLY, "BUF", "MIA"), game(3, SUN_EARLY + timedelta(minutes=30), "NYJ", "NE")])
+        if r.kind is SnapshotKind.SUBMISSION
+    ]
+    assert len(submissions) == 2
+
+
+def test_ninety_minute_mode_batches_a_seventy_five_minute_kickoff_span():
+    games = [cfb_game(SUN_EARLY, "CLEM", "UGA"), cfb_game(SUN_EARLY + timedelta(minutes=75), "BAMA", "LSU")]
+    submissions = [r for r in plan_snapshots(games, max_submission_age=timedelta(minutes=90)) if r.kind is SnapshotKind.SUBMISSION]
+    assert len(submissions) == 1
+    assert submissions[0].slate == {g.game_id for g in games}
+
+
+def test_ninety_minute_mode_splits_a_seventy_six_minute_kickoff_span():
+    games = [cfb_game(SUN_EARLY, "CLEM", "UGA"), cfb_game(SUN_EARLY + timedelta(minutes=76), "BAMA", "LSU")]
+    assert len([r for r in plan_snapshots(games, max_submission_age=timedelta(minutes=90)) if r.kind is SnapshotKind.SUBMISSION]) == 2
+
+
+def test_every_batched_game_has_exactly_one_submission_request_with_valid_age():
+    games = [cfb_game(SUN_EARLY + timedelta(minutes=n), f"A{n}", f"H{n}") for n in (0, 30, 75, 76, 150)]
+    submissions = [r for r in plan_snapshots(games, max_submission_age=timedelta(minutes=90)) if r.kind is SnapshotKind.SUBMISSION]
+    kickoff = {g.game_id: g.kickoff_utc for g in games}
+    assigned = [gid for request in submissions for gid in request.slate]
+    assert sorted(assigned) == sorted(kickoff)
+    for request in submissions:
+        for gid in request.slate:
+            assert timedelta(minutes=15) <= kickoff[gid] - request.at <= timedelta(minutes=90)
+
+
+def test_max_submission_age_cannot_be_shorter_than_the_safety_lead():
+    with pytest.raises(ValueError, match="15 minutes"):
+        plan_snapshots([cfb_game(SUN_EARLY, "CLEM", "UGA")], max_submission_age=timedelta(minutes=14))
+
+
+def test_snapshot_request_id_is_deterministic_and_sensitive_to_fields():
+    request = next(r for r in plan_snapshots([cfb_game(SUN_EARLY, "CLEM", "UGA")]) if r.kind is SnapshotKind.SUBMISSION)
+    assert snapshot_request_id(Sport.CFB, request) == snapshot_request_id(Sport.CFB, request.model_copy(update={"slate": frozenset(reversed(tuple(request.slate)))}))
+    for field, value in (("kind", SnapshotKind.FROZEN), ("at", request.at + timedelta(minutes=1)), ("slate", frozenset({"different"}))):
+        assert snapshot_request_id(Sport.CFB, request) != snapshot_request_id(Sport.CFB, request.model_copy(update={field: value}))
+    assert snapshot_request_id(Sport.CFB, request) != snapshot_request_id(Sport.NFL, request)
