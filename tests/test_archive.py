@@ -247,6 +247,26 @@ def test_max_new_requests_executes_probe_then_resume_finishes(store, games):
     assert report.pending_snapshots == 2
 
 
+def test_negative_max_new_requests_fails_before_client_construction(store, games):
+    def explode():
+        raise AssertionError("negative cap constructed the paid adapter")
+
+    with pytest.raises(ValueError, match="max_new_requests must be non-negative"):
+        ArchiveBackfill(store, TeamResolver.default(), explode).run(
+            games, max_credits=20_000, execute=True, max_new_requests=-1
+        )
+
+
+def test_zero_max_new_requests_executes_no_archive_requests(store, games):
+    client = StubHistoricalClient(remaining=20_000)
+    report = ArchiveBackfill(store, TeamResolver.default(), lambda: client).run(
+        games, max_credits=20_000, execute=True, max_new_requests=0
+    )
+
+    assert report.executed_snapshots == 0
+    assert client.calls == []
+
+
 def test_mixed_sports_are_rejected_before_constructing_a_client(store, games, cfb_games):
     def explode():
         raise AssertionError("mixed sports constructed the paid adapter")

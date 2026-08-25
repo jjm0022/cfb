@@ -117,6 +117,8 @@ class ArchiveBackfill:
         min_credit_reserve: int = 100,
         max_new_requests: int | None = None,
     ) -> ArchiveRunReport:
+        if max_new_requests is not None and max_new_requests < 0:
+            raise ValueError("max_new_requests must be non-negative")
         if not games:
             raise NoHistoricalGames("no historical NFL games are stored")
         sports = {game.sport for game in games}
