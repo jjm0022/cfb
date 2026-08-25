@@ -58,6 +58,15 @@ def client_returning(payload, status=200):
     return OddsClient("key", transport=httpx.MockTransport(handler), sleep=lambda _: None)
 
 
+def client_with_remaining_header(value):
+    def handler(request):
+        assert request.url.path == "/v4/sports"
+        headers = {} if value is None else {"x-requests-remaining": value}
+        return httpx.Response(200, headers=headers, json=[])
+
+    return OddsClient("key", transport=httpx.MockTransport(handler), sleep=lambda _: None)
+
+
 def fetch(client, slate=SLATE, window=WINDOW):
     return client.fetch_spreads(
         NFL_KEY,
@@ -92,6 +101,16 @@ def test_quota_exhaustion_raises_a_distinct_error():
     # The caller must be able to fall back to cached snapshots on quota, but not on a bug.
     with pytest.raises(QuotaExhausted):
         fetch(client_returning({"message": "out of credits"}, status=401))
+
+
+def test_remaining_credits_reads_the_sports_response_header():
+    assert client_with_remaining_header("10610").remaining_credits() == 10610
+
+
+@pytest.mark.parametrize("header", [None, "not-a-number"])
+def test_remaining_credits_rejects_unreadable_headers(header):
+    with pytest.raises(OddsApiError, match="x-requests-remaining"):
+        client_with_remaining_header(header).remaining_credits()
 
 
 def test_bookmaker_without_a_spreads_market_is_surfaced_not_silently_dropped():

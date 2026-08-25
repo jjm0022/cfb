@@ -239,6 +239,19 @@ class OddsClient:
                 self._sleep(BACKOFF_SECONDS * (2**attempt))
         raise OddsApiError(f"odds api unreachable after {MAX_ATTEMPTS} attempts: {last_error}")
 
+    def remaining_credits(self) -> int:
+        """Return the quota currently available to this API key."""
+        response = self._get("/sports", params={"apiKey": self._api_key})
+        if response.status_code in (401, 429):
+            raise QuotaExhausted(f"odds api returned {response.status_code}: {response.text}")
+        if response.status_code >= 400:
+            raise OddsApiError(f"odds api returned {response.status_code}: {response.text}")
+        raw = response.headers.get("x-requests-remaining")
+        try:
+            return int(raw)
+        except (TypeError, ValueError) as exc:
+            raise OddsApiError(f"unreadable x-requests-remaining header {raw!r}") from exc
+
     def fetch_spreads(
         self,
         sport_key: str,
