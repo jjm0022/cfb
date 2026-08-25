@@ -174,11 +174,12 @@ class Store:
         requested_at: datetime,
         returned_at: datetime,
         line_count: int,
-    ) -> None:
-        self._con.execute(
+    ) -> bool:
+        row = self._con.execute(
             """
             INSERT OR IGNORE INTO archive_requests
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING request_id
             """,
             [
                 request_id,
@@ -191,7 +192,8 @@ class Store:
                 line_count,
                 datetime.now(tz=UTC),
             ],
-        )
+        ).fetchone()
+        return row is not None
 
     def commit_archive_request(
         self,
@@ -207,8 +209,7 @@ class Store:
         """Atomically store a completed archive response and its line history."""
         self._con.execute("BEGIN TRANSACTION")
         try:
-            self.append_market_lines(lines)
-            self._insert_archive_request(
+            claimed = self._insert_archive_request(
                 request_id,
                 sport,
                 season,
@@ -218,6 +219,8 @@ class Store:
                 returned_at,
                 len(lines),
             )
+            if claimed:
+                self.append_market_lines(lines)
         except Exception:
             self._con.execute("ROLLBACK")
             raise

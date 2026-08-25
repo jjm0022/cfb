@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import duckdb
 import pytest
@@ -120,24 +120,34 @@ def test_archive_commit_writes_lines_and_completion_together(tmp_path):
 
 def test_archive_commit_is_idempotent(tmp_path):
     line = market(-3.0, RETURNED)
+    retried_line = market(-4.0, RETURNED + timedelta(minutes=1))
     with Store(tmp_path / "ledger.duckdb") as store:
         store.init_schema()
         store.upsert_games([game()])
 
-        for _ in range(2):
-            store.commit_archive_request(
-                "request-1",
-                Sport.NFL,
-                2025,
-                3,
-                "submission",
-                REQUESTED,
-                RETURNED,
-                [line],
-            )
+        store.commit_archive_request(
+            "request-1",
+            Sport.NFL,
+            2025,
+            3,
+            "submission",
+            REQUESTED,
+            RETURNED,
+            [line],
+        )
+        store.commit_archive_request(
+            "request-1",
+            Sport.NFL,
+            2025,
+            3,
+            "submission",
+            REQUESTED,
+            RETURNED,
+            [retried_line],
+        )
 
         assert store.completed_archive_request_ids(["request-1"]) == {"request-1"}
-        assert len(store.load_week(Sport.NFL, 2025, 3).market_lines) == 1
+        assert store.load_week(Sport.NFL, 2025, 3).market_lines == [line]
 
 
 def test_archive_commit_rolls_back_lines_when_ledger_insert_fails(tmp_path, monkeypatch):
