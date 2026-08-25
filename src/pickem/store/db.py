@@ -7,7 +7,7 @@ here issues UPDATE or DELETE against it.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 
@@ -151,6 +151,78 @@ class Store:
         rows = [(x.game_id, x.source, x.book, x.spread_home, x.total, x.captured_at) for x in lines]
         # INSERT OR IGNORE, never REPLACE: an existing snapshot is history.
         self._executemany("INSERT OR IGNORE INTO lines VALUES (?, ?, ?, ?, ?, ?)", rows)
+
+    def completed_archive_request_ids(self, request_ids: Sequence[str]) -> set[str]:
+        if not request_ids:
+            return set()
+        rows = self._con.execute(
+            "SELECT request_id FROM archive_requests WHERE request_id IN "
+            + "("
+            + ",".join("?" for _ in request_ids)
+            + ")",
+            list(request_ids),
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    def _insert_archive_request(
+        self,
+        request_id: str,
+        sport: Sport,
+        season: int,
+        week: int,
+        kind: str,
+        requested_at: datetime,
+        returned_at: datetime,
+        line_count: int,
+    ) -> None:
+        self._con.execute(
+            """
+            INSERT OR IGNORE INTO archive_requests
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                request_id,
+                sport.value,
+                season,
+                week,
+                kind,
+                requested_at,
+                returned_at,
+                line_count,
+                datetime.now(tz=UTC),
+            ],
+        )
+
+    def commit_archive_request(
+        self,
+        request_id: str,
+        sport: Sport,
+        season: int,
+        week: int,
+        kind: str,
+        requested_at: datetime,
+        returned_at: datetime,
+        lines: Sequence[MarketLine],
+    ) -> None:
+        """Atomically store a completed archive response and its line history."""
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            self.append_market_lines(lines)
+            self._insert_archive_request(
+                request_id,
+                sport,
+                season,
+                week,
+                kind,
+                requested_at,
+                returned_at,
+                len(lines),
+            )
+        except Exception:
+            self._con.execute("ROLLBACK")
+            raise
+        else:
+            self._con.execute("COMMIT")
 
     def games_before(self, sport: Sport, season: int, week: int) -> list[Game]:
         """Every game already played before this week, including prior seasons.

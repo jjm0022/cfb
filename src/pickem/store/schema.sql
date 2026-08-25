@@ -40,3 +40,15 @@ CREATE TABLE IF NOT EXISTS picks (
     generated_at  TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (season, week, game_id, generated_at)
 );
+
+CREATE TABLE IF NOT EXISTS archive_requests (
+    request_id       VARCHAR PRIMARY KEY,
+    sport            VARCHAR NOT NULL,
+    season           INTEGER NOT NULL,
+    week             INTEGER NOT NULL,
+    kind             VARCHAR NOT NULL,
+    requested_at     TIMESTAMPTZ NOT NULL,
+    returned_at      TIMESTAMPTZ NOT NULL,
+    line_count       INTEGER NOT NULL,
+    completed_at     TIMESTAMPTZ NOT NULL
+);

@@ -8,6 +8,8 @@ from pickem.store.db import Store
 
 KICK = datetime(2025, 9, 21, 17, 0, tzinfo=UTC)
 GID = "nfl-2025-03-BUF-at-MIA"
+REQUESTED = datetime(2025, 9, 21, 16, 0, tzinfo=UTC)
+RETURNED = datetime(2025, 9, 21, 16, 5, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -92,6 +94,95 @@ def test_identical_snapshot_appended_twice_is_stored_once(store):
     store.append_market_lines([market(-3.0, at)])
     # Re-polling without a line change must not inflate the history.
     assert len(store.load_week(Sport.NFL, 2025, 3).market_lines) == 1
+
+
+def test_archive_commit_writes_lines_and_completion_together(tmp_path):
+    db = tmp_path / "ledger.duckdb"
+    line = market(-3.0, RETURNED)
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games([game()])
+
+        store.commit_archive_request(
+            "request-1",
+            Sport.NFL,
+            2025,
+            3,
+            "submission",
+            REQUESTED,
+            RETURNED,
+            [line],
+        )
+
+        assert store.completed_archive_request_ids(["request-1", "missing"]) == {"request-1"}
+        assert store.load_week(Sport.NFL, 2025, 3).market_lines == [line]
+
+
+def test_archive_commit_is_idempotent(tmp_path):
+    line = market(-3.0, RETURNED)
+    with Store(tmp_path / "ledger.duckdb") as store:
+        store.init_schema()
+        store.upsert_games([game()])
+
+        for _ in range(2):
+            store.commit_archive_request(
+                "request-1",
+                Sport.NFL,
+                2025,
+                3,
+                "submission",
+                REQUESTED,
+                RETURNED,
+                [line],
+            )
+
+        assert store.completed_archive_request_ids(["request-1"]) == {"request-1"}
+        assert len(store.load_week(Sport.NFL, 2025, 3).market_lines) == 1
+
+
+def test_archive_commit_rolls_back_lines_when_ledger_insert_fails(tmp_path, monkeypatch):
+    line = market(-3.0, RETURNED)
+    with Store(tmp_path / "ledger.duckdb") as store:
+        store.init_schema()
+        store.upsert_games([game()])
+        monkeypatch.setattr(
+            store,
+            "_insert_archive_request",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ledger failed")),
+        )
+
+        with pytest.raises(RuntimeError, match="ledger failed"):
+            store.commit_archive_request(
+                "request-1",
+                Sport.NFL,
+                2025,
+                3,
+                "submission",
+                REQUESTED,
+                RETURNED,
+                [line],
+            )
+
+        assert store.completed_archive_request_ids(["request-1"]) == set()
+        assert store.load_week(Sport.NFL, 2025, 3).market_lines == []
+
+
+def test_zero_line_archive_response_is_still_completed(tmp_path):
+    with Store(tmp_path / "ledger.duckdb") as store:
+        store.init_schema()
+
+        store.commit_archive_request(
+            "request-1",
+            Sport.NFL,
+            2025,
+            3,
+            "submission",
+            REQUESTED,
+            RETURNED,
+            [],
+        )
+
+        assert store.completed_archive_request_ids(["request-1"]) == {"request-1"}
 
 
 def test_load_week_does_not_leak_across_weeks(store):
