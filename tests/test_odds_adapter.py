@@ -381,6 +381,14 @@ def test_an_empty_snapshot_is_not_an_error():
     assert result.skipped == []
 
 
+def test_an_empty_snapshot_carries_its_archive_timestamp():
+    # Catches a zero-line archive response that completes the ledger using the
+    # requested instant instead of the timestamp the archive actually returned.
+    result = historical(client_returning({"timestamp": "2025-09-21T16:50:00Z", "data": []}))
+    assert result.lines == []
+    assert result.snapshot_at == SNAPSHOT_TAKEN
+
+
 def test_an_unreadable_snapshot_timestamp_raises_rather_than_guessing():
     # Guessing would write a misdated row into an append-only table.
     with pytest.raises(OddsApiError, match="timestamp"):
