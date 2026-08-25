@@ -93,6 +93,7 @@ def _parse_events(
     window: tuple[datetime, datetime],
     captured_at: datetime,
     source: str,
+    snapshot_at: datetime | None = None,
 ) -> MarketLinesResult:
     """Both guards, team resolution and per-book extraction, in one place.
 
@@ -184,7 +185,7 @@ def _parse_events(
                     captured_at=captured_at,
                 )
             )
-    return MarketLinesResult(lines=lines, skipped=skipped)
+    return MarketLinesResult(lines=lines, skipped=skipped, snapshot_at=snapshot_at)
 
 
 class OddsApiError(RuntimeError):
@@ -360,4 +361,5 @@ class OddsClient:
             window=window,
             captured_at=captured_at,
             source=source,
+            snapshot_at=captured_at,
         )

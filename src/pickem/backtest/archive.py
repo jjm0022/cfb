@@ -180,7 +180,9 @@ class ArchiveBackfill:
                     )
                 except QuotaExhausted as exc:
                     raise ArchiveRunInterrupted(index, len(to_execute), str(exc)) from exc
-                returned_at = max((line.captured_at for line in result.lines), default=request.at)
+                returned_at = result.snapshot_at
+                if returned_at is None:
+                    raise ValueError("archive response is missing its snapshot timestamp")
                 self._store.commit_archive_request(
                     request_id=request_id,
                     sport=sport,

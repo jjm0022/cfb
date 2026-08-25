@@ -3,7 +3,17 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from pickem.models import Edge, Game, LeagueLine, MarketLine, Side, Sport, Tier, make_game_id
+from pickem.models import (
+    Edge,
+    Game,
+    LeagueLine,
+    MarketLine,
+    MarketLinesResult,
+    Side,
+    Sport,
+    Tier,
+    make_game_id,
+)
 
 
 def test_game_id_is_deterministic_and_source_independent():
@@ -67,6 +77,14 @@ def test_market_line_total_is_optional():
         captured_at=datetime(2025, 9, 21, 12, 0, tzinfo=UTC),
     )
     assert line.total is None
+
+
+def test_market_lines_result_keeps_an_optional_snapshot_timestamp():
+    # Catches a result shape that loses the archive envelope's timestamp before
+    # the archive runner can atomically record what the API actually returned.
+    snapshot_at = datetime(2025, 9, 21, 16, 50, tzinfo=UTC)
+    result = MarketLinesResult(lines=[], skipped=[], snapshot_at=snapshot_at)
+    assert result.snapshot_at == snapshot_at
 
 
 def test_edge_records_both_numbers_that_produced_it():

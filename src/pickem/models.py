@@ -96,6 +96,10 @@ class MarketLinesResult(BaseModel):
 
     lines: list[MarketLine]
     skipped: list[str]
+    # The historical Odds API returns the instant its envelope was captured.
+    # Live and CFBD loaders have no equivalent envelope, so they leave this
+    # unset; archive commits must reject that absence rather than inventing it.
+    snapshot_at: datetime | None = None
 
 
 class Edge(BaseModel):

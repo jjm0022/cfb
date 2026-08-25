@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from pickem.ingest.cfbd_source import load_cfb_games, load_cfb_lines
@@ -43,6 +45,21 @@ def test_builds_canonical_game_ids(resolver):
 def test_resolves_source_specific_school_naming(resolver):
     games = load_cfb_games(2025, 3, resolver=resolver, fetcher=lambda s, w: GAMES)
     assert games[0].away_team_id == "MISS"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("2025-09-20T23:30:00Z", datetime(2025, 9, 20, 23, 30, tzinfo=UTC)),
+        ("2025-09-20T19:30:00-04:00", datetime(2025, 9, 20, 23, 30, tzinfo=UTC)),
+        ("2025-09-21T01:30:00+02:00", datetime(2025, 9, 20, 23, 30, tzinfo=UTC)),
+    ],
+)
+def test_cfb_kickoff_preserves_the_source_instant(raw, expected, resolver):
+    # Catches stripping an offset and silently treating local clock time as UTC.
+    row = {**GAMES[0], "start_date": raw}
+    [game] = load_cfb_games(2025, 3, resolver=resolver, fetcher=lambda _s, _w: [row])
+    assert game.kickoff_utc == expected
 
 
 def test_preserves_cfbd_home_negative_convention(resolver):

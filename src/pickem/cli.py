@@ -15,7 +15,10 @@ from pickem.backtest.archive import (
     ArchiveProgress,
     ArchiveRunInterrupted,
     CreditLimitExceeded,
+    InsufficientCredits,
+    MixedSports,
     NoHistoricalGames,
+    PlannedCostChanged,
 )
 from pickem.backtest.calibration import DEFAULT_TOLERANCE, calibrate
 from pickem.backtest.runner import run_backtest, split_proxies
@@ -316,9 +319,25 @@ def backfill_cfb(
 
 @app.command("backfill-history")
 def backfill_history(
+    sport: Sport = typer.Option(...),
     start: int = typer.Option(2020, "--from"),
     end: int = typer.Option(2025, "--to"),
     execute: bool = typer.Option(False, "--execute", help="Actually spend credits and write rows"),
+    max_snapshot_age_minutes: int | None = typer.Option(
+        None,
+        "--max-snapshot-age-minutes",
+        help="Maximum age of a shared pre-kickoff snapshot (15 NFL, 90 CFB by default)",
+    ),
+    expected_credits: int | None = typer.Option(
+        None,
+        "--expected-credits",
+        help="Required with --execute; must equal the pending archive cost",
+    ),
+    max_new_requests: int | None = typer.Option(
+        None,
+        "--max-new-requests",
+        help="Buy at most this many pending snapshots (use 1 to probe safely)",
+    ),
     max_credits: int = typer.Option(
         20_000, help="Refuse to start if the planned run costs more than this"
     ),
@@ -330,8 +349,22 @@ def backfill_history(
     can be taken back: the `lines` table is append-only, so wrong game ids stay
     forever, and credits are not refundable.
     """
+    snapshot_age_minutes = max_snapshot_age_minutes
+    if snapshot_age_minutes is None:
+        snapshot_age_minutes = 90 if sport is Sport.CFB else 15
+    if execute and sport is Sport.CFB and snapshot_age_minutes != 90:
+        typer.secho(
+            "CFB paid archive backfills require --max-snapshot-age-minutes 90",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if execute and expected_credits is None:
+        typer.secho("--execute requires --expected-credits N", fg="red", err=True)
+        raise typer.Exit(code=1)
+
     with _store(db) as store:
-        dataset = store.load_seasons(Sport.NFL, start, end)
+        dataset = store.load_seasons(sport, start, end)
 
         def client_factory() -> OddsClient:
             return OddsClient(config.odds_api_key())
@@ -343,25 +376,33 @@ def backfill_history(
                 max_credits=max_credits,
                 execute=execute,
                 on_progress=_archive_progress,
+                max_submission_age=timedelta(minutes=snapshot_age_minutes),
+                expected_credits=expected_credits,
+                max_new_requests=max_new_requests,
             )
         except NoHistoricalGames as exc:
-            typer.secho(f"{exc}; run `pickem backfill` first", fg="red", err=True)
+            typer.secho(f"{exc}; load {sport.value} games first", fg="red", err=True)
             raise typer.Exit(code=1) from exc
-        except CreditLimitExceeded as exc:
+        except (CreditLimitExceeded, InsufficientCredits, MixedSports, PlannedCostChanged) as exc:
             typer.secho(str(exc), fg="red", err=True)
             raise typer.Exit(code=1) from exc
         except ArchiveRunInterrupted as exc:
             typer.secho(str(exc), fg="red", err=True)
             raise typer.Exit(code=1) from exc
+        except (OddsApiError, ValueError) as exc:
+            typer.secho(str(exc), fg="red", err=True)
+            raise typer.Exit(code=1) from exc
 
         typer.echo(
-            f"{report.total_snapshots} snapshots ({report.frozen_snapshots} frozen, "
-            f"{report.submission_snapshots} submission) across {report.weeks} weeks "
-            f"= {report.credits} credits"
+            f"{report.planned_snapshots} planned, {report.completed_snapshots} complete, "
+            f"{report.pending_snapshots} pending = {report.pending_credits} credits"
         )
+        if execute and report.remaining_credits is not None:
+            typer.echo(f"balance: {report.remaining_credits} credits")
         if not execute:
             typer.secho(
-                "dry run — pass --execute to spend credits and write rows",
+                f"dry run — pass --execute --expected-credits {report.pending_credits} "
+                "to purchase pending requests",
                 fg="yellow",
             )
 

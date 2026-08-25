@@ -48,6 +48,7 @@ class StubHistoricalClient:
                 for game_id in sorted(kwargs["slate"])
             ],
             skipped=["off-slate game — not stored"],
+            snapshot_at=kwargs["at"],
         )
 
 

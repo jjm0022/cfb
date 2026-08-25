@@ -225,6 +225,42 @@ def _seed_two_slots(db):
         store.upsert_games(games)
 
 
+def _seed_cfb_compact_slots(db):
+    """Two CFB games 75 minutes apart, which a 90-minute planner batches."""
+    from datetime import UTC, datetime
+
+    from pickem.models import Game, Sport, make_game_id
+    from pickem.store.db import Store
+
+    games = [
+        Game(
+            game_id=make_game_id(Sport.CFB, 2024, 3, "BAMA", "UGA"),
+            sport=Sport.CFB,
+            season=2024,
+            week=3,
+            kickoff_utc=datetime(2024, 9, 22, 17, 0, tzinfo=UTC),
+            home_team_id="UGA",
+            away_team_id="BAMA",
+            home_score=24,
+            away_score=17,
+        ),
+        Game(
+            game_id=make_game_id(Sport.CFB, 2024, 3, "LSU", "TENN"),
+            sport=Sport.CFB,
+            season=2024,
+            week=3,
+            kickoff_utc=datetime(2024, 9, 22, 18, 15, tzinfo=UTC),
+            home_team_id="TENN",
+            away_team_id="LSU",
+            home_score=21,
+            away_score=20,
+        ),
+    ]
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games(games)
+
+
 def test_backfill_history_dry_run_prints_plan_without_spending(tmp_path, monkeypatch):
     # Catches eagerly reading the paid-adapter key for a dry run.
     db = tmp_path / "t.duckdb"
@@ -235,12 +271,198 @@ def test_backfill_history_dry_run_prints_plan_without_spending(tmp_path, monkeyp
 
     monkeypatch.setattr("pickem.config.odds_api_key", explode)
     result = runner.invoke(
-        app, ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db)]
+        app,
+        [
+            "backfill-history",
+            "--sport",
+            "nfl",
+            "--from",
+            "2024",
+            "--to",
+            "2024",
+            "--db",
+            str(db),
+        ],
     )
     assert result.exit_code == 0, result.output
-    assert "3 snapshots" in result.output
+    assert "3 planned" in result.output
     assert "30 credits" in result.output
     assert "dry run" in result.output.lower()
+
+
+def test_backfill_history_cfb_dry_run_batches_with_a_90_minute_maximum(tmp_path, monkeypatch):
+    # Catches defaulting CFB to the NFL's 15-minute batching window, which
+    # purchases an unnecessary third snapshot for these two kickoff slots.
+    db = tmp_path / "cfb.duckdb"
+    _seed_cfb_compact_slots(db)
+    monkeypatch.setattr(
+        "pickem.config.odds_api_key",
+        lambda: (_ for _ in ()).throw(AssertionError("dry run read the paid-adapter key")),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "backfill-history",
+            "--sport",
+            "cfb",
+            "--from",
+            "2024",
+            "--to",
+            "2024",
+            "--db",
+            str(db),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "2 planned" in result.output
+    assert "20 credits" in result.output
+
+
+def test_backfill_history_rejects_a_non_90_minute_cfb_paid_run(tmp_path):
+    db = tmp_path / "cfb.duckdb"
+    _seed_cfb_compact_slots(db)
+    result = runner.invoke(
+        app,
+        [
+            "backfill-history",
+            "--sport",
+            "cfb",
+            "--from",
+            "2024",
+            "--to",
+            "2024",
+            "--max-snapshot-age-minutes",
+            "15",
+            "--execute",
+            "--expected-credits",
+            "20",
+            "--db",
+            str(db),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "90" in result.output
+
+
+def test_backfill_history_paid_run_requires_an_expected_credit_total(tmp_path, monkeypatch):
+    # Catches reaching the client factory before the operator confirms the
+    # exact planned spend.
+    db = tmp_path / "t.duckdb"
+    _seed_two_slots(db)
+    monkeypatch.setattr(
+        "pickem.config.odds_api_key",
+        lambda: (_ for _ in ()).throw(AssertionError("paid run constructed a client")),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "backfill-history",
+            "--sport",
+            "nfl",
+            "--from",
+            "2024",
+            "--to",
+            "2024",
+            "--execute",
+            "--db",
+            str(db),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "expected-credits" in result.output
+
+
+def test_backfill_history_rejects_mismatched_credits_without_constructing_a_client(
+    tmp_path, monkeypatch
+):
+    db = tmp_path / "t.duckdb"
+    _seed_two_slots(db)
+    monkeypatch.setattr(
+        "pickem.config.odds_api_key",
+        lambda: (_ for _ in ()).throw(AssertionError("mismatch constructed a client")),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "backfill-history",
+            "--sport",
+            "nfl",
+            "--from",
+            "2024",
+            "--to",
+            "2024",
+            "--execute",
+            "--expected-credits",
+            "999",
+            "--db",
+            str(db),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "expected 999 pending credits" in result.output
+
+
+def test_backfill_history_forwards_the_probe_cap_and_prints_execution_balances(
+    tmp_path, monkeypatch
+):
+    # Catches dropping --max-new-requests at the CLI boundary or hiding the
+    # already-completed/pending ledger state after the paid probe.
+    from datetime import UTC, datetime
+
+    from pickem.models import MarketLinesResult
+
+    db = tmp_path / "t.duckdb"
+    _seed_two_slots(db)
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc_info):
+            return None
+
+        def remaining_credits(self):
+            return 2_000
+
+        def fetch_historical_spreads(self, _sport_key, **kwargs):
+            self.calls.append(kwargs)
+            return MarketLinesResult(
+                lines=[],
+                skipped=[],
+                snapshot_at=datetime(2024, 9, 22, 16, 45, tzinfo=UTC),
+            )
+
+    client = Client()
+    monkeypatch.setattr("pickem.cli.OddsClient", lambda _key: client)
+    monkeypatch.setattr("pickem.config.odds_api_key", lambda: "test-key")
+    result = runner.invoke(
+        app,
+        [
+            "backfill-history",
+            "--sport",
+            "nfl",
+            "--from",
+            "2024",
+            "--to",
+            "2024",
+            "--execute",
+            "--expected-credits",
+            "30",
+            "--max-new-requests",
+            "1",
+            "--db",
+            str(db),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(client.calls) == 1
+    assert "3 planned" in result.output
+    assert "0 complete" in result.output
+    assert "3 pending = 30 credits" in result.output
+    assert "balance: 2000 credits" in result.output
 
 
 def test_backfill_history_translates_credit_limit_to_exit_one(tmp_path):
@@ -251,6 +473,8 @@ def test_backfill_history_translates_credit_limit_to_exit_one(tmp_path):
         app,
         [
             "backfill-history",
+            "--sport",
+            "nfl",
             "--from",
             "2024",
             "--to",
@@ -258,6 +482,8 @@ def test_backfill_history_translates_credit_limit_to_exit_one(tmp_path):
             "--db",
             str(db),
             "--execute",
+            "--expected-credits",
+            "30",
             "--max-credits",
             "1",
         ],
@@ -278,7 +504,20 @@ def test_backfill_history_translates_interruption_to_exit_one(tmp_path, monkeypa
     )
     result = runner.invoke(
         app,
-        ["backfill-history", "--from", "2024", "--to", "2024", "--db", str(db), "--execute"],
+        [
+            "backfill-history",
+            "--sport",
+            "nfl",
+            "--from",
+            "2024",
+            "--to",
+            "2024",
+            "--db",
+            str(db),
+            "--execute",
+            "--expected-credits",
+            "30",
+        ],
     )
     assert result.exit_code == 1
     assert "stopped at snapshot 2/3" in result.output

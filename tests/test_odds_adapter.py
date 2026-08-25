@@ -335,6 +335,13 @@ def test_historical_unwraps_the_snapshot_envelope():
     assert {line.book for line in result.lines} == {"pinnacle", "draftkings"}
 
 
+def test_historical_result_carries_the_archive_timestamp():
+    # Catches returning the parsed lines without the envelope timestamp the
+    # archive ledger needs even when an archive response has no usable lines.
+    result = historical(client_returning(ENVELOPE))
+    assert result.snapshot_at == SNAPSHOT_TAKEN
+
+
 def test_captured_at_is_the_snapshot_timestamp_not_the_requested_one():
     result = historical(client_returning(ENVELOPE))
     # The archive answers with the closest snapshot at or earlier. Storing the
