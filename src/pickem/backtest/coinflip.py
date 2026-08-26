@@ -8,10 +8,14 @@ from collections.abc import Sequence
 from datetime import datetime
 from statistics import fmean
 
+import numpy as np
 from pydantic import BaseModel
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from pickem.edge.divergence import consensus_spread
-from pickem.models import Game, MarketLine, Sport
+from pickem.models import Game, MarketLine, Side, Sport
 
 _COINFLIP_BOUNDARY = 1.0
 
@@ -32,6 +36,375 @@ class CoinflipRow(BaseModel):
 class CoinflipDataset(BaseModel):
     rows: list[CoinflipRow]
     skipped: list[str]
+
+
+class CoinflipPrediction(BaseModel):
+    game_id: str
+    season: int
+    week: int
+    frozen_spread: float
+    median_delta: float
+    mean_delta: float
+    book_balance: float
+    probability_home: float | None
+    candidate_side: Side
+    elo_side: Side
+    target_home_cover: int | None
+    is_push: bool
+    candidate_correct: bool | None
+    elo_correct: bool | None
+    agrees_with_elo: bool
+
+
+class CoinflipFold(BaseModel):
+    train_from: int
+    train_through: int
+    test_season: int
+    selected_c: float
+    means: list[float]
+    scales: list[float]
+    coefficients: list[float]
+    intercept: float
+
+
+class CalibrationBin(BaseModel):
+    lower: float
+    upper: float
+    count: int
+    mean_probability: float | None
+    observed_rate: float | None
+
+
+class SeasonDelta(BaseModel):
+    season: int
+    candidate_accuracy: float
+    elo_accuracy: float
+    candidate_minus_elo: float
+
+
+class CoinflipEvaluation(BaseModel):
+    folds: list[CoinflipFold]
+    predictions: list[CoinflipPrediction]
+    pushes: int
+    candidate_wins: int = 0
+    candidate_losses: int = 0
+    elo_wins: int = 0
+    elo_losses: int = 0
+    candidate_accuracy: float | None = None
+    elo_accuracy: float | None = None
+    accuracy_delta: float | None = None
+    brier_score: float | None = None
+    log_loss: float | None = None
+    calibration: list[CalibrationBin] = []
+    season_deltas: list[SeasonDelta] = []
+    bootstrap_lower: float | None = None
+    bootstrap_upper: float | None = None
+    positive_seasons: int = 0
+    leakage_safe: bool = True
+    deterministic: bool = True
+
+
+def evaluate_coinflip(
+    rows: Sequence[CoinflipRow],
+    elo_sides: dict[str, Side],
+    c_grid: Sequence[float] = (0.1, 1.0, 10.0),
+) -> CoinflipEvaluation:
+    """Evaluate the fixed CFB candidate on chronological, paired outer folds."""
+    if not c_grid:
+        raise ValueError("c_grid must contain at least one C value")
+    if any(c <= 0 for c in c_grid):
+        raise ValueError("every C value must be positive")
+
+    ordered_rows = sorted(rows, key=lambda row: (row.season, row.week, row.game_id))
+    seasons = sorted({row.season for row in ordered_rows})
+    if len(seasons) < 2:
+        raise ValueError("walk-forward evaluation requires at least two seasons")
+    prediction_ids = {row.game_id for row in ordered_rows if row.season != seasons[0]}
+    if prediction_ids != set(elo_sides):
+        raise ValueError("outer-test rows and elo_sides must contain exactly the same game IDs")
+
+    folds: list[CoinflipFold] = []
+    predictions: list[CoinflipPrediction] = []
+    for test_season in seasons[1:]:
+        train_rows = [row for row in ordered_rows if row.season < test_season and not row.is_push]
+        test_rows = [row for row in ordered_rows if row.season == test_season]
+        if not test_rows:
+            continue
+        selected_c = _select_c(train_rows, test_season, c_grid)
+        pipeline = _fit_pipeline(
+            train_rows, selected_c, f"outer training through {test_season - 1}"
+        )
+        scaler: StandardScaler = pipeline.named_steps["scale"]
+        model: LogisticRegression = pipeline.named_steps["model"]
+        folds.append(
+            CoinflipFold(
+                train_from=min(row.season for row in train_rows),
+                train_through=max(row.season for row in train_rows),
+                test_season=test_season,
+                selected_c=selected_c,
+                means=[float(value) for value in scaler.mean_],
+                scales=[float(value) for value in scaler.scale_],
+                coefficients=[float(value) for value in model.coef_[0]],
+                intercept=float(model.intercept_[0]),
+            )
+        )
+        probabilities = pipeline.predict_proba(_features(test_rows))[:, 1]
+        for row, probability in zip(test_rows, probabilities, strict=True):
+            elo_side = elo_sides[row.game_id]
+            candidate_side = (
+                elo_side if probability == 0.5 else Side.HOME if probability > 0.5 else Side.AWAY
+            )
+            candidate_correct = _is_correct(candidate_side, row.target_home_cover)
+            elo_correct = _is_correct(elo_side, row.target_home_cover)
+            predictions.append(
+                CoinflipPrediction(
+                    game_id=row.game_id,
+                    season=row.season,
+                    week=row.week,
+                    frozen_spread=row.frozen_spread,
+                    median_delta=row.median_delta,
+                    mean_delta=row.mean_delta,
+                    book_balance=row.book_balance,
+                    probability_home=float(probability),
+                    candidate_side=candidate_side,
+                    elo_side=elo_side,
+                    target_home_cover=row.target_home_cover,
+                    is_push=row.is_push,
+                    candidate_correct=candidate_correct,
+                    elo_correct=elo_correct,
+                    agrees_with_elo=candidate_side is elo_side,
+                )
+            )
+
+    return summarize_coinflip_predictions(predictions, folds)
+
+
+def summarize_coinflip_predictions(
+    predictions: Sequence[CoinflipPrediction], folds: Sequence[CoinflipFold]
+) -> CoinflipEvaluation:
+    """Compute paired accuracy and probability diagnostics from outer-fold rows."""
+    ordered = sorted(predictions, key=lambda row: (row.season, row.week, row.game_id))
+    decided = [
+        prediction
+        for prediction in ordered
+        if not prediction.is_push
+        and prediction.target_home_cover is not None
+        and prediction.candidate_correct is not None
+        and prediction.elo_correct is not None
+    ]
+    candidate_wins = sum(prediction.candidate_correct for prediction in decided)
+    elo_wins = sum(prediction.elo_correct for prediction in decided)
+    candidate_accuracy = candidate_wins / len(decided) if decided else None
+    elo_accuracy = elo_wins / len(decided) if decided else None
+    accuracy_delta = (
+        candidate_accuracy - elo_accuracy
+        if candidate_accuracy is not None and elo_accuracy is not None
+        else None
+    )
+    probabilities = [prediction.probability_home for prediction in decided]
+    if any(probability is None for probability in probabilities):
+        raise ValueError("decided predictions must have a home-cover probability")
+    scores = [float(probability) for probability in probabilities]
+    targets = [int(prediction.target_home_cover) for prediction in decided]
+    brier_score = (
+        sum(
+            (probability - target) ** 2 for probability, target in zip(scores, targets, strict=True)
+        )
+        / len(scores)
+        if scores
+        else None
+    )
+    log_loss = (
+        -sum(
+            target * math.log(_clipped_probability(probability))
+            + (1 - target) * math.log(1 - _clipped_probability(probability))
+            for probability, target in zip(scores, targets, strict=True)
+        )
+        / len(scores)
+        if scores
+        else None
+    )
+    season_deltas = _season_deltas(decided)
+    bootstrap_lower, bootstrap_upper = _bootstrap_interval(decided)
+    return CoinflipEvaluation(
+        folds=list(folds),
+        predictions=ordered,
+        pushes=sum(prediction.is_push for prediction in ordered),
+        candidate_wins=candidate_wins,
+        candidate_losses=len(decided) - candidate_wins,
+        elo_wins=elo_wins,
+        elo_losses=len(decided) - elo_wins,
+        candidate_accuracy=candidate_accuracy,
+        elo_accuracy=elo_accuracy,
+        accuracy_delta=accuracy_delta,
+        brier_score=brier_score,
+        log_loss=log_loss,
+        calibration=_calibration(scores, targets),
+        season_deltas=season_deltas,
+        bootstrap_lower=bootstrap_lower,
+        bootstrap_upper=bootstrap_upper,
+        positive_seasons=sum(delta.candidate_minus_elo > 0 for delta in season_deltas),
+    )
+
+
+def passes_acceptance_gate(evaluation: CoinflipEvaluation) -> bool:
+    """Apply the frozen Candidate 1 acceptance requirements without tuning them."""
+    return (
+        evaluation.accuracy_delta is not None
+        and evaluation.accuracy_delta >= 0.01
+        and evaluation.positive_seasons >= 3
+        and evaluation.brier_score is not None
+        and evaluation.brier_score < 0.25
+        and evaluation.leakage_safe
+        and evaluation.deterministic
+    )
+
+
+def _calibration(scores: Sequence[float], targets: Sequence[int]) -> list[CalibrationBin]:
+    bins: list[CalibrationBin] = []
+    for lower, upper in ((0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)):
+        values = [
+            (score, target)
+            for score, target in zip(scores, targets, strict=True)
+            if lower <= score < upper or (upper == 1.0 and score == 1.0)
+        ]
+        bins.append(
+            CalibrationBin(
+                lower=lower,
+                upper=upper,
+                count=len(values),
+                mean_probability=(
+                    sum(score for score, _ in values) / len(values) if values else None
+                ),
+                observed_rate=(
+                    sum(target for _, target in values) / len(values) if values else None
+                ),
+            )
+        )
+    return bins
+
+
+def _clipped_probability(probability: float) -> float:
+    epsilon = np.finfo(float).eps
+    return min(max(probability, epsilon), 1 - epsilon)
+
+
+def _season_deltas(predictions: Sequence[CoinflipPrediction]) -> list[SeasonDelta]:
+    deltas: list[SeasonDelta] = []
+    for season in sorted({prediction.season for prediction in predictions}):
+        rows = [prediction for prediction in predictions if prediction.season == season]
+        candidate_accuracy = sum(row.candidate_correct for row in rows) / len(rows)
+        elo_accuracy = sum(row.elo_correct for row in rows) / len(rows)
+        deltas.append(
+            SeasonDelta(
+                season=season,
+                candidate_accuracy=candidate_accuracy,
+                elo_accuracy=elo_accuracy,
+                candidate_minus_elo=candidate_accuracy - elo_accuracy,
+            )
+        )
+    return deltas
+
+
+def _bootstrap_interval(
+    predictions: Sequence[CoinflipPrediction],
+) -> tuple[float | None, float | None]:
+    if not predictions:
+        return None, None
+    clusters: dict[tuple[int, int], list[CoinflipPrediction]] = defaultdict(list)
+    for prediction in predictions:
+        clusters[(prediction.season, prediction.week)].append(prediction)
+    cluster_rows = [clusters[key] for key in sorted(clusters)]
+    generator = np.random.default_rng(20260825)
+    differences = np.empty(10_000, dtype=float)
+    for index in range(len(differences)):
+        sampled = [
+            prediction
+            for cluster_index in generator.integers(len(cluster_rows), size=len(cluster_rows))
+            for prediction in cluster_rows[cluster_index]
+        ]
+        candidate_accuracy = sum(prediction.candidate_correct for prediction in sampled) / len(
+            sampled
+        )
+        elo_accuracy = sum(prediction.elo_correct for prediction in sampled) / len(sampled)
+        differences[index] = candidate_accuracy - elo_accuracy
+    lower, upper = np.percentile(differences, (2.5, 97.5))
+    return float(lower), float(upper)
+
+
+def _select_c(
+    train_rows: Sequence[CoinflipRow], test_season: int, c_grid: Sequence[float]
+) -> float:
+    partitions = _inner_partitions(train_rows, test_season)
+    scores: list[tuple[int, float]] = []
+    for c_value in sorted(set(c_grid)):
+        correct = 0
+        for inner_train, validation in partitions:
+            pipeline = _fit_pipeline(inner_train, c_value, "inner training")
+            predicted = pipeline.predict(_features(validation))
+            targets = _targets(validation, "inner validation")
+            correct += int(np.sum(predicted == targets))
+        scores.append((correct, float(c_value)))
+    highest_correct = max(score for score, _ in scores)
+    return min(c_value for score, c_value in scores if score == highest_correct)
+
+
+def _inner_partitions(
+    train_rows: Sequence[CoinflipRow], test_season: int
+) -> list[tuple[list[CoinflipRow], list[CoinflipRow]]]:
+    if test_season == min(row.season for row in train_rows) + 1:
+        earliest = min(row.season for row in train_rows)
+        inner_train = [row for row in train_rows if row.season == earliest and row.week <= 8]
+        validation = [row for row in train_rows if row.season == earliest and 9 <= row.week <= 15]
+        _targets(validation, "2021 weeks 9-15 validation")
+        return [(inner_train, validation)]
+
+    partitions: list[tuple[list[CoinflipRow], list[CoinflipRow]]] = []
+    for validation_season in sorted({row.season for row in train_rows})[1:]:
+        inner_train = [row for row in train_rows if row.season < validation_season]
+        validation = [row for row in train_rows if row.season == validation_season]
+        _targets(validation, f"{validation_season} inner validation")
+        partitions.append((inner_train, validation))
+    return partitions
+
+
+def _fit_pipeline(rows: Sequence[CoinflipRow], selected_c: float, partition: str) -> Pipeline:
+    targets = _targets(rows, partition)
+    return Pipeline(
+        [
+            ("scale", StandardScaler()),
+            (
+                "model",
+                LogisticRegression(
+                    penalty="l2",
+                    C=selected_c,
+                    solver="lbfgs",
+                    class_weight=None,
+                    max_iter=1000,
+                    random_state=0,
+                ),
+            ),
+        ]
+    ).fit(_features(rows), targets)
+
+
+def _features(rows: Sequence[CoinflipRow]) -> np.ndarray:
+    return np.asarray(
+        [[row.median_delta, row.mean_delta, row.book_balance] for row in rows], dtype=float
+    )
+
+
+def _targets(rows: Sequence[CoinflipRow], partition: str) -> np.ndarray:
+    targets = [row.target_home_cover for row in rows if not row.is_push]
+    if len(targets) != len(rows) or set(targets) != {0, 1}:
+        raise ValueError(f"{partition} must contain both target classes and no pushes")
+    return np.asarray(targets, dtype=int)
+
+
+def _is_correct(side: Side, target_home_cover: int | None) -> bool | None:
+    if target_home_cover is None:
+        return None
+    return (side is Side.HOME) == bool(target_home_cover)
 
 
 def latest_by_book(lines: Sequence[MarketLine]) -> list[MarketLine]:
