@@ -1,8 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-26, after the complete 2021-2025 CFB Odds API
-archive acquisition
+**Last updated:** 2026-08-26, after the CFB COINFLIP NULL handoff verification
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -26,9 +25,9 @@ You have a working system with a real result. Nothing is half-finished and
 there is no branch to merge. Orient yourself in about two minutes:
 
 ```bash
-uv run pytest -q                              # expect 253 passed
+uv run pytest -q                              # expect 313 passed
 uv run pickem backtest --from 2020 --to 2025  # expect the result below
-uv run pickem --help                          # the whole surface, 9 commands
+uv run pickem --help                          # the whole surface, 10 commands
 ```
 
 Then read "The phase-exit result" at the bottom of this file — it is the
@@ -73,9 +72,60 @@ The first result and its byte-identical rerun are frozen. No 2026 result may
 cause a midseason refit, hyperparameter change, scaling change, or reconsidered
 ship/no-ship decision.
 
+#### Task 12 offline handoff verification (2026-08-26)
+
+Candidate 1 remains **NULL**: Elo is still the live CFB `COINFLIP` decider;
+there is no accepted model artifact and reporting loads no model code. Do not
+begin Candidate 2 without a new design approval. The gitignored prediction
+stream has 1,577 rows, zero from season 2026, and SHA-256
+`5b2a3cff74d7009b3982a71ecbbe1bd49fbd4d3da5bf9b00f98a7bc7cf6b6d5c`.
+
+Fresh clean-process checks were:
+
+```text
+uv run pytest -q                                           313 passed; 254 expected sklearn penalty="l2" warnings
+uv run ruff check src tests                                 All checks passed!
+uv run ruff format --check src tests                        54 files already formatted
+uv run pickem --help                                        10 commands, including backfill-history and evaluate-coinflip
+uv run pickem backfill-history --sport cfb --from 2021 --to 2025 --max-snapshot-age-minutes 90 --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
+                                                            1018 planned, 1018 complete, 0 pending = 0 credits
+```
+
+The final dry run constructs no client and has no pending archive spend. The
+current vendor balance was deliberately **not** queried: even the free quota
+endpoint is a network call, and this handoff ran under a no-network
+authorization boundary. Thus no current credits-remaining value is claimed.
+
+Stored-data checks against the operational database found zero orphaned CFB
+archive lines, zero CFB submission lines captured at or after kickoff, and
+1,018 completed archive ledger rows totaling 101,262 lines (with zero returned
+after request and zero negative ledger counts). Completed-game coverage by
+season was `2021 770/39/21/730`, `2022 776/44/2/732`,
+`2023 792/47/6/745`, `2024 797/46/1/751`, and `2025 807/48/0/759`, where each
+tuple is completed / missing frozen / missing submission / both proxies.
+Submission snapshot age (minimum / median / maximum minutes) was
+`2021 0/0/9`, `2022 0/4.35/9`, `2023 3.32/4.32/4.37`,
+`2024 3.37/4.37/4.38`, and `2025 3.35/4.37/4.38`. The full invariant SQL and
+book-depth distributions are preserved in the Task 12 report.
+
+The requested stored 2026 CFB week-1 report was rendered once without polling
+or syncing: it had 15 games, 15 sides, provenance, a 9,541-minute market age,
+and zero scored games. `report` also records a prospective pick audit batch;
+the 2026-08-26 18:56:22 UTC render appended 15 rows, changing `picks` from 30
+to 45 while leaving `games` (6,166), `lines` (149,690),
+`archive_requests` (1,018), and `league_lines` (15) unchanged. Preserve that
+batch; do not delete or revise it. The current operational database SHA-256 is
+`2fcfd7765824817cc8a3640136325508f70f37bb830484d5491822a30241e612`.
+
+The sheet now renders every `Edge.rationale` in a Rationale column. For the
+stored NULL-path week, the three divergence picks name their market movement
+and every COINFLIP rationale names the Elo rating tiebreak; no outcomes were
+graded. Do not invoke `poll-odds`, `sync-results`, a paid archive command, or
+any 2026 refit without separate authorization.
+
 - **Branch:** all work is on `master`, working tree clean. There is no remote
   configured, so `git log` is the only history and nothing is pushed anywhere.
-- **Tests:** 312 passing, `uv run pytest -q`. The suite is fully offline — HTTP
+- **Tests:** 313 passing, `uv run pytest -q`. The suite is fully offline — HTTP
   is injected via `httpx.MockTransport` and loaders are injected. Keep it that
   way; no test may touch the network.
 - **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`
@@ -109,7 +159,7 @@ Its SHA-256 is
 | `lines` / `nflverse` | 1,693 | closing lines, kept as a cross-check only |
 | `lines` / `oddsapi` | 147 | live poll, CFB 2026 week 1 |
 | `league_lines` | 15 | CFB 2026 week 1, from the saved CBS page (2026-08-20) |
-| `picks` | 30 | stored CFB 2026 week 1 pick history |
+| `picks` | 45 | three stored CFB 2026 week 1 prospective pick-audit batches; the last was appended by the 2026-08-26 Task 12 report render |
 
 #### CFB archive acquisition
 
@@ -546,8 +596,10 @@ so the free tier would cover weekly use if the subscription is cancelled.
   5-6 and 2021 week 16 COVID postponements, where the game had no confirmed
   date to price. This is correct behaviour, not a gap to close: no early-week
   market existed, which is the same situation CBS would have faced.
-- **CFB history has never been backfilled;** the only CFB rows are 2026 week 1.
-  Everything in the phase-exit result is NFL only.
+- **The CFB 2021–2025 archive is complete;** it now contains both frozen and
+  submission proxies for the explicit coverage population recorded above. The
+  phase-exit backtest result remains NFL-only, but the separate CFB COINFLIP
+  evaluation is frozen as a NULL result.
 - **The CBS paste gap is CLOSED for CFB 2026 week 1, still open for NFL.**
   The saved page ingested, polled, rendered and calibrated on 2026-08-20 — see
   "The calibration result" below. The NFL weekly path still has never run

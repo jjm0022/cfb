@@ -40,6 +40,11 @@ def test_shows_both_numbers_so_a_pick_can_be_audited():
     assert "-3.0" in sheet and "-6.0" in sheet
 
 
+def test_shows_the_deciding_rationale_for_each_pick():
+    sheet = render_sheet([edge()], [GAME], generated_at=NOW, provenance=PROVENANCE)
+    assert "league -3.0 vs market -6.0: 3.0 pts toward home" in sheet
+
+
 def test_orders_by_divergence_strongest_first():
     strong = edge(Tier.STRONG, delta=6.0)
     weak = edge(Tier.COINFLIP, delta=0.5)

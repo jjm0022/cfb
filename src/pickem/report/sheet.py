@@ -37,8 +37,8 @@ def render_sheet(
     header.append("")
 
     rows = [
-        "| # | Matchup | Pick | Tier | Edge | League | Market |",
-        "|---|---------|------|------|------|--------|--------|",
+        "| # | Matchup | Pick | Tier | Edge | League | Market | Rationale |",
+        "|---|---------|------|------|------|--------|--------|-----------|",
     ]
     for index, edge in enumerate(rank_edges(edges), start=1):
         game = by_id.get(edge.game_id)
@@ -50,7 +50,8 @@ def render_sheet(
         market = "—" if edge.market_spread is None else f"{edge.market_spread:+.1f}"
         rows.append(
             f"| {index} | {matchup} | **{pick}** | {edge.tier.value} | "
-            f"{abs(edge.delta):.1f} | {edge.league_spread:+.1f} | {market} |"
+            f"{abs(edge.delta):.1f} | {edge.league_spread:+.1f} | {market} | "
+            f"{edge.rationale} |"
         )
 
     return "\n".join([*header, *rows, ""])
