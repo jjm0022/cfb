@@ -21,6 +21,14 @@ from pickem.backtest.archive import (
     PlannedCostChanged,
 )
 from pickem.backtest.calibration import DEFAULT_TOLERANCE, calibrate
+from pickem.backtest.coinflip import (
+    build_coinflip_rows,
+    evaluate_coinflip,
+    passes_acceptance_gate,
+    render_coinflip_report,
+    render_predictions_jsonl,
+    replay_elo_sides,
+)
 from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.edge.divergence import rank_edges
 from pickem.edge.pipeline import MissingGameError, decide_edges
@@ -501,6 +509,56 @@ def calibrate_cmd(
     for assumption in result.assumptions:
         typer.echo(f"  - {assumption}")
     _warn_skipped("league lines not calibrated", result.skipped)
+
+
+@app.command("evaluate-coinflip")
+def evaluate_coinflip_cmd(
+    sport: Sport = typer.Option(...),
+    start: int = typer.Option(2021, "--from"),
+    end: int = typer.Option(2025, "--to"),
+    predictions: Path = typer.Option(..., help="Write deterministic prediction JSONL here"),
+    report: Path = typer.Option(..., help="Write the deterministic Markdown report here"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Run the fixed 2021–2025 CFB Candidate 1 experiment once."""
+    if sport is not Sport.CFB:
+        typer.secho("evaluate-coinflip is an approved CFB-only experiment", fg="red", err=True)
+        raise typer.Exit(code=1)
+    if (start, end) != (2021, 2025):
+        typer.secho(
+            "evaluate-coinflip only permits the approved --from 2021 --to 2025 range",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    with _store(db) as store:
+        stored = store.load_seasons(Sport.CFB, start, end)
+    frozen, submission, unclassified = split_proxies(stored.market_lines)
+    dataset = build_coinflip_rows(stored.games, frozen, submission)
+    replayed_sides = replay_elo_sides(stored.games, frozen, submission)
+    first_season = min(row.season for row in dataset.rows)
+    elo_sides = {
+        game_id: side
+        for game_id, side in replayed_sides.items()
+        if next(row.season for row in dataset.rows if row.game_id == game_id) != first_season
+    }
+    evaluation = evaluate_coinflip(dataset.rows, elo_sides)
+
+    predictions.parent.mkdir(parents=True, exist_ok=True)
+    report.parent.mkdir(parents=True, exist_ok=True)
+    predictions.write_text(render_predictions_jsonl(evaluation))
+    report.write_text(render_coinflip_report(evaluation))
+
+    typer.echo(f"eligible COINFLIP feature rows: {len(dataset.rows)}")
+    for fold in evaluation.folds:
+        typer.echo(
+            f"  train {fold.train_from}–{fold.train_through}, test {fold.test_season}, "
+            f"C={fold.selected_c:g}"
+        )
+    _warn_skipped("games excluded from COINFLIP coverage", dataset.skipped)
+    _warn_skipped("stored lines outside proxy coverage", unclassified)
+    decision = "PASS" if passes_acceptance_gate(evaluation) else "NULL — retain Elo"
+    typer.echo(f"Candidate 1: {decision}")
 
 
 if __name__ == "__main__":

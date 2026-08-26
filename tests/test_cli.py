@@ -1,9 +1,180 @@
+import json
+from datetime import UTC, datetime, timedelta
+
 from typer.testing import CliRunner
 
 from pickem.backtest.archive import ArchiveRunInterrupted
 from pickem.cli import app
 
 runner = CliRunner()
+
+
+def _seed_coinflip_experiment(db):
+    """Five balanced CFB seasons with the two archived proxy roles."""
+    from pickem.models import Game, MarketLine, Sport
+    from pickem.store.db import Store
+
+    games = []
+    lines = []
+    for season in range(2021, 2026):
+        for week, target, index in ((1, 0, 0), (2, 1, 1), (9, 0, 2), (10, 1, 3)):
+            kickoff = datetime(season, 9, min(week, 28), 17, tzinfo=UTC)
+            game_id = f"cfb-{season}-{week:02d}-A{index}-at-H{index}"
+            games.append(
+                Game(
+                    game_id=game_id,
+                    sport=Sport.CFB,
+                    season=season,
+                    week=week,
+                    kickoff_utc=kickoff,
+                    home_team_id=f"H{index}",
+                    away_team_id=f"A{index}",
+                    home_score=27 if target else 20,
+                    away_score=20 if target else 24,
+                )
+            )
+            lines.append(
+                MarketLine(
+                    game_id=game_id,
+                    source="oddsapi:frozen",
+                    book="a",
+                    spread_home=-3.0,
+                    captured_at=kickoff - timedelta(days=3),
+                )
+            )
+            lines.extend(
+                MarketLine(
+                    game_id=game_id,
+                    source="oddsapi:submit",
+                    book=book,
+                    spread_home=spread,
+                    captured_at=kickoff - timedelta(minutes=10),
+                )
+                for book, spread in (("a", -3.8), ("b", -3.0), ("c", -2.2))
+            )
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games(games)
+        store.append_market_lines(lines)
+
+
+def test_evaluate_coinflip_writes_deterministic_auditable_artifacts(tmp_path):
+    """Catches an unpersisted, unordered, or timestamped CFB experiment run."""
+    db = tmp_path / "coinflip.duckdb"
+    _seed_coinflip_experiment(db)
+    first_predictions = tmp_path / "first.jsonl"
+    first_report = tmp_path / "first.md"
+    second_predictions = tmp_path / "second.jsonl"
+    second_report = tmp_path / "second.md"
+    command = [
+        "evaluate-coinflip",
+        "--sport",
+        "cfb",
+        "--from",
+        "2021",
+        "--to",
+        "2025",
+        "--db",
+        str(db),
+    ]
+
+    first = runner.invoke(
+        app,
+        [
+            *command,
+            "--predictions",
+            str(first_predictions),
+            "--report",
+            str(first_report),
+        ],
+    )
+    second = runner.invoke(
+        app,
+        [
+            *command,
+            "--predictions",
+            str(second_predictions),
+            "--report",
+            str(second_report),
+        ],
+    )
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    predictions = [json.loads(line) for line in first_predictions.read_text().splitlines()]
+    assert [(row["season"], row["week"], row["game_id"]) for row in predictions] == sorted(
+        (row["season"], row["week"], row["game_id"]) for row in predictions
+    )
+    assert first_predictions.read_bytes() == second_predictions.read_bytes()
+    assert first_report.read_bytes() == second_report.read_bytes()
+    markdown = first_report.read_text()
+    for text in [
+        "Training seasons",
+        "Test season",
+        "Chosen C",
+        "Paired accuracy delta",
+        "Brier score",
+        "Log loss",
+        "Calibration",
+        "Bootstrap 95% interval",
+        "accuracy delta >= 1.0 percentage point",
+        "at least 3 positive seasons",
+        "Brier score < 0.25",
+        "leakage-safe replay",
+        "deterministic execution",
+        "Candidate 1: NULL",
+    ]:
+        assert text in markdown
+    assert first_predictions.read_bytes().endswith(b"\n")
+    assert first_report.read_bytes().endswith(b"\n")
+
+
+def test_evaluate_coinflip_refuses_nfl(tmp_path):
+    """Catches the approved CFB-only experiment silently accepting NFL data."""
+    result = runner.invoke(
+        app,
+        [
+            "evaluate-coinflip",
+            "--sport",
+            "nfl",
+            "--from",
+            "2021",
+            "--to",
+            "2025",
+            "--predictions",
+            str(tmp_path / "predictions.jsonl"),
+            "--report",
+            str(tmp_path / "report.md"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "CFB-only" in result.output
+
+
+def test_evaluate_coinflip_refuses_an_unapproved_season_range(tmp_path):
+    """Catches silently changing the precommitted one-shot experiment window."""
+    result = runner.invoke(
+        app,
+        [
+            "evaluate-coinflip",
+            "--sport",
+            "cfb",
+            "--from",
+            "2020",
+            "--to",
+            "2025",
+            "--predictions",
+            str(tmp_path / "predictions.jsonl"),
+            "--report",
+            str(tmp_path / "report.md"),
+            "--db",
+            str(tmp_path / "missing.duckdb"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "only permits" in result.output
 
 
 def test_help_lists_every_command():

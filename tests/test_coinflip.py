@@ -10,9 +10,11 @@ from pickem.backtest.coinflip import (
     build_coinflip_rows,
     evaluate_coinflip,
     passes_acceptance_gate,
+    replay_elo_sides,
     summarize_coinflip_predictions,
 )
-from pickem.models import Game, MarketLine, Side, Sport
+from pickem.edge.pipeline import decide_edges
+from pickem.models import Game, LeagueLine, MarketLine, Side, Sport, Tier
 
 KICKOFF = datetime(2025, 9, 6, 17, tzinfo=UTC)
 CAPTURED = KICKOFF - timedelta(minutes=15)
@@ -433,3 +435,114 @@ def test_gate_requires_one_percentage_point_three_seasons_and_brier_below_quarte
     assert not passes_acceptance_gate(with_delta(0.0099))
     assert not passes_acceptance_gate(with_positive_seasons(2))
     assert not passes_acceptance_gate(with_brier(0.25))
+
+
+def test_replay_elo_sides_matches_live_coinflip_decisions_with_prior_week_history_only():
+    """Catches replaying a different tier or leaking a week's final into Elo."""
+    kickoff_2021 = datetime(2021, 9, 4, 17, tzinfo=UTC)
+    kickoff_2022 = datetime(2022, 9, 3, 17, tzinfo=UTC)
+    games = [
+        Game(
+            game_id="cfb-2021-01-B-at-A",
+            sport=Sport.CFB,
+            season=2021,
+            week=1,
+            kickoff_utc=kickoff_2021,
+            home_team_id="A",
+            away_team_id="B",
+            home_score=10,
+            away_score=40,
+        ),
+        Game(
+            game_id="cfb-2022-01-B-at-A",
+            sport=Sport.CFB,
+            season=2022,
+            week=1,
+            kickoff_utc=kickoff_2022,
+            home_team_id="A",
+            away_team_id="B",
+            home_score=60,
+            away_score=0,
+        ),
+        Game(
+            game_id="cfb-2022-01-D-at-C",
+            sport=Sport.CFB,
+            season=2022,
+            week=1,
+            kickoff_utc=kickoff_2022,
+            home_team_id="C",
+            away_team_id="D",
+            home_score=24,
+            away_score=17,
+        ),
+    ]
+    frozen = [
+        MarketLine(
+            game_id=game.game_id,
+            source="oddsapi:frozen",
+            book="a",
+            spread_home=2.0 if game.home_team_id == "A" else -3.0,
+            captured_at=game.kickoff_utc - timedelta(days=3),
+        )
+        for game in games
+    ]
+    submission = [
+        MarketLine(
+            game_id=game.game_id,
+            source="oddsapi:submit",
+            book="a",
+            spread_home=(
+                2.0
+                if game.home_team_id == "A"
+                else -5.0
+            ),
+            captured_at=game.kickoff_utc - timedelta(minutes=10),
+        )
+        for game in games
+    ]
+
+    feature_ids = {row.game_id for row in build_coinflip_rows(games, frozen, submission).rows}
+    sides = replay_elo_sides(games, frozen, submission)
+    expected = decide_edges(
+        [
+            LeagueLine(
+                game_id=games[1].game_id,
+                season=2022,
+                week=1,
+                spread_home=2.0,
+                posted_at=kickoff_2022 - timedelta(days=3),
+            )
+        ],
+        [submission[1]],
+        [games[1]],
+        [games[0]],
+    )[0]
+    leaked = decide_edges(
+        [
+            LeagueLine(
+                game_id=games[1].game_id,
+                season=2022,
+                week=1,
+                spread_home=2.0,
+                posted_at=kickoff_2022 - timedelta(days=3),
+            )
+        ],
+        [submission[1]],
+        [games[1]],
+        games[:2],
+    )[0]
+
+    assert feature_ids == {games[0].game_id, games[1].game_id}
+    assert set(sides) == feature_ids
+    assert expected.tier is Tier.COINFLIP
+    assert sides[games[1].game_id] is expected.side
+    assert sides[games[1].game_id] is not leaked.side
+
+    in_play = MarketLine(
+        game_id=games[1].game_id,
+        source="oddsapi:submit",
+        book="a",
+        spread_home=-20.0,
+        captured_at=kickoff_2022,
+    )
+    assert replay_elo_sides(games, frozen, [*submission, in_play]) == sides

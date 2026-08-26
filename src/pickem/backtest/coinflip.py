@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections import defaultdict
 from collections.abc import Sequence
@@ -15,7 +16,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from pickem.edge.divergence import consensus_spread
-from pickem.models import Game, MarketLine, Side, Sport
+from pickem.edge.pipeline import decide_edges
+from pickem.models import Game, LeagueLine, MarketLine, Side, Sport, Tier
 
 _COINFLIP_BOUNDARY = 1.0
 
@@ -261,6 +263,191 @@ def passes_acceptance_gate(evaluation: CoinflipEvaluation) -> bool:
     )
 
 
+def replay_elo_sides(
+    games: Sequence[Game], frozen: Sequence[MarketLine], submission: Sequence[MarketLine]
+) -> dict[str, Side]:
+    """Replay the live CFB Elo tiebreak, retaining only eligible COINFLIPs.
+
+    The feature builder establishes the candidate population, while this
+    replay deliberately calls the same final-decision pipeline used by the
+    weekly report. Week results are appended only after all that week's
+    decisions, preserving the pre-kickoff information boundary.
+    """
+    feature_by_id = {
+        row.game_id: row for row in build_coinflip_rows(games, frozen, submission).rows
+    }
+    feature_ids = set(feature_by_id)
+    frozen_by_game = _group_by_game(frozen)
+    submission_by_game = _group_by_game(submission)
+    by_week: dict[tuple[int, int], list[Game]] = defaultdict(list)
+    for game in sorted(games, key=lambda game: (game.season, game.week, game.game_id)):
+        by_week[(game.season, game.week)].append(game)
+
+    sides: dict[str, Side] = {}
+    history: list[Game] = []
+    for key in sorted(by_week):
+        week_games = by_week[key]
+        league_lines: list[LeagueLine] = []
+        for game in week_games:
+            if game.game_id not in feature_ids:
+                continue
+            game_frozen = _pre_kickoff_lines(
+                frozen_by_game.get(game.game_id, []), game.kickoff_utc
+            )
+            frozen_spread = consensus_spread(game_frozen)
+            assert frozen_spread is not None  # guaranteed by build_coinflip_rows
+            league_lines.append(
+                LeagueLine(
+                    game_id=game.game_id,
+                    season=game.season,
+                    week=game.week,
+                    spread_home=frozen_spread,
+                    posted_at=max(line.captured_at for line in game_frozen),
+                )
+            )
+        week_submission = [
+            line
+            for game in week_games
+            if game.game_id in feature_ids
+            for line in _pre_kickoff_lines(
+                submission_by_game.get(game.game_id, []), game.kickoff_utc
+            )
+        ]
+        for edge in decide_edges(league_lines, week_submission, week_games, history):
+            if edge.tier is Tier.COINFLIP and edge.game_id in feature_ids:
+                sides[edge.game_id] = edge.side
+        history.extend(week_games)
+
+    if set(sides) != feature_ids:
+        missing = sorted(feature_ids - set(sides))
+        unexpected = sorted(set(sides) - feature_ids)
+        raise ValueError(
+            "Elo replay and feature rows must contain exactly the same game IDs; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    return {game_id: sides[game_id] for game_id in sorted(sides)}
+
+
+def render_predictions_jsonl(evaluation: CoinflipEvaluation) -> str:
+    """Serialize sorted outer-fold predictions as stable newline-delimited JSON."""
+    rows = sorted(
+        evaluation.predictions, key=lambda row: (row.season, row.week, row.game_id)
+    )
+    return "".join(
+        json.dumps(
+            row.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        + "\n"
+        for row in rows
+    )
+
+
+def render_coinflip_report(evaluation: CoinflipEvaluation) -> str:
+    """Render the frozen Candidate 1 audit report without wall-clock metadata."""
+    def number(value: float | None, digits: int = 4) -> str:
+        return "n/a" if value is None else f"{value:.{digits}f}"
+
+    def percentage(value: float | None) -> str:
+        return "n/a" if value is None else f"{value * 100:.2f}%"
+
+    gate = passes_acceptance_gate(evaluation)
+    gate_rows = [
+        (
+            "accuracy delta >= 1.0 percentage point",
+            evaluation.accuracy_delta is not None and evaluation.accuracy_delta >= 0.01,
+            percentage(evaluation.accuracy_delta),
+        ),
+        (
+            "at least 3 positive seasons",
+            evaluation.positive_seasons >= 3,
+            str(evaluation.positive_seasons),
+        ),
+        (
+            "Brier score < 0.25",
+            evaluation.brier_score is not None and evaluation.brier_score < 0.25,
+            number(evaluation.brier_score),
+        ),
+        ("leakage-safe replay", evaluation.leakage_safe, str(evaluation.leakage_safe).lower()),
+        (
+            "deterministic execution",
+            evaluation.deterministic,
+            str(evaluation.deterministic).lower(),
+        ),
+    ]
+    lines = [
+        "# Candidate 1: CFB COINFLIP walk-forward evaluation",
+        "",
+        "## Folds",
+        "",
+        "| Training seasons | Test season | Chosen C |",
+        "| --- | ---: | ---: |",
+    ]
+    lines.extend(
+        f"| {fold.train_from}–{fold.train_through} | {fold.test_season} | "
+        f"{fold.selected_c:g} |"
+        for fold in evaluation.folds
+    )
+    lines.extend(
+        [
+            "",
+            "## Paired outcomes",
+            "",
+            f"- Candidate accuracy: {percentage(evaluation.candidate_accuracy)} "
+            f"({evaluation.candidate_wins}-{evaluation.candidate_losses})",
+            f"- Elo accuracy: {percentage(evaluation.elo_accuracy)} "
+            f"({evaluation.elo_wins}-{evaluation.elo_losses})",
+            f"- Paired accuracy delta: {percentage(evaluation.accuracy_delta)}",
+            f"- Pushes: {evaluation.pushes}",
+            f"- Brier score: {number(evaluation.brier_score)}",
+            f"- Log loss: {number(evaluation.log_loss)}",
+            "",
+            "## Season deltas",
+            "",
+            "| Season | Candidate accuracy | Elo accuracy | Candidate minus Elo |",
+            "| ---: | ---: | ---: | ---: |",
+        ]
+    )
+    lines.extend(
+        f"| {delta.season} | {percentage(delta.candidate_accuracy)} | "
+        f"{percentage(delta.elo_accuracy)} | {percentage(delta.candidate_minus_elo)} |"
+        for delta in evaluation.season_deltas
+    )
+    lines.extend(
+        [
+            "",
+            "## Calibration",
+            "",
+            "| Probability bin | Count | Mean probability | Observed rate |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+    )
+    lines.extend(
+        f"| [{bin_.lower:.1f}, {bin_.upper:.1f}] | {bin_.count} | "
+        f"{number(bin_.mean_probability)} | {number(bin_.observed_rate)} |"
+        for bin_ in evaluation.calibration
+    )
+    lines.extend(
+        [
+            "",
+            "## Bootstrap",
+            "",
+            "- Bootstrap 95% interval: "
+            f"[{percentage(evaluation.bootstrap_lower)}, {percentage(evaluation.bootstrap_upper)}]",
+            "",
+            "## Acceptance gate",
+            "",
+            "| Condition | Result | Observed |",
+            "| --- | --- | --- |",
+        ]
+    )
+    lines.extend(
+        f"| {condition} | {'PASS' if passed else 'FAIL'} | {observed} |"
+        for condition, passed, observed in gate_rows
+    )
+    lines.extend(["", f"Candidate 1: {'PASS' if gate else 'NULL — retain Elo'}", ""])
+    return "\n".join(lines)
+
+
 def _calibration(scores: Sequence[float], targets: Sequence[int]) -> list[CalibrationBin]:
     bins: list[CalibrationBin] = []
     for lower, upper in ((0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)):
@@ -379,7 +566,6 @@ def _fit_pipeline(rows: Sequence[CoinflipRow], selected_c: float, partition: str
             (
                 "model",
                 LogisticRegression(
-                    penalty="l2",
                     C=selected_c,
                     solver="lbfgs",
                     class_weight=None,
