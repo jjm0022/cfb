@@ -147,8 +147,8 @@ uv run pickem poll-odds --sport cfb --season 2026 --week 1 \
   --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
 ```
 
-It consumed the one authorized live request and reported `appended 0 market
-lines`. Eight feed events were visibly skipped: UNC–TCU, SJSU–USC, NCSU–UVA,
+It exited `0`, consumed the one authorized live request, and reported `appended
+0 market lines`. Eight feed events were visibly skipped: UNC–TCU, SJSU–USC, NCSU–UVA,
 NMSU–FSU, HAW–STAN, and MEM–UNLV were outside the stored 2026 week-1 slate;
 Jacksonville State–North Dakota State and Sacramento State–Eastern Michigan
 contained untracked FCS teams. Post-poll read-only counts remained `games`
