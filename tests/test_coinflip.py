@@ -93,6 +93,19 @@ def test_snapshot_at_or_after_kickoff_is_rejected():
     assert "kickoff" in dataset.skipped[0].lower()
 
 
+def test_in_play_history_is_ignored_when_pre_kickoff_quote_exists():
+    """Catches an in-play archive row excluding an otherwise valid game."""
+    in_play = SUBMISSION[0].model_copy(
+        update={"spread_home": -20.0, "captured_at": GAME.kickoff_utc}
+    )
+
+    baseline = build_coinflip_rows([GAME], FROZEN, SUBMISSION).rows[0]
+    dataset = build_coinflip_rows([GAME], FROZEN, [*SUBMISSION, in_play])
+
+    assert dataset.rows == [baseline]
+    assert dataset.skipped == []
+
+
 def test_missing_frozen_or_submission_books_are_reported():
     """Catches proxy gaps being silently omitted from the audit trail."""
     no_frozen = build_coinflip_rows([GAME], [], SUBMISSION)

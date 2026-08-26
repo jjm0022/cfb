@@ -74,21 +74,20 @@ def build_coinflip_rows(
         if game.home_score is None or game.away_score is None:
             skipped.append(f"{game.game_id}: unplayed game (missing final score)")
             continue
-        if not frozen_lines:
-            skipped.append(f"{game.game_id}: missing frozen-line snapshot")
+        frozen_pre_kickoff = _pre_kickoff_lines(frozen_lines, game.kickoff_utc)
+        submission_pre_kickoff = _pre_kickoff_lines(submission_lines, game.kickoff_utc)
+        if not frozen_pre_kickoff:
+            skipped.append(f"{game.game_id}: missing frozen-line snapshot before kickoff")
             continue
-        if not submission_lines:
-            skipped.append(f"{game.game_id}: missing submission-time snapshot")
+        if not submission_pre_kickoff:
+            skipped.append(f"{game.game_id}: missing submission-time snapshot before kickoff")
             continue
-        if _has_snapshot_at_or_after_kickoff([*frozen_lines, *submission_lines], game.kickoff_utc):
-            skipped.append(f"{game.game_id}: snapshot at or after kickoff is not leakage-safe")
-            continue
-        if not _all_spreads_finite([*frozen_lines, *submission_lines]):
+        if not _all_spreads_finite([*frozen_pre_kickoff, *submission_pre_kickoff]):
             skipped.append(f"{game.game_id}: non-finite market spread")
             continue
 
-        frozen_latest = latest_by_book(frozen_lines)
-        submission_latest = latest_by_book(submission_lines)
+        frozen_latest = latest_by_book(frozen_pre_kickoff)
+        submission_latest = latest_by_book(submission_pre_kickoff)
         frozen_spread = consensus_spread(frozen_latest)
         market_median = consensus_spread(submission_latest)
         if frozen_spread is None:
@@ -140,8 +139,9 @@ def _group_by_game(lines: Sequence[MarketLine]) -> dict[str, list[MarketLine]]:
     return grouped
 
 
-def _has_snapshot_at_or_after_kickoff(lines: Sequence[MarketLine], kickoff: datetime) -> bool:
-    return any(line.captured_at >= kickoff for line in lines)
+def _pre_kickoff_lines(lines: Sequence[MarketLine], kickoff: datetime) -> list[MarketLine]:
+    """Exclude in-play history before selecting each book's latest quote."""
+    return [line for line in lines if line.captured_at < kickoff]
 
 
 def _all_spreads_finite(lines: Sequence[MarketLine]) -> bool:
