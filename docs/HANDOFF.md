@@ -55,9 +55,27 @@ wrong and are recorded there with their reasons.
 
 ## Current state
 
+### Candidate 1 CFB COINFLIP result (frozen 2026-08-26)
+
+Candidate 1 is a **NULL** result. On its fixed 2022–2025 walk-forward
+evaluation, it improved paired accuracy by 1.74 percentage points and was
+positive in three seasons, but its Brier score was 0.2502 and therefore missed
+the predeclared `< 0.25` acceptance gate. Elo remains the live CFB `COINFLIP`
+method; Tasks 10–11 (artifact creation and live integration) are not
+authorized. The committed report is
+`docs/research/2026-08-25-cfb-coinflip-result.md`; its gitignored prediction
+artifact SHA-256 is
+`5b2a3cff74d7009b3982a71ecbbe1bd49fbd4d3da5bf9b00f98a7bc7cf6b6d5c`.
+
+Coverage was 2,036 eligible feature rows, 1,577 outer-fold predictions, and
+1,549 decided predictions (28 pushes); 1,907 games were explicitly excluded.
+The first result and its byte-identical rerun are frozen. No 2026 result may
+cause a midseason refit, hyperparameter change, scaling change, or reconsidered
+ship/no-ship decision.
+
 - **Branch:** all work is on `master`, working tree clean. There is no remote
   configured, so `git log` is the only history and nothing is pushed anywhere.
-- **Tests:** 253 passing, `uv run pytest -q`. The suite is fully offline — HTTP
+- **Tests:** 312 passing, `uv run pytest -q`. The suite is fully offline — HTTP
   is injected via `httpx.MockTransport` and loaders are injected. Keep it that
   way; no test may touch the network.
 - **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`

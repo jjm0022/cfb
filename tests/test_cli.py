@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -130,6 +131,7 @@ def test_evaluate_coinflip_writes_deterministic_auditable_artifacts(tmp_path):
     assert first_predictions.read_bytes() == second_predictions.read_bytes()
     assert first_report.read_bytes() == second_report.read_bytes()
     markdown = first_report.read_text()
+    prediction_hash = hashlib.sha256(first_predictions.read_bytes()).hexdigest()
     for text in [
         "Training seasons",
         "Test season",
@@ -150,6 +152,7 @@ def test_evaluate_coinflip_writes_deterministic_auditable_artifacts(tmp_path):
         "leakage-safe replay",
         "deterministic execution",
         "Coverage and exclusions",
+        f"Prediction SHA-256: `{prediction_hash}`",
         "Eligible feature rows: 20",
         "Outer-fold predictions: 16",
         "unplayed game (missing final score)",

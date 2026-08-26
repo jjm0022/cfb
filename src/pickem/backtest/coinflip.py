@@ -341,6 +341,7 @@ def render_predictions_jsonl(evaluation: CoinflipEvaluation) -> str:
 def render_coinflip_report(
     evaluation: CoinflipEvaluation,
     *,
+    prediction_sha256: str | None = None,
     feature_rows: int | None = None,
     feature_skipped: Sequence[str] = (),
     proxy_skipped: Sequence[str] = (),
@@ -459,6 +460,7 @@ def render_coinflip_report(
             "",
             "## Coverage and exclusions",
             "",
+            f"- Prediction SHA-256: `{prediction_sha256 or 'n/a'}`",
             f"- Eligible feature rows: {feature_rows if feature_rows is not None else 'n/a'}",
             f"- Outer-fold predictions: {len(evaluation.predictions)}",
             "",

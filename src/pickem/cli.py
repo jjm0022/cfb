@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -546,10 +547,12 @@ def evaluate_coinflip_cmd(
 
     predictions.parent.mkdir(parents=True, exist_ok=True)
     report.parent.mkdir(parents=True, exist_ok=True)
-    predictions.write_text(render_predictions_jsonl(evaluation))
+    prediction_bytes = render_predictions_jsonl(evaluation).encode()
+    predictions.write_bytes(prediction_bytes)
     report.write_text(
         render_coinflip_report(
             evaluation,
+            prediction_sha256=hashlib.sha256(prediction_bytes).hexdigest(),
             feature_rows=len(dataset.rows),
             feature_skipped=dataset.skipped,
             proxy_skipped=unclassified,
