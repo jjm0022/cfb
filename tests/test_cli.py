@@ -52,6 +52,28 @@ def _seed_coinflip_experiment(db):
                 )
                 for book, spread in (("a", -3.8), ("b", -3.0), ("c", -2.2))
             )
+    excluded_kickoff = datetime(2025, 11, 15, 17, tzinfo=UTC)
+    excluded_game_id = "cfb-2025-11-AX-at-HX"
+    games.append(
+        Game(
+            game_id=excluded_game_id,
+            sport=Sport.CFB,
+            season=2025,
+            week=11,
+            kickoff_utc=excluded_kickoff,
+            home_team_id="HX",
+            away_team_id="AX",
+        )
+    )
+    lines.append(
+        MarketLine(
+            game_id=excluded_game_id,
+            source="oddsapi",
+            book="coverage",
+            spread_home=-3.0,
+            captured_at=excluded_kickoff - timedelta(minutes=10),
+        )
+    )
     with Store(db) as store:
         store.init_schema()
         store.upsert_games(games)
@@ -112,6 +134,11 @@ def test_evaluate_coinflip_writes_deterministic_auditable_artifacts(tmp_path):
         "Training seasons",
         "Test season",
         "Chosen C",
+        "Fitted fold/model state",
+        '"means":[0.0,0.0,0.0]',
+        '"scales":[1.0,1.0,1.0]',
+        '"coefficients":',
+        '"intercept":',
         "Paired accuracy delta",
         "Brier score",
         "Log loss",
@@ -122,6 +149,11 @@ def test_evaluate_coinflip_writes_deterministic_auditable_artifacts(tmp_path):
         "Brier score < 0.25",
         "leakage-safe replay",
         "deterministic execution",
+        "Coverage and exclusions",
+        "Eligible feature rows: 20",
+        "Outer-fold predictions: 16",
+        "unplayed game (missing final score)",
+        "neither the frozen-line nor the submission-time proxy",
         "Candidate 1: NULL",
     ]:
         assert text in markdown

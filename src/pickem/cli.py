@@ -547,7 +547,14 @@ def evaluate_coinflip_cmd(
     predictions.parent.mkdir(parents=True, exist_ok=True)
     report.parent.mkdir(parents=True, exist_ok=True)
     predictions.write_text(render_predictions_jsonl(evaluation))
-    report.write_text(render_coinflip_report(evaluation))
+    report.write_text(
+        render_coinflip_report(
+            evaluation,
+            feature_rows=len(dataset.rows),
+            feature_skipped=dataset.skipped,
+            proxy_skipped=unclassified,
+        )
+    )
 
     typer.echo(f"eligible COINFLIP feature rows: {len(dataset.rows)}")
     for fold in evaluation.folds:

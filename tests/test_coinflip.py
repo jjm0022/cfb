@@ -282,6 +282,12 @@ def test_repeated_evaluation_is_byte_identical():
     assert first == second
 
 
+def test_frozen_estimator_keeps_the_explicit_l2_penalty_contract():
+    """Catches Task 8 changing Task 7's frozen LogisticRegression constructor."""
+    with pytest.warns(FutureWarning, match="'penalty' was deprecated"):
+        evaluate_coinflip(ROWS, ELO_SIDES)
+
+
 def test_exact_half_model_probability_uses_the_candidate_class_prediction_not_elo():
     """Catches an exact-half candidate prediction silently borrowing Elo's side."""
     rows = [
@@ -491,11 +497,7 @@ def test_replay_elo_sides_matches_live_coinflip_decisions_with_prior_week_histor
             game_id=game.game_id,
             source="oddsapi:submit",
             book="a",
-            spread_home=(
-                2.0
-                if game.home_team_id == "A"
-                else -5.0
-            ),
+            spread_home=(2.0 if game.home_team_id == "A" else -5.0),
             captured_at=game.kickoff_utc - timedelta(minutes=10),
         )
         for game in games

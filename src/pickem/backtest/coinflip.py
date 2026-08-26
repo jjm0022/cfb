@@ -291,9 +291,7 @@ def replay_elo_sides(
         for game in week_games:
             if game.game_id not in feature_ids:
                 continue
-            game_frozen = _pre_kickoff_lines(
-                frozen_by_game.get(game.game_id, []), game.kickoff_utc
-            )
+            game_frozen = _pre_kickoff_lines(frozen_by_game.get(game.game_id, []), game.kickoff_utc)
             frozen_spread = consensus_spread(game_frozen)
             assert frozen_spread is not None  # guaranteed by build_coinflip_rows
             league_lines.append(
@@ -330,9 +328,7 @@ def replay_elo_sides(
 
 def render_predictions_jsonl(evaluation: CoinflipEvaluation) -> str:
     """Serialize sorted outer-fold predictions as stable newline-delimited JSON."""
-    rows = sorted(
-        evaluation.predictions, key=lambda row: (row.season, row.week, row.game_id)
-    )
+    rows = sorted(evaluation.predictions, key=lambda row: (row.season, row.week, row.game_id))
     return "".join(
         json.dumps(
             row.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -342,8 +338,15 @@ def render_predictions_jsonl(evaluation: CoinflipEvaluation) -> str:
     )
 
 
-def render_coinflip_report(evaluation: CoinflipEvaluation) -> str:
+def render_coinflip_report(
+    evaluation: CoinflipEvaluation,
+    *,
+    feature_rows: int | None = None,
+    feature_skipped: Sequence[str] = (),
+    proxy_skipped: Sequence[str] = (),
+) -> str:
     """Render the frozen Candidate 1 audit report without wall-clock metadata."""
+
     def number(value: float | None, digits: int = 4) -> str:
         return "n/a" if value is None else f"{value:.{digits}f}"
 
@@ -383,10 +386,17 @@ def render_coinflip_report(evaluation: CoinflipEvaluation) -> str:
         "| --- | ---: | ---: |",
     ]
     lines.extend(
-        f"| {fold.train_from}–{fold.train_through} | {fold.test_season} | "
-        f"{fold.selected_c:g} |"
+        f"| {fold.train_from}–{fold.train_through} | {fold.test_season} | {fold.selected_c:g} |"
         for fold in evaluation.folds
     )
+    lines.extend(["", "## Fitted fold/model state", "", "```json"])
+    lines.extend(
+        json.dumps(
+            fold.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        for fold in evaluation.folds
+    )
+    lines.extend(["```", ""])
     lines.extend(
         [
             "",
@@ -444,6 +454,25 @@ def render_coinflip_report(evaluation: CoinflipEvaluation) -> str:
         f"| {condition} | {'PASS' if passed else 'FAIL'} | {observed} |"
         for condition, passed, observed in gate_rows
     )
+    lines.extend(
+        [
+            "",
+            "## Coverage and exclusions",
+            "",
+            f"- Eligible feature rows: {feature_rows if feature_rows is not None else 'n/a'}",
+            f"- Outer-fold predictions: {len(evaluation.predictions)}",
+            "",
+            f"### Feature-row exclusions ({len(feature_skipped)})",
+            "",
+        ]
+    )
+    lines.extend(f"- {reason}" for reason in sorted(feature_skipped))
+    if not feature_skipped:
+        lines.append("- none")
+    lines.extend(["", f"### Stored proxy exclusions ({len(proxy_skipped)})", ""])
+    lines.extend(f"- {reason}" for reason in sorted(proxy_skipped))
+    if not proxy_skipped:
+        lines.append("- none")
     lines.extend(["", f"Candidate 1: {'PASS' if gate else 'NULL — retain Elo'}", ""])
     return "\n".join(lines)
 
@@ -566,6 +595,7 @@ def _fit_pipeline(rows: Sequence[CoinflipRow], selected_c: float, partition: str
             (
                 "model",
                 LogisticRegression(
+                    penalty="l2",
                     C=selected_c,
                     solver="lbfgs",
                     class_weight=None,
