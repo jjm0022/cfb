@@ -75,7 +75,7 @@ def _apply_tiebreaks(
                 update={
                     "side": side,
                     "rationale": (
-                        f"{edge.rationale}; rating projects home by {margin:+.1f} "
+                        f"{edge.rationale}; Elo rating projects home by {margin:+.1f} "
                         f"vs a board of {edge.league_spread:+.1f}"
                     ),
                 }

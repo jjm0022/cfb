@@ -106,7 +106,22 @@ tuple is completed / missing frozen / missing submission / both proxies.
 Submission snapshot age (minimum / median / maximum minutes) was
 `2021 0/0/9`, `2022 0/4.35/9`, `2023 3.32/4.32/4.37`,
 `2024 3.37/4.37/4.38`, and `2025 3.35/4.37/4.38`. The full invariant SQL and
-book-depth distributions are preserved in the Task 12 report.
+book-depth distributions are preserved in the Task 12 report. The exact
+book-depth distribution for modeled games (completed CFB games with both
+proxies), as minimum / median / maximum distinct books per game, was:
+
+| Season | Source | Minimum | Median | Maximum |
+|---:|---|---:|---:|---:|
+| 2021 | frozen | 7 | 16 | 18 |
+| 2021 | submission | 7 | 15 | 18 |
+| 2022 | frozen | 9 | 19 | 21 |
+| 2022 | submission | 11 | 19 | 21 |
+| 2023 | frozen | 9 | 14 | 16 |
+| 2023 | submission | 10 | 15 | 16 |
+| 2024 | frozen | 6 | 9 | 10 |
+| 2024 | submission | 6 | 9 | 10 |
+| 2025 | frozen | 5 | 10 | 11 |
+| 2025 | submission | 8 | 11 | 11 |
 
 The requested stored 2026 CFB week-1 report was rendered once without polling
 or syncing: it had 15 games, 15 sides, provenance, a 9,541-minute market age,
@@ -549,30 +564,24 @@ permanently into the append-only `lines` table while the real week reported
 
 ## Remaining work
 
-Ordered by value. Each names what blocks it.
+The only remaining Task 12 step is an authorization decision for one fresh CFB
+week-1 poll:
 
-1. **Run the weekly loop for NFL week 1** (early September 2026) the way CFB
-   week 1 was run: `ingest-cbs --html` -> `poll-odds` -> `report` ->
-   `calibrate`. The NFL sheet is the one the phase-exit result actually
-   describes, and its CBS-vs-market agreement is still unmeasured.
-   **Operational requirement:** paste and poll in the same sitting.
-   `calibrate` only counts market rows captured within an hour of the paste,
-   so a week with no poll beside it is permanently uncalibratable — the
-   archive would have to be bought to reconstruct it.
-2. **Improve the tiebreak on coinflip games.** This is now the largest
-   remaining prize and the only lever with real headroom: 926 of 1,663 graded
-   games (55.6%) are decided by Elo at ~49.5%, which is noise. A band-by-band
-   comparison (in the tuning research doc) shows divergence beating Elo in six
-   of seven magnitude bands, so if the tiebreak ever beat 50% materially the
-   `lean` threshold would want to rise and the sweep should be re-run. This is
-   the Phase B question — see the phase-exit reading below. *Not blocked.*
-3. **Decide on the CFB backfill** — ~4,500 credits of the 10,610 remaining.
-   *Time-sensitive:* the 20K tier is a monthly subscription, and redoing this
-   after cancelling costs another ~$30. Needs `cfbd_source` kickoff times
-   checked the way `nflverse._kickoff` was (the same date-only bug is plausible
-   there), and note the alias table is FBS-only by design.
-4. **Make the Phase B decision.** See the result below — the honest reading is
-   more nuanced than "Phase B is unnecessary."
+```bash
+uv run pickem poll-odds --sport cfb --season 2026 --week 1 \
+  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
+```
+
+That command makes a live network call, costs one Odds API credit, and appends
+market rows to the operational database. It must not run without explicit
+authorization; `sync-results` remains out of scope. If authorized, render the
+sheet once afterward and inspect its now-visible rationale column without
+grading outcomes.
+
+Candidate 2 is **blocked** on a new design approval. Do not retune Candidate
+1, refit on 2026, alter thresholds, or treat the NULL result as permission for
+a feature search. The CFB 2021–2025 archive is already complete, so there is
+no CFB historical backfill remaining to buy.
 
 Season timing, for context: the CFB season opens in late August 2026 and NFL
 week 1 is early September 2026. In-season polling is cheap (1 credit per call),

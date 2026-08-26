@@ -70,7 +70,7 @@ def test_coinflip_returns_the_rating_side_not_a_placeholder():
     [edge] = decide_edges([league(-3.0)], [market(-3.5)], [game()], HISTORY)
     assert edge.side is Side.HOME
     assert edge.tier is Tier.COINFLIP
-    assert "rating" in edge.rationale.lower()
+    assert "Elo rating projects" in edge.rationale
 
 
 def test_coinflip_with_a_heavy_home_number_returns_the_rating_away_side():
@@ -85,6 +85,7 @@ def test_no_market_returns_the_rating_side_not_a_placeholder():
     assert edge.side is Side.HOME
     assert edge.tier is Tier.NO_MARKET
     assert edge.market_spread is None
+    assert "Elo rating projects" in edge.rationale
 
 
 def test_a_required_tiebreak_without_a_game_fails_loudly():
