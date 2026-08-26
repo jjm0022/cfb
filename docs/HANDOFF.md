@@ -1,8 +1,8 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-20, after the CFB results backfill trained the
-tiebreak — and showed why it cannot help much
+**Last updated:** 2026-08-26, after the complete 2021-2025 CFB Odds API
+archive acquisition
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -69,28 +69,98 @@ wrong and are recorded there with their reasons.
 - **Do not re-run either SDD task loop.** Every task in both plans is
   committed; `git log` is the record.
 
-### Data state (2026-08-19)
+### Data state (2026-08-26)
 
-`data/pickem.duckdb` is gitignored, exists only on this machine, and represents
-9,390 non-refundable API credits. There is no backup — if it is lost, the
-backfill costs another ~$30 and an hour to rebuild.
+`data/pickem.duckdb` is gitignored and exists only on this machine. It now
+contains both the earlier 9,390-credit NFL archive and the complete 10,180-credit
+CFB acquisition described below. The database SHA-256 after the CFB run is
+`5d692c92262267501920e4f9597e9cf4d1d7a3e78e5d93a809d2077d3468f31d`.
 
-| table | rows | note |
-|---|---|---|
-| `games` | 6,166 | NFL 2020-2025 (1,693) + CFB 2020-2025 and 2026 wk 1 (4,473; 4,457 scored) |
-| `lines` / `oddsapi:frozen` | 22,351 | early-week proxy, ~10 books per game |
-| `lines` / `oddsapi:submit` | 24,237 | pre-kickoff proxy, ~10 books per game |
+A recoverable pre-CFB backup exists at
+`/Users/jmiller/Dropbox/Personal/Betting/cfb/data/backups/pickem-2026-08-25-pre-cfb.duckdb`.
+Its SHA-256 is
+`a4bcbd71e64cd5af14ad8c7b7db6a05f731f5c1228d84ad376a3f0635866250a`.
+
+| table/source | rows | note |
+|---|---:|---|
+| `games` | 6,166 | NFL 2020-2025 (1,693) + CFB 2020-2025 and 2026 week 1 (4,473; 4,457 scored) |
+| `archive_requests` | 1,018 | completed CFB 2021-2025 request ledger; all 1,018 planned requests complete |
+| `lines` | 149,690 | all stored sources |
+| `lines` / `oddsapi:frozen` | 71,300 | NFL plus CFB early-week proxy |
+| `lines` / `oddsapi:submit` | 76,550 | NFL plus CFB pre-kickoff proxy |
 | `lines` / `nflverse` | 1,693 | closing lines, kept as a cross-check only |
-| `lines` / `oddsapi` | 147 | live poll, CFB 2026 week 1, 7-11 books per game |
+| `lines` / `oddsapi` | 147 | live poll, CFB 2026 week 1 |
 | `league_lines` | 15 | CFB 2026 week 1, from the saved CBS page (2026-08-20) |
-| `picks` | 15 | CFB 2026 week 1, recorded when the sheet was rendered |
+| `picks` | 30 | stored CFB 2026 week 1 pick history |
 
-Integrity checks that were run and must keep holding: zero lines orphaned from
-`games`, and zero `oddsapi:submit` rows captured at or after their own kickoff.
+#### CFB archive acquisition
 
-**Odds API:** paid 20K tier, **9,390 credits used, 10,610 remaining**. Historical
-requests cost 10 credits each; live ones cost 1. `/v4/sports` is free and
-reports the balance in `x-requests-remaining`.
+The final dry plan reported exactly `1018 planned, 1018 complete, 0 pending =
+0 credits`. The paid operation completed 1,018 historical requests at 10
+credits each: **10,180 credits total**. That was the 10-credit probe plus the
+remaining seasonal batches of 1,980, 2,020, 1,990, 2,060, and 2,120 credits.
+The request ledger's `line_count` total is 101,262.
+
+| season | frozen requests | frozen rows | submit requests | submit rows | total requests | total rows |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2021 | 15 | 10,900 | 184 | 11,047 | 199 | 21,947 |
+| 2022 | 15 | 13,405 | 187 | 14,324 | 202 | 27,729 |
+| 2023 | 15 | 10,366 | 184 | 11,275 | 199 | 21,641 |
+| 2024 | 15 | 6,655 | 191 | 7,171 | 206 | 13,826 |
+| 2025 | 15 | 7,623 | 197 | 8,496 | 212 | 16,119 |
+| **Total** | **75** | **48,949** | **943** | **52,313** | **1,018** | **101,262** |
+
+Stored proxy coverage is nonzero for both sources in every season:
+
+| season | source | rows | games | distinct books |
+|---:|---|---:|---:|---:|
+| 2021 | `oddsapi:frozen` | 10,900 | 731 | 18 |
+| 2021 | `oddsapi:submit` | 11,047 | 749 | 18 |
+| 2022 | `oddsapi:frozen` | 13,405 | 732 | 22 |
+| 2022 | `oddsapi:submit` | 14,324 | 774 | 22 |
+| 2023 | `oddsapi:frozen` | 10,366 | 745 | 16 |
+| 2023 | `oddsapi:submit` | 11,275 | 786 | 16 |
+| 2024 | `oddsapi:frozen` | 6,655 | 751 | 10 |
+| 2024 | `oddsapi:submit` | 7,171 | 796 | 10 |
+| 2025 | `oddsapi:frozen` | 7,623 | 759 | 11 |
+| 2025 | `oddsapi:submit` | 8,496 | 807 | 11 |
+
+Completed-game coverage gaps are explicit rather than silently discarded:
+
+| season | completed games | missing frozen | missing submit | with both proxies |
+|---:|---:|---:|---:|---:|
+| 2021 | 770 | 39 | 21 | 730 |
+| 2022 | 776 | 44 | 2 | 732 |
+| 2023 | 792 | 47 | 6 | 745 |
+| 2024 | 797 | 46 | 1 | 751 |
+| 2025 | 807 | 48 | 0 | 759 |
+
+Book depth and archive timestamp age are recorded as minimum / average /
+maximum. Age is `requested_at - returned_at` in minutes:
+
+| season | source | books/game min/avg/max | age minutes min/avg/max |
+|---:|---|---:|---:|
+| 2021 | frozen | 7 / 14.91 / 18 | 5 / 5 / 5 |
+| 2021 | submit | 7 / 14.75 / 18 | 0 / 0.32 / 9 |
+| 2022 | frozen | 9 / 18.31 / 21 | 4.33 / 4.48 / 5 |
+| 2022 | submit | 11 / 18.51 / 21 | 0 / 3.58 / 9 |
+| 2023 | frozen | 9 / 13.91 / 16 | 4.28 / 4.31 / 4.35 |
+| 2023 | submit | 10 / 14.34 / 16 | 3.32 / 4.31 / 4.37 |
+| 2024 | frozen | 6 / 8.86 / 10 | 4.33 / 4.36 / 4.37 |
+| 2024 | submit | 6 / 9.01 / 10 | 3.37 / 4.36 / 4.38 |
+| 2025 | frozen | 5 / 10.04 / 11 | 4.33 / 4.36 / 4.38 |
+| 2025 | submit | 8 / 10.53 / 11 | 3.35 / 4.35 / 4.38 |
+
+Final integrity checks returned zero for all four conditions: lines orphaned
+from `games`, CFB `oddsapi:submit` rows captured at or after kickoff, archive
+responses with `returned_at > requested_at`, and negative ledger `line_count`.
+The coverage query must use `AS row_count`; bare `rows` is reserved by the
+installed DuckDB parser.
+
+**Odds API:** historical archive requests are accounted at 10 credits each;
+live ones cost 1. `/v4/sports` is free and reports the current vendor balance
+in `x-requests-remaining`. Query that endpoint before any future paid run rather
+than relying on the pre-acquisition balance recorded in older notes.
 
 ## What is built
 
