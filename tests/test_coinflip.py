@@ -280,6 +280,38 @@ def test_repeated_evaluation_is_byte_identical():
     assert first == second
 
 
+def test_exact_half_model_probability_uses_the_candidate_class_prediction_not_elo():
+    """Catches an exact-half candidate prediction silently borrowing Elo's side."""
+    rows = [
+        coinflip_row(season, week, target, index, 0.0).model_copy(
+            update={"mean_delta": 0.0, "book_balance": 0.0}
+        )
+        for season, week, target, index in (
+            (2021, 1, 0, 0),
+            (2021, 2, 1, 1),
+            (2021, 9, 0, 2),
+            (2021, 10, 1, 3),
+            (2022, 1, 0, 4),
+        )
+    ]
+    test_row = rows[-1]
+
+    [result] = evaluate_coinflip(rows, {test_row.game_id: Side.HOME}).predictions
+
+    assert result.probability_home == 0.5
+    assert result.candidate_side is Side.AWAY
+    assert result.candidate_side is not result.elo_side
+
+
+def test_missing_inner_validation_season_fails_loudly():
+    """Catches a gapped population selecting a C without any inner validation."""
+    rows = [row for row in ROWS if row.season in {2021, 2023}]
+    elo_sides = {row.game_id: Side.HOME for row in rows if row.season == 2023}
+
+    with pytest.raises(ValueError, match="at least one inner validation partition"):
+        evaluate_coinflip(rows, elo_sides)
+
+
 def prediction(
     game_id: str,
     season: int,

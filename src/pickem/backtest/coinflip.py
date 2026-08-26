@@ -149,11 +149,12 @@ def evaluate_coinflip(
             )
         )
         probabilities = pipeline.predict_proba(_features(test_rows))[:, 1]
-        for row, probability in zip(test_rows, probabilities, strict=True):
+        candidate_labels = pipeline.predict(_features(test_rows))
+        for row, probability, candidate_label in zip(
+            test_rows, probabilities, candidate_labels, strict=True
+        ):
             elo_side = elo_sides[row.game_id]
-            candidate_side = (
-                elo_side if probability == 0.5 else Side.HOME if probability > 0.5 else Side.AWAY
-            )
+            candidate_side = Side.HOME if candidate_label == 1 else Side.AWAY
             candidate_correct = _is_correct(candidate_side, row.target_home_cover)
             elo_correct = _is_correct(elo_side, row.target_home_cover)
             predictions.append(
@@ -336,6 +337,8 @@ def _select_c(
     train_rows: Sequence[CoinflipRow], test_season: int, c_grid: Sequence[float]
 ) -> float:
     partitions = _inner_partitions(train_rows, test_season)
+    if not partitions:
+        raise ValueError("at least one inner validation partition is required to select C")
     scores: list[tuple[int, float]] = []
     for c_value in sorted(set(c_grid)):
         correct = 0
