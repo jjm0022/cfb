@@ -135,8 +135,36 @@ batch; do not delete or revise it. The current operational database SHA-256 is
 The sheet now renders every `Edge.rationale` in a Rationale column. For the
 stored NULL-path week, the three divergence picks name their market movement
 and every COINFLIP rationale names the Elo rating tiebreak; no outcomes were
-graded. Do not invoke `poll-odds`, `sync-results`, a paid archive command, or
-any 2026 refit without separate authorization.
+graded. Do not invoke `sync-results`, a paid archive command, or any 2026
+refit without separate authorization.
+
+#### Task 12 authorization completion (2026-08-26)
+
+The explicitly authorized live command completed once:
+
+```bash
+uv run pickem poll-odds --sport cfb --season 2026 --week 1 \
+  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
+```
+
+It consumed the one authorized live request and reported `appended 0 market
+lines`. Eight feed events were visibly skipped: UNC–TCU, SJSU–USC, NCSU–UVA,
+NMSU–FSU, HAW–STAN, and MEM–UNLV were outside the stored 2026 week-1 slate;
+Jacksonville State–North Dakota State and Sacramento State–Eastern Michigan
+contained untracked FCS teams. Post-poll read-only counts remained `games`
+6,166, `lines` 149,690 (including the pre-existing 147 week-1 live rows),
+`archive_requests` 1,018, `league_lines` 15, and `picks` 45. The database
+SHA-256 remains
+`2fcfd7765824817cc8a3640136325508f70f37bb830484d5491822a30241e612`.
+
+`report` was intentionally run only against an isolated temporary copy of the
+post-poll database and then that copy was removed. The rendered sheet had all
+15 sides, CBS-vs-market provenance, a 9,573-minute snapshot age, and 15
+unscored games. Its three `STRONG`/`LEAN` rows named divergence, and its 12
+`COINFLIP` rows explicitly named `Elo rating projects`; no results were
+synced or graded. Task 12 is terminal: Candidate 1 remains NULL, Elo remains
+live, no model artifact exists, and Candidate 2 remains blocked on new design
+approval.
 
 - **Branch:** all work is on `master`, working tree clean. There is no remote
   configured, so `git log` is the only history and nothing is pushed anywhere.
@@ -564,24 +592,10 @@ permanently into the append-only `lines` table while the real week reported
 
 ## Remaining work
 
-The only remaining Task 12 step is an authorization decision for one fresh CFB
-week-1 poll:
-
-```bash
-uv run pickem poll-odds --sport cfb --season 2026 --week 1 \
-  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
-```
-
-That command makes a live network call, costs one Odds API credit, and appends
-market rows to the operational database. It must not run without explicit
-authorization; `sync-results` remains out of scope. If authorized, render the
-sheet once afterward and inspect its now-visible rationale column without
-grading outcomes.
-
-Candidate 2 is **blocked** on a new design approval. Do not retune Candidate
-1, refit on 2026, alter thresholds, or treat the NULL result as permission for
-a feature search. The CFB 2021–2025 archive is already complete, so there is
-no CFB historical backfill remaining to buy.
+Task 12 is complete. Candidate 2 remains **blocked** on a new design approval.
+Do not retune Candidate 1, refit on 2026, alter thresholds, or treat the NULL
+result as permission for a feature search. The CFB 2021–2025 archive is
+complete, so there is no CFB historical backfill remaining to buy.
 
 Season timing, for context: the CFB season opens in late August 2026 and NFL
 week 1 is early September 2026. In-season polling is cheap (1 credit per call),
