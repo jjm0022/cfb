@@ -1,6 +1,9 @@
 from datetime import UTC, datetime
 
-from pickem.models import Edge, Game, Side, Sport, Tier
+import pytest
+
+from pickem.edge.pipeline import decide_edges
+from pickem.models import Edge, Game, LeagueLine, MarketLine, Side, Sport, Tier
 from pickem.report.sheet import render_sheet
 
 NOW = datetime(2025, 9, 21, 12, 0, tzinfo=UTC)
@@ -43,6 +46,32 @@ def test_shows_both_numbers_so_a_pick_can_be_audited():
 def test_shows_the_deciding_rationale_for_each_pick():
     sheet = render_sheet([edge()], [GAME], generated_at=NOW, provenance=PROVENANCE)
     assert "league -3.0 vs market -6.0: 3.0 pts toward home" in sheet
+
+
+@pytest.mark.parametrize(
+    ("market_lines", "expected_tier"),
+    [
+        (
+            [
+                MarketLine(
+                    game_id=GID,
+                    source="oddsapi",
+                    book="pinnacle",
+                    spread_home=-3.5,
+                    captured_at=NOW,
+                )
+            ],
+            Tier.COINFLIP,
+        ),
+        ([], Tier.NO_MARKET),
+    ],
+)
+def test_renders_elo_rationale_for_tiebreak_tiers(market_lines, expected_tier):
+    league = LeagueLine(game_id=GID, season=2025, week=3, spread_home=-3.0, posted_at=NOW)
+    [decided] = decide_edges([league], market_lines, [GAME], [])
+    sheet = render_sheet([decided], [GAME], generated_at=NOW, provenance=PROVENANCE)
+    assert decided.tier is expected_tier
+    assert "Elo rating projects" in sheet
 
 
 def test_orders_by_divergence_strongest_first():
