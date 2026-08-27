@@ -288,9 +288,14 @@ def _inner_partitions(dataset: ResidualDataset, test_season: int) -> list[_Inner
         validation_rows = [
             row for row in training_rows if row.season == earliest_season and row.week >= 9
         ]
+        cutoff = min(row.kickoff_utc for row in validation_rows)
         return [
             _build_inner_partition(
-                [row for row in training_rows if row.season == earliest_season and row.week <= 8],
+                [
+                    row
+                    for row in training_rows
+                    if row.season == earliest_season and row.week <= 8 and row.kickoff_utc < cutoff
+                ],
                 validation_rows,
                 evaluation_by_game,
                 earliest_season,

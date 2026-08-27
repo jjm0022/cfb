@@ -227,6 +227,30 @@ def test_first_outer_fold_uses_early_2021_to_validate_late_2021():
     assert all(row.season == 2021 and row.week >= 9 for row in partitions[0].validation_rows)
 
 
+def test_first_outer_fold_excludes_week_eight_kickoff_after_validation_cutoff():
+    """Catches the production week-label chronology defect in the first inner fold."""
+    early_row = residual_dataset_row(2021, 1, 0)
+    late_week_eight_row = residual_dataset_row(2021, 8, 1).model_copy(
+        update={"kickoff_utc": datetime(2021, 10, 1, 17, tzinfo=UTC)}
+    )
+    first_validation_row = residual_dataset_row(2021, 9, 2).model_copy(
+        update={"kickoff_utc": datetime(2021, 9, 30, 17, tzinfo=UTC)}
+    )
+    later_validation_row = residual_dataset_row(2021, 10, 3)
+    rows = [early_row, late_week_eight_row, first_validation_row, later_validation_row]
+    dataset = DATASET.model_copy(
+        update={
+            "training_rows": rows,
+            "evaluation_rows": [residual_evaluation_row(row) for row in rows],
+        }
+    )
+
+    [partition] = _inner_partitions(dataset, test_season=2022)
+
+    assert late_week_eight_row not in partition.training_rows
+    assert all(row.kickoff_utc < partition.cutoff_utc for row in partition.training_rows)
+
+
 def test_later_outer_fold_uses_only_expanding_prior_seasons():
     """Catches same-season or future rows leaking into later inner fits."""
     partitions = _inner_partitions(DATASET, test_season=2025)
