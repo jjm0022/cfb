@@ -9,6 +9,7 @@ from pickem.backtest.coinflip import CoinflipRow, build_coinflip_rows
 from pickem.backtest.coinflip_residual import (
     InnerSelection,
     ResidualEvaluation,
+    ResidualFit,
     ResidualFold,
     ResidualPrediction,
     ResidualTrainingRow,
@@ -285,6 +286,7 @@ def test_tied_inner_accuracy_selects_largest_alpha():
         TIED_DATASET,
         test_season=2025,
         outer_cutoff=datetime(2025, 9, 1, 17, tzinfo=UTC),
+        elo_sides={row.game_id: Side.HOME for row in TIED_DATASET.evaluation_rows},
     )
 
     assert selection.alpha == 100.0
@@ -311,6 +313,7 @@ def test_outer_cutoff_uses_earliest_stored_game_before_proxy_filtering(
         },
     }
     selected_cutoffs: dict[int, datetime] = {}
+    selected_elo_sides: list[dict[str, Side]] = []
     fitted_cutoffs: list[datetime] = []
     original_fit = residual_module._fit_residual_model
 
@@ -325,8 +328,10 @@ def test_outer_cutoff_uses_earliest_stored_game_before_proxy_filtering(
         _dataset: object,
         test_season: int,
         outer_cutoff: datetime,
+        elo_sides: dict[str, Side],
     ) -> InnerSelection:
         selected_cutoffs[test_season] = outer_cutoff
+        selected_elo_sides.append(elo_sides)
         return InnerSelection(
             alpha=100.0,
             correct_by_alpha={10.0: 0, 30.0: 0, 100.0: 0},
@@ -361,6 +366,7 @@ def test_outer_cutoff_uses_earliest_stored_game_before_proxy_filtering(
     assert selected_cutoffs == expected_cutoffs
     assert [fold.cutoff_utc for fold in result.folds] == list(expected_cutoffs.values())
     assert fitted_cutoffs == list(expected_cutoffs.values())
+    assert selected_elo_sides == [{row.game_id: Side.HOME for row in DATASET.evaluation_rows}] * 4
 
 
 def test_alpha_oof_weights_use_the_explicit_outer_cutoff():
@@ -370,6 +376,7 @@ def test_alpha_oof_weights_use_the_explicit_outer_cutoff():
         TIED_DATASET,
         test_season=2025,
         outer_cutoff=outer_cutoff,
+        elo_sides={row.game_id: Side.HOME for row in TIED_DATASET.evaluation_rows},
     )
     validation_rows = [
         row for row in TIED_DATASET.training_rows if row.season in (2022, 2023, 2024)
@@ -380,6 +387,66 @@ def test_alpha_oof_weights_use_the_explicit_outer_cutoff():
     )
 
     assert [residual.weight for residual in selection.residuals] == pytest.approx(expected_weights)
+
+
+@pytest.mark.parametrize(
+    ("elo_side", "target_home_cover"),
+    [(Side.HOME, 1), (Side.AWAY, 0)],
+)
+def test_exact_zero_inner_alpha_predictions_use_the_supplied_elo_side(
+    monkeypatch: pytest.MonkeyPatch,
+    elo_side: Side,
+    target_home_cover: int,
+):
+    """Catches inner alpha scoring treating an exact-zero margin as an away pick."""
+    fit_row = residual_dataset_row(2021, 1, 0)
+    validation_row = residual_dataset_row(2021, 9, 1)
+    evaluation_row = residual_evaluation_row(validation_row).model_copy(
+        update={"frozen_spread": -3.0, "target_home_cover": target_home_cover}
+    )
+    dataset = DATASET.model_copy(
+        update={"training_rows": [fit_row, validation_row], "evaluation_rows": [evaluation_row]}
+    )
+    fit = ResidualFit(
+        cutoff_utc=validation_row.kickoff_utc,
+        alpha=10.0,
+        intercept=0.0,
+        teams=[],
+        team_effects={},
+        training_rows=1,
+        effective_weight=1.0,
+    )
+    monkeypatch.setattr(residual_module, "_fit_residual_model", lambda *_: fit)
+    monkeypatch.setattr(residual_module, "_predict_market_error", lambda *_: 0.0)
+
+    selection = _select_alpha(
+        dataset,
+        test_season=2022,
+        outer_cutoff=datetime(2022, 8, 1, 17, tzinfo=UTC),
+        elo_sides={evaluation_row.game_id: elo_side},
+    )
+
+    assert selection.correct_by_alpha == {10.0: 1, 30.0: 1, 100.0: 1}
+
+
+def test_inner_alpha_selection_rejects_a_missing_elo_replay_side():
+    """Catches inner alpha scoring silently inventing a side without Elo replay state."""
+    fit_row = residual_dataset_row(2021, 1, 0)
+    validation_row = residual_dataset_row(2021, 9, 1)
+    evaluation_row = residual_evaluation_row(validation_row).model_copy(
+        update={"frozen_spread": -3.0}
+    )
+    dataset = DATASET.model_copy(
+        update={"training_rows": [fit_row, validation_row], "evaluation_rows": [evaluation_row]}
+    )
+
+    with pytest.raises(ValueError, match="missing its Elo replay side"):
+        _select_alpha(
+            dataset,
+            test_season=2022,
+            outer_cutoff=datetime(2022, 8, 1, 17, tzinfo=UTC),
+            elo_sides={},
+        )
 
 
 def test_weighted_empirical_probability_uses_half_weight_for_ties_and_smoothing():

@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 import numpy as np
@@ -345,7 +345,10 @@ def _build_inner_partition(
 
 
 def _select_alpha(
-    dataset: ResidualDataset, test_season: int, outer_cutoff: datetime
+    dataset: ResidualDataset,
+    test_season: int,
+    outer_cutoff: datetime,
+    elo_sides: Mapping[str, Side],
 ) -> InnerSelection:
     """Choose ridge shrinkage on chronological COINFLIP accuracy and retain OOF errors."""
     partitions = _inner_partitions(dataset, test_season)
@@ -360,13 +363,23 @@ def _select_alpha(
             training_by_game = {row.game_id: row for row in partition.validation_rows}
             for evaluation in partition.evaluation_rows:
                 training = training_by_game[evaluation.game_id]
+                elo_side = elo_sides.get(evaluation.game_id)
+                if elo_side is None:
+                    raise ValueError(
+                        f"evaluation row {evaluation.game_id} is missing its Elo replay side"
+                    )
                 margin = (
                     evaluation.frozen_spread
                     - training.submission_spread
                     + _predict_market_error(fit, training.home_team_id, training.away_team_id)
                 )
                 if evaluation.target_home_cover is not None:
-                    correct += int((margin > 0) == bool(evaluation.target_home_cover))
+                    candidate_side = (
+                        Side.HOME if margin > 0 else Side.AWAY if margin < 0 else elo_side
+                    )
+                    correct += int(
+                        (candidate_side is Side.HOME) == bool(evaluation.target_home_cover)
+                    )
         correct_by_alpha[alpha] = correct
 
     highest_correct = max(correct_by_alpha.values())
@@ -446,7 +459,7 @@ def evaluate_residual_candidate(
         cutoff = season_cutoffs.get(test_season)
         if cutoff is None:
             raise ValueError("outer evaluation requires a stored cutoff in the test season")
-        selection = _select_alpha(dataset, test_season, cutoff)
+        selection = _select_alpha(dataset, test_season, cutoff, elo_sides)
         train_rows = [
             row
             for row in dataset.training_rows
