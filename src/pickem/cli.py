@@ -31,6 +31,13 @@ from pickem.backtest.coinflip import (
     render_predictions_jsonl,
     replay_elo_sides,
 )
+from pickem.backtest.coinflip_residual import (
+    evaluate_residual_candidate,
+    passes_residual_gate,
+    render_residual_predictions_jsonl,
+    render_residual_report,
+    residual_evaluations_are_byte_identical,
+)
 from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.edge.divergence import rank_edges
 from pickem.edge.pipeline import MissingGameError, decide_edges
@@ -574,6 +581,54 @@ def evaluate_coinflip_cmd(
     _warn_skipped("stored lines outside proxy coverage", unclassified)
     decision = "PASS" if passes_acceptance_gate(evaluation) else "NULL — retain Elo"
     typer.echo(f"Candidate 1: {decision}")
+
+
+@app.command("evaluate-coinflip-residual")
+def evaluate_coinflip_residual_cmd(
+    sport: Sport = typer.Option(...),
+    start: int = typer.Option(2021, "--from"),
+    end: int = typer.Option(2025, "--to"),
+    predictions: Path = typer.Option(..., help="Write deterministic prediction JSONL here"),
+    report: Path = typer.Option(..., help="Write the deterministic Markdown report here"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Run the fixed 2021–2025 CFB Candidate 2 experiment once."""
+    if sport is not Sport.CFB:
+        typer.secho(
+            "evaluate-coinflip-residual is an approved CFB-only experiment", fg="red", err=True
+        )
+        raise typer.Exit(code=1)
+    if (start, end) != (2021, 2025):
+        typer.secho(
+            "evaluate-coinflip-residual only permits --from 2021 --to 2025",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Do not use _store here: schema initialization is a write, while this
+    # frozen experiment must only read its already-populated database.
+    with Store(db) as store:
+        stored = store.load_seasons(Sport.CFB, start, end)
+    frozen, submission, proxy_skipped = split_proxies(stored.market_lines)
+    first = evaluate_residual_candidate(stored.games, frozen, submission)
+    second = evaluate_residual_candidate(stored.games, frozen, submission)
+    if not residual_evaluations_are_byte_identical(first, second):
+        raise RuntimeError("Candidate 2 evaluation is not deterministic")
+    result = first.model_copy(update={"deterministic": True})
+
+    prediction_bytes = render_residual_predictions_jsonl(result).encode()
+    predictions.parent.mkdir(parents=True, exist_ok=True)
+    report.parent.mkdir(parents=True, exist_ok=True)
+    predictions.write_bytes(prediction_bytes)
+    report.write_text(
+        render_residual_report(
+            result,
+            prediction_sha256=hashlib.sha256(prediction_bytes).hexdigest(),
+        )
+    )
+    typer.echo(f"Candidate 2: {'PASS' if passes_residual_gate(result) else 'NULL — retain Elo'}")
+    _warn_skipped("stored lines outside residual proxy coverage", proxy_skipped)
 
 
 if __name__ == "__main__":

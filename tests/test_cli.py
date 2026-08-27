@@ -81,6 +81,185 @@ def _seed_coinflip_experiment(db):
         store.append_market_lines(lines)
 
 
+def _seed_residual_experiment(db):
+    """Five CFB seasons large enough for every residual OOF calibration fold."""
+    from pickem.models import Game, MarketLine, Sport
+    from pickem.store.db import Store
+
+    games = []
+    lines = []
+    for season in range(2021, 2026):
+        for week in range(1, 21):
+            for index in range(10):
+                kickoff = datetime(season, 9, 1, 17, tzinfo=UTC) + timedelta(days=7 * (week - 1))
+                game_id = f"cfb-{season}-{week:02d}-A{index}-at-H{index}"
+                home_covered = (season + week + index) % 2 == 0
+                games.append(
+                    Game(
+                        game_id=game_id,
+                        sport=Sport.CFB,
+                        season=season,
+                        week=week,
+                        kickoff_utc=kickoff,
+                        home_team_id=f"H{index}",
+                        away_team_id=f"A{index}",
+                        home_score=27 if home_covered else 20,
+                        away_score=20 if home_covered else 24,
+                    )
+                )
+                lines.extend(
+                    [
+                        MarketLine(
+                            game_id=game_id,
+                            source="oddsapi:frozen",
+                            book="a",
+                            spread_home=-3.0,
+                            captured_at=kickoff - timedelta(days=3),
+                        ),
+                        MarketLine(
+                            game_id=game_id,
+                            source="oddsapi:submit",
+                            book="a",
+                            spread_home=-3.5,
+                            captured_at=kickoff - timedelta(minutes=10),
+                        ),
+                    ]
+                )
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games(games)
+        store.append_market_lines(lines)
+
+
+def _residual_command(tmp_path, db):
+    return [
+        "evaluate-coinflip-residual",
+        "--sport",
+        "cfb",
+        "--from",
+        "2021",
+        "--to",
+        "2025",
+        "--predictions",
+        str(tmp_path / "predictions.jsonl"),
+        "--report",
+        str(tmp_path / "report.md"),
+        "--db",
+        str(db),
+    ]
+
+
+def test_evaluate_coinflip_residual_writes_byte_identical_audit_artifacts(tmp_path):
+    """Catches an unpersisted, unordered, or timestamped Candidate 2 evaluation."""
+    db = tmp_path / "residual.duckdb"
+    _seed_residual_experiment(db)
+    command = [
+        "evaluate-coinflip-residual",
+        "--sport",
+        "cfb",
+        "--from",
+        "2021",
+        "--to",
+        "2025",
+        "--db",
+        str(db),
+    ]
+    first = runner.invoke(
+        app,
+        [*command, "--predictions", str(tmp_path / "a.jsonl"), "--report", str(tmp_path / "a.md")],
+    )
+    second = runner.invoke(
+        app,
+        [*command, "--predictions", str(tmp_path / "b.jsonl"), "--report", str(tmp_path / "b.md")],
+    )
+
+    assert first.exit_code == second.exit_code == 0
+    assert (tmp_path / "a.jsonl").read_bytes() == (tmp_path / "b.jsonl").read_bytes()
+    assert (tmp_path / "a.md").read_bytes() == (tmp_path / "b.md").read_bytes()
+    assert not (tmp_path / "cfb-coinflip-residual-v1.json").exists()
+
+
+def test_evaluate_coinflip_residual_refuses_nfl_and_other_ranges(tmp_path):
+    """Catches expanding the frozen CFB 2021--2025 experiment contract."""
+    nfl = runner.invoke(
+        app,
+        [
+            "evaluate-coinflip-residual",
+            "--sport",
+            "nfl",
+            "--predictions",
+            str(tmp_path / "p"),
+            "--report",
+            str(tmp_path / "r"),
+        ],
+    )
+    changed = runner.invoke(
+        app,
+        [
+            "evaluate-coinflip-residual",
+            "--sport",
+            "cfb",
+            "--from",
+            "2020",
+            "--to",
+            "2025",
+            "--predictions",
+            str(tmp_path / "p"),
+            "--report",
+            str(tmp_path / "r"),
+        ],
+    )
+
+    assert nfl.exit_code != 0 and "CFB-only" in nfl.output
+    assert changed.exit_code != 0 and "only permits" in changed.output
+
+
+def test_evaluate_coinflip_residual_runs_twice_before_certifying(tmp_path, monkeypatch):
+    """Catches certifying a Candidate 2 evaluation after only one execution."""
+    import pickem.cli as cli
+
+    db = tmp_path / "residual.duckdb"
+    _seed_residual_experiment(db)
+    real_evaluate = cli.evaluate_residual_candidate
+    calls = 0
+
+    def mismatching_second_run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = real_evaluate(*args, **kwargs)
+        if calls == 2:
+            return result.model_copy(update={"accuracy_delta": 0.1234})
+        return result
+
+    monkeypatch.setattr(cli, "evaluate_residual_candidate", mismatching_second_run)
+    result = runner.invoke(app, _residual_command(tmp_path, db))
+
+    assert calls == 2
+    assert result.exit_code != 0
+    assert "not deterministic" in str(result.exception)
+
+
+def test_evaluate_coinflip_residual_does_not_mutate_the_database_or_construct_a_client(
+    tmp_path, monkeypatch
+):
+    """Catches schema initialization, writes, or live-client construction in Candidate 2."""
+    import pickem.cli as cli
+
+    db = tmp_path / "residual.duckdb"
+    _seed_residual_experiment(db)
+    before = hashlib.sha256(db.read_bytes()).hexdigest()
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("Candidate 2 must not construct an API client")
+
+    monkeypatch.setattr(cli, "OddsClient", UnexpectedClient)
+    result = runner.invoke(app, _residual_command(tmp_path, db))
+
+    assert result.exit_code == 0, result.output
+    assert hashlib.sha256(db.read_bytes()).hexdigest() == before
+
+
 def test_evaluate_coinflip_writes_deterministic_auditable_artifacts(tmp_path):
     """Catches an unpersisted, unordered, or timestamped CFB experiment run."""
     db = tmp_path / "coinflip.duckdb"
