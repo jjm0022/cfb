@@ -127,6 +127,7 @@ No frozen artifact was overwritten or retuned.
 
 ## Commit and concerns
 
-Commit: `149fcbf61df7807399b66495a72d303d588f3fcc`
+Implementation commit: `00c813cb8f0dcc728538884ed5bb1e15c3b1cfb2`.
+This report is finalized in the following documentation commit.
 Concern: none. Candidate 1 remains the already-frozen NULL result; future
 live-model work remains unauthorized.
