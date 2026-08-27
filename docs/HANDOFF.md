@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-26, after the CFB COINFLIP NULL handoff verification
+**Last updated:** 2026-08-27, after the Candidate 2 residual result freeze
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -72,6 +72,23 @@ Coverage was 2,036 eligible feature rows, 1,577 outer-fold predictions, and
 The first result and its byte-identical rerun are frozen. No 2026 result may
 cause a midseason refit, hyperparameter change, scaling change, or reconsidered
 ship/no-ship decision.
+
+### Candidate 2 CFB COINFLIP residual result (frozen 2026-08-27)
+
+Candidate 2 is NULL. Elo remains the CFB COINFLIP decider. No Candidate 2 model artifact exists. The team-residual family is closed; Tasks 7–9 were not started.
+
+The fixed 2022–2025 walk-forward replay produced 1,577 paired predictions and
+1,549 decided outcomes (28 pushes), with zero 2026 rows. Candidate accuracy was
+51.39% (796–753) versus 51.00% (790–759) for the frozen-line favorite: a 0.39
+percentage-point lift. It had two positive seasons, a paired season/week
+bootstrap 95% interval of [-2.67%, 3.23%], Brier score 0.2505, and log loss
+0.6942. It therefore failed all four frozen performance gates despite passing
+calibration, leakage, determinism, and no-2026 checks. The first result and its
+independent rerun were byte-identical. The gitignored prediction stream SHA-256
+is `9ea82a2157c15b284c505613ec3ec3f0be9884fea17b17a5f296b66556ede29b`;
+the committed report is
+`docs/research/2026-08-27-cfb-coinflip-residual-result.md` (SHA-256
+`de65aa2be13bcf92d152f0881e0da0d81df2bc5e1bbf9b9583b2de65adc401fb`).
 
 #### Task 12 offline handoff verification (2026-08-26)
 
@@ -594,8 +611,8 @@ permanently into the append-only `lines` table while the real week reported
 
 ## Remaining work
 
-Task 12 is complete. Candidate 2 remains **blocked** on a new design approval.
-Do not retune Candidate 1, refit on 2026, alter thresholds, or treat the NULL
+Task 12 is complete, and the Candidate 2 team-residual family is closed. Do not
+retune Candidate 1, refit on 2026, alter thresholds, or treat either frozen
 result as permission for a feature search. The CFB 2021–2025 archive is
 complete, so there is no CFB historical backfill remaining to buy.
 
