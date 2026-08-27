@@ -57,6 +57,31 @@ class ResidualFit(BaseModel):
         return self
 
 
+class WeightedResidual(BaseModel):
+    """A chronological out-of-fold residual reweighted to an outer cutoff."""
+
+    error: float
+    weight: float
+
+
+class InnerSelection(BaseModel):
+    """The deterministic alpha choice and calibration state for one outer fold."""
+
+    alpha: float
+    correct_by_alpha: dict[float, int]
+    residuals: list[WeightedResidual]
+
+
+class _InnerPartition(BaseModel):
+    """One strictly chronological training and validation split."""
+
+    training_rows: list[ResidualTrainingRow]
+    validation_rows: list[ResidualTrainingRow]
+    evaluation_rows: list[CoinflipRow]
+    validation_season: int
+    cutoff_utc: datetime
+
+
 def build_residual_dataset(
     games: Sequence[Game],
     frozen_lines: Sequence[MarketLine],
@@ -154,6 +179,154 @@ def _predict_market_error(fit: ResidualFit, home: str, away: str) -> float:
     if not math.isfinite(prediction):
         raise ValueError("residual prediction must be finite")
     return prediction
+
+
+def _inner_partitions(dataset: ResidualDataset, test_season: int) -> list[_InnerPartition]:
+    """Return deterministic, expanding validation folds before ``test_season``."""
+    training_rows = sorted(
+        (row for row in dataset.training_rows if row.season < test_season),
+        key=lambda row: (row.season, row.week, row.game_id),
+    )
+    if not training_rows:
+        raise ValueError("inner selection requires training rows before the test season")
+
+    evaluation_by_game = {
+        row.game_id: row
+        for row in sorted(
+            (row for row in dataset.evaluation_rows if row.season < test_season),
+            key=lambda row: (row.season, row.week, row.game_id),
+        )
+    }
+    earliest_season = min(row.season for row in training_rows)
+    if test_season == earliest_season + 1:
+        validation_rows = [
+            row for row in training_rows if row.season == earliest_season and row.week >= 9
+        ]
+        return [
+            _build_inner_partition(
+                [row for row in training_rows if row.season == earliest_season and row.week <= 8],
+                validation_rows,
+                evaluation_by_game,
+                earliest_season,
+            )
+        ]
+
+    partitions: list[_InnerPartition] = []
+    for validation_season in range(earliest_season + 1, test_season):
+        validation_rows = [row for row in training_rows if row.season == validation_season]
+        if not validation_rows:
+            continue
+        partitions.append(
+            _build_inner_partition(
+                [row for row in training_rows if row.season < validation_season],
+                validation_rows,
+                evaluation_by_game,
+                validation_season,
+            )
+        )
+    return partitions
+
+
+def _build_inner_partition(
+    training_rows: Sequence[ResidualTrainingRow],
+    validation_rows: Sequence[ResidualTrainingRow],
+    evaluation_by_game: dict[str, CoinflipRow],
+    validation_season: int,
+) -> _InnerPartition:
+    """Create a chronological split, rejecting empty or unordered fit populations."""
+    if not training_rows or not validation_rows:
+        raise ValueError("inner validation partition requires training and validation rows")
+    cutoff = min(row.kickoff_utc for row in validation_rows)
+    if any(row.kickoff_utc >= cutoff for row in training_rows):
+        raise ValueError("inner training rows must be strictly before validation cutoff")
+    evaluation_rows = [
+        evaluation_by_game[row.game_id]
+        for row in validation_rows
+        if row.game_id in evaluation_by_game
+    ]
+    return _InnerPartition(
+        training_rows=list(training_rows),
+        validation_rows=list(validation_rows),
+        evaluation_rows=evaluation_rows,
+        validation_season=validation_season,
+        cutoff_utc=cutoff,
+    )
+
+
+def _select_alpha(dataset: ResidualDataset, test_season: int) -> InnerSelection:
+    """Choose ridge shrinkage on chronological COINFLIP accuracy and retain OOF errors."""
+    partitions = _inner_partitions(dataset, test_season)
+    if not partitions:
+        raise ValueError("at least one inner validation partition is required to select alpha")
+
+    correct_by_alpha: dict[float, int] = {}
+    for alpha in ALPHA_GRID:
+        correct = 0
+        for partition in partitions:
+            fit = _fit_residual_model(partition.training_rows, partition.cutoff_utc, alpha)
+            training_by_game = {row.game_id: row for row in partition.validation_rows}
+            for evaluation in partition.evaluation_rows:
+                training = training_by_game[evaluation.game_id]
+                margin = (
+                    evaluation.frozen_spread
+                    - training.submission_spread
+                    + _predict_market_error(fit, training.home_team_id, training.away_team_id)
+                )
+                if evaluation.target_home_cover is not None:
+                    correct += int((margin > 0) == bool(evaluation.target_home_cover))
+        correct_by_alpha[alpha] = correct
+
+    highest_correct = max(correct_by_alpha.values())
+    alpha = max(value for value, correct in correct_by_alpha.items() if correct == highest_correct)
+    outer_cutoff = _outer_cutoff(dataset, test_season)
+    residuals = _out_of_fold_residuals(partitions, alpha, outer_cutoff)
+    return InnerSelection(
+        alpha=alpha,
+        correct_by_alpha=correct_by_alpha,
+        residuals=sorted(residuals, key=lambda row: (row.error, row.weight)),
+    )
+
+
+def _outer_cutoff(dataset: ResidualDataset, test_season: int) -> datetime:
+    """Find the fixed opening cutoff for a season-locked outer fold."""
+    cutoffs = [
+        row.kickoff_utc
+        for row in [*dataset.training_rows, *dataset.evaluation_rows]
+        if row.season == test_season
+    ]
+    if not cutoffs:
+        raise ValueError("outer selection requires a cutoff in the test season")
+    return min(cutoffs)
+
+
+def _out_of_fold_residuals(
+    partitions: Sequence[_InnerPartition], alpha: float, outer_cutoff: datetime
+) -> list[WeightedResidual]:
+    """Replay selected-alpha inner folds and reweight their prediction errors."""
+    residuals: list[WeightedResidual] = []
+    for partition in partitions:
+        fit = _fit_residual_model(partition.training_rows, partition.cutoff_utc, alpha)
+        weights = _recency_weights(partition.validation_rows, outer_cutoff)
+        for row, weight in zip(partition.validation_rows, weights, strict=True):
+            residuals.append(
+                WeightedResidual(
+                    error=row.market_error
+                    - _predict_market_error(fit, row.home_team_id, row.away_team_id),
+                    weight=float(weight),
+                )
+            )
+    return residuals
+
+
+def _probability_home(ats_margin: float, residuals: Sequence[WeightedResidual]) -> float:
+    """Estimate home-cover probability from the smoothed weighted OOF survival curve."""
+    if len(residuals) < 100:
+        raise ValueError("probability calibration requires at least 100 OOF residuals")
+    threshold = -ats_margin
+    total = sum(row.weight for row in residuals)
+    above = sum(row.weight for row in residuals if row.error > threshold)
+    tied = sum(row.weight for row in residuals if row.error == threshold)
+    return (0.5 + above + 0.5 * tied) / (1.0 + total)
 
 
 def _group_by_game(lines: Sequence[MarketLine]) -> dict[str, list[MarketLine]]:
