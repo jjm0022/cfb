@@ -4,8 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import pickem.backtest.coinflip_residual as residual_module
 from pickem.backtest.coinflip import CoinflipRow, build_coinflip_rows
 from pickem.backtest.coinflip_residual import (
+    InnerSelection,
+    ResidualEvaluation,
+    ResidualFold,
+    ResidualPrediction,
     ResidualTrainingRow,
     WeightedResidual,
     _fit_residual_model,
@@ -15,8 +20,11 @@ from pickem.backtest.coinflip_residual import (
     _recency_weights,
     _select_alpha,
     build_residual_dataset,
+    evaluate_residual_candidate,
+    passes_residual_gate,
+    summarize_residual_predictions,
 )
-from pickem.models import Game, MarketLine, Sport
+from pickem.models import Game, MarketLine, Side, Sport
 
 KICKOFF = datetime(2025, 9, 6, 17, tzinfo=UTC)
 GAME = Game(
@@ -253,3 +261,142 @@ def test_fewer_than_one_hundred_oof_residuals_fails_closed():
     """Catches calibration silently proceeding without the frozen OOF minimum."""
     with pytest.raises(ValueError, match="at least 100"):
         _probability_home(1.0, [WeightedResidual(error=0.0, weight=1.0)] * 99)
+
+
+def residual_prediction(
+    game_id: str,
+    season: int,
+    week: int,
+    *,
+    target_home_cover: int = 1,
+    candidate_correct: bool = True,
+    favorite_correct: bool = False,
+) -> ResidualPrediction:
+    """Build one paired decided prediction for evaluator metric tests."""
+    return ResidualPrediction(
+        game_id=game_id,
+        season=season,
+        week=week,
+        kickoff_utc=datetime(season, 9, min(week, 28), 17, tzinfo=UTC),
+        frozen_spread=-2.5,
+        submission_spread=-2.0,
+        predicted_market_error=0.0,
+        predicted_ats_margin=0.5,
+        probability_home=0.6,
+        candidate_side=Side.HOME,
+        favorite_side=Side.HOME,
+        elo_side=Side.HOME,
+        always_home_side=Side.HOME,
+        target_home_cover=target_home_cover,
+        is_push=False,
+        candidate_correct=candidate_correct,
+        favorite_correct=favorite_correct,
+        elo_correct=candidate_correct,
+        always_home_correct=candidate_correct,
+    )
+
+
+MANUAL_RESIDUAL_PREDICTIONS = [
+    residual_prediction("a", 2022, 1),
+    residual_prediction("b", 2022, 2, candidate_correct=False, favorite_correct=True),
+    residual_prediction("c", 2023, 1),
+    residual_prediction("d", 2023, 2, candidate_correct=False, favorite_correct=True),
+]
+MANUAL_RESIDUAL_FOLDS = [
+    ResidualFold(
+        train_from=2021,
+        train_through=2021,
+        test_season=2022,
+        cutoff_utc=datetime(2022, 9, 1, tzinfo=UTC),
+        alpha=100.0,
+        fit=_fit_residual_model(SYMMETRIC_ROWS, CUTOFF, 100.0),
+        residual_count=100,
+        correct_by_alpha={10.0: 0, 30.0: 0, 100.0: 0},
+    ),
+]
+
+
+def test_primary_comparator_is_frozen_line_favorite_and_zero_picks_home():
+    """Catches a primary comparator that is not the locked frozen favorite."""
+    prediction = residual_prediction("zero", 2022, 1)
+
+    assert prediction.favorite_side is Side.HOME
+
+
+def test_outer_models_are_season_locked_and_predict_the_exact_paired_population(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Catches refitting inside a test season or losing an eligible paired game."""
+    monkeypatch.setattr(residual_module, "build_residual_dataset", lambda *_: DATASET)
+    monkeypatch.setattr(
+        residual_module,
+        "replay_elo_sides",
+        lambda *_: {row.game_id: Side.AWAY for row in DATASET.evaluation_rows},
+    )
+    monkeypatch.setattr(
+        residual_module,
+        "_select_alpha",
+        lambda *_: InnerSelection(
+            alpha=100.0,
+            correct_by_alpha={10.0: 0, 30.0: 0, 100.0: 0},
+            residuals=[WeightedResidual(error=0.0, weight=1.0)] * 100,
+        ),
+    )
+
+    result = evaluate_residual_candidate([], [], [])
+
+    assert [(fold.train_through, fold.test_season) for fold in result.folds] == [
+        (2021, 2022),
+        (2022, 2023),
+        (2023, 2024),
+        (2024, 2025),
+    ]
+    assert all(
+        fold.cutoff_utc
+        == min(
+            prediction.kickoff_utc
+            for prediction in result.predictions
+            if prediction.season == fold.test_season
+        )
+        for fold in result.folds
+    )
+    assert {prediction.game_id for prediction in result.predictions} == {
+        row.game_id for row in DATASET.evaluation_rows if row.season >= 2022
+    }
+
+
+def test_gate_requires_every_predeclared_condition():
+    """Catches any acceptance condition being silently omitted from Candidate 2's gate."""
+    passing = ResidualEvaluation(
+        accuracy_delta=0.01,
+        positive_seasons=3,
+        bootstrap_lower=0.001,
+        brier_score=0.249,
+        calibration_safe=True,
+        leakage_safe=True,
+        deterministic=True,
+        uses_2026_outcomes=False,
+    )
+    assert passes_residual_gate(passing)
+    mutations = [
+        {"accuracy_delta": 0.009},
+        {"positive_seasons": 2},
+        {"bootstrap_lower": 0.0},
+        {"brier_score": 0.25},
+        {"calibration_safe": False},
+        {"leakage_safe": False},
+        {"deterministic": False},
+        {"uses_2026_outcomes": True},
+    ]
+    assert all(not passes_residual_gate(passing.model_copy(update=change)) for change in mutations)
+
+
+def test_bootstrap_is_paired_by_season_week_and_deterministic():
+    """Catches unseeded or row-level bootstrap sampling of paired outcomes."""
+    first = summarize_residual_predictions(MANUAL_RESIDUAL_PREDICTIONS, MANUAL_RESIDUAL_FOLDS)
+    second = summarize_residual_predictions(MANUAL_RESIDUAL_PREDICTIONS, MANUAL_RESIDUAL_FOLDS)
+
+    assert (first.bootstrap_lower, first.bootstrap_upper) == (
+        second.bootstrap_lower,
+        second.bootstrap_upper,
+    )
