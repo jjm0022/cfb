@@ -400,3 +400,28 @@ def test_bootstrap_is_paired_by_season_week_and_deterministic():
         second.bootstrap_lower,
         second.bootstrap_upper,
     )
+
+
+def test_fold_certification_rejects_an_incomplete_outer_replay():
+    """Catches a partial 2022-only replay being certified as leakage-safe."""
+    [fold] = MANUAL_RESIDUAL_FOLDS
+    cutoff = MANUAL_RESIDUAL_PREDICTIONS[0].kickoff_utc
+    safe_2022_fold = fold.model_copy(
+        update={
+            "cutoff_utc": cutoff,
+            "fit": fold.fit.model_copy(update={"cutoff_utc": cutoff}),
+        }
+    )
+
+    assert not residual_module._residual_folds_are_safe(
+        MANUAL_RESIDUAL_PREDICTIONS[:2],
+        [safe_2022_fold],
+    )
+
+
+def test_evaluation_rejects_pre_2021_inputs_before_building_rows():
+    """Catches 2020 outcomes entering the frozen 2021–2025 experiment."""
+    pre_contract = GAME.model_copy(update={"season": 2020})
+
+    with pytest.raises(ValueError, match="2021 through 2025"):
+        evaluate_residual_candidate([pre_contract], FROZEN, SUBMISSION)

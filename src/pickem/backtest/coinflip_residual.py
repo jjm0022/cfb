@@ -428,7 +428,9 @@ def evaluate_residual_candidate(
     submission_lines: Sequence[MarketLine],
 ) -> ResidualEvaluation:
     """Evaluate Candidate 2 with one immutable residual fit per outer season."""
-    permitted_games = [game for game in games if game.season <= 2025]
+    if any(game.season < 2021 or game.season > 2025 for game in games):
+        raise ValueError("residual evaluation only permits seasons 2021 through 2025")
+    permitted_games = list(games)
     dataset = build_residual_dataset(permitted_games, frozen_lines, submission_lines)
     elo_sides = replay_elo_sides(permitted_games, frozen_lines, submission_lines)
     training_by_game = {row.game_id: row for row in dataset.training_rows}
@@ -906,8 +908,11 @@ def _residual_folds_are_safe(
 ) -> bool:
     if not folds or not predictions:
         return False
+    expected_train_through = {2022: 2021, 2023: 2022, 2024: 2023, 2025: 2024}
     by_test_season = {fold.test_season: fold for fold in folds}
-    if len(by_test_season) != len(folds):
+    if len(by_test_season) != len(folds) or set(by_test_season) != set(expected_train_through):
+        return False
+    if {prediction.season for prediction in predictions} != set(expected_train_through):
         return False
     for fold in folds:
         fold_predictions = [
@@ -916,6 +921,7 @@ def _residual_folds_are_safe(
         if (
             fold.train_from > fold.train_through
             or fold.train_through >= fold.test_season
+            or fold.train_through != expected_train_through[fold.test_season]
             or fold.fit.cutoff_utc != fold.cutoff_utc
             or fold.residual_count < 100
             or not fold_predictions
