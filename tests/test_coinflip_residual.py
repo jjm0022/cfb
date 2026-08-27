@@ -304,6 +304,8 @@ def test_outer_cutoff_uses_earliest_stored_game_before_proxy_filtering(
         kickoff_utc=datetime(2022, 8, 1, 17, tzinfo=UTC),
         home_team_id="INELIGIBLE_HOME",
         away_team_id="INELIGIBLE_AWAY",
+        home_score=14,
+        away_score=10,
     )
     expected_cutoffs = {
         2022: earliest_stored.kickoff_utc,
@@ -345,6 +347,11 @@ def test_outer_cutoff_uses_earliest_stored_game_before_proxy_filtering(
     monkeypatch.setattr(residual_module, "_select_alpha", select_alpha)
     monkeypatch.setattr(residual_module, "_fit_residual_model", fit)
 
+    constructed_dataset = build_residual_dataset([earliest_stored], [], [])
+    assert earliest_stored.game_id not in {
+        row.game_id for row in constructed_dataset.evaluation_rows
+    }
+
     stored_games = [
         earliest_stored,
         *[
@@ -367,6 +374,7 @@ def test_outer_cutoff_uses_earliest_stored_game_before_proxy_filtering(
     assert [fold.cutoff_utc for fold in result.folds] == list(expected_cutoffs.values())
     assert fitted_cutoffs == list(expected_cutoffs.values())
     assert selected_elo_sides == [{row.game_id: Side.HOME for row in DATASET.evaluation_rows}] * 4
+    assert result.leakage_safe
 
 
 def test_alpha_oof_weights_use_the_explicit_outer_cutoff():
@@ -387,6 +395,50 @@ def test_alpha_oof_weights_use_the_explicit_outer_cutoff():
     )
 
     assert [residual.weight for residual in selection.residuals] == pytest.approx(expected_weights)
+
+
+def test_outer_cutoff_ignores_non_cfb_stored_games(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Catches a non-CFB stored game shifting a CFB residual fold's cutoff."""
+    cfb_games = stored_games_for(DATASET.evaluation_rows)
+    non_cfb_earlier = Game(
+        game_id="nfl-2022-earlier",
+        sport=Sport.NFL,
+        season=2022,
+        week=1,
+        kickoff_utc=datetime(2022, 8, 1, 17, tzinfo=UTC),
+        home_team_id="NFL_HOME",
+        away_team_id="NFL_AWAY",
+    )
+    expected_2022_cutoff = min(game.kickoff_utc for game in cfb_games if game.season == 2022)
+    selected_cutoffs: dict[int, datetime] = {}
+
+    monkeypatch.setattr(residual_module, "build_residual_dataset", lambda *_: DATASET)
+    monkeypatch.setattr(
+        residual_module,
+        "replay_elo_sides",
+        lambda *_: {row.game_id: Side.HOME for row in DATASET.evaluation_rows},
+    )
+
+    def select_alpha(
+        _dataset: object,
+        test_season: int,
+        outer_cutoff: datetime,
+        _elo_sides: dict[str, Side],
+    ) -> InnerSelection:
+        selected_cutoffs[test_season] = outer_cutoff
+        return InnerSelection(
+            alpha=100.0,
+            correct_by_alpha={10.0: 0, 30.0: 0, 100.0: 0},
+            residuals=[WeightedResidual(error=0.0, weight=1.0)] * 100,
+        )
+
+    monkeypatch.setattr(residual_module, "_select_alpha", select_alpha)
+
+    evaluate_residual_candidate([non_cfb_earlier, *cfb_games], [], [])
+
+    assert selected_cutoffs[2022] == expected_2022_cutoff
 
 
 @pytest.mark.parametrize(
@@ -619,6 +671,7 @@ def test_fold_certification_rejects_an_incomplete_outer_replay():
     assert not residual_module._residual_folds_are_safe(
         MANUAL_RESIDUAL_PREDICTIONS[:2],
         [safe_2022_fold],
+        {2022: cutoff},
     )
 
 

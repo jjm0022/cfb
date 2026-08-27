@@ -439,9 +439,13 @@ def evaluate_residual_candidate(
         raise ValueError("residual evaluation only permits seasons 2021 through 2025")
     permitted_games = list(games)
     season_cutoffs = {
-        season: min(game.kickoff_utc for game in permitted_games if game.season == season)
+        season: min(
+            game.kickoff_utc
+            for game in permitted_games
+            if game.sport is Sport.CFB and game.season == season
+        )
         for season in range(2022, 2026)
-        if any(game.season == season for game in permitted_games)
+        if any(game.sport is Sport.CFB and game.season == season for game in permitted_games)
     }
     dataset = build_residual_dataset(permitted_games, frozen_lines, submission_lines)
     elo_sides = replay_elo_sides(permitted_games, frozen_lines, submission_lines)
@@ -530,7 +534,9 @@ def evaluate_residual_candidate(
     )
     return result.model_copy(
         update={
-            "leakage_safe": _residual_folds_are_safe(result.predictions, result.folds),
+            "leakage_safe": _residual_folds_are_safe(
+                result.predictions, result.folds, season_cutoffs
+            ),
             "uses_2026_outcomes": False,
         }
     )
@@ -924,13 +930,17 @@ def _residual_bootstrap_interval(
 
 
 def _residual_folds_are_safe(
-    predictions: Sequence[ResidualPrediction], folds: Sequence[ResidualFold]
+    predictions: Sequence[ResidualPrediction],
+    folds: Sequence[ResidualFold],
+    season_cutoffs: Mapping[int, datetime],
 ) -> bool:
     if not folds or not predictions:
         return False
     expected_train_through = {2022: 2021, 2023: 2022, 2024: 2023, 2025: 2024}
     by_test_season = {fold.test_season: fold for fold in folds}
     if len(by_test_season) != len(folds) or set(by_test_season) != set(expected_train_through):
+        return False
+    if set(season_cutoffs) != set(expected_train_through):
         return False
     if {prediction.season for prediction in predictions} != set(expected_train_through):
         return False
@@ -945,7 +955,7 @@ def _residual_folds_are_safe(
             or fold.fit.cutoff_utc != fold.cutoff_utc
             or fold.residual_count < 100
             or not fold_predictions
-            or fold.cutoff_utc != min(prediction.kickoff_utc for prediction in fold_predictions)
+            or fold.cutoff_utc != season_cutoffs[fold.test_season]
         ):
             return False
     return all(
