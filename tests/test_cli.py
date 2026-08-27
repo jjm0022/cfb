@@ -125,6 +125,16 @@ def _seed_residual_experiment(db):
                         ),
                     ]
                 )
+    first_game = games[0]
+    lines.append(
+        MarketLine(
+            game_id=first_game.game_id,
+            source="oddsapi:unclassified",
+            book="coverage",
+            spread_home=-3.25,
+            captured_at=first_game.kickoff_utc - timedelta(days=2),
+        )
+    )
     with Store(db) as store:
         store.init_schema()
         store.upsert_games(games)
@@ -176,6 +186,8 @@ def test_evaluate_coinflip_residual_writes_byte_identical_audit_artifacts(tmp_pa
     assert first.exit_code == second.exit_code == 0
     assert (tmp_path / "a.jsonl").read_bytes() == (tmp_path / "b.jsonl").read_bytes()
     assert (tmp_path / "a.md").read_bytes() == (tmp_path / "b.md").read_bytes()
+    assert "Stored proxy exclusions (1)" in (tmp_path / "a.md").read_text()
+    assert "oddsapi:unclassified/coverage snapshot" in (tmp_path / "a.md").read_text()
     assert not (tmp_path / "cfb-coinflip-residual-v1.json").exists()
 
 

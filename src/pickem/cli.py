@@ -625,6 +625,7 @@ def evaluate_coinflip_residual_cmd(
         render_residual_report(
             result,
             prediction_sha256=hashlib.sha256(prediction_bytes).hexdigest(),
+            proxy_skipped=proxy_skipped,
         )
     )
     typer.echo(f"Candidate 2: {'PASS' if passes_residual_gate(result) else 'NULL — retain Elo'}")

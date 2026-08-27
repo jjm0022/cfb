@@ -650,7 +650,10 @@ def render_residual_predictions_jsonl(evaluation: ResidualEvaluation) -> str:
 
 
 def render_residual_report(
-    evaluation: ResidualEvaluation, *, prediction_sha256: str | None = None
+    evaluation: ResidualEvaluation,
+    *,
+    prediction_sha256: str | None = None,
+    proxy_skipped: Sequence[str] = (),
 ) -> str:
     """Render a deterministic report containing all Candidate 2 audit evidence."""
 
@@ -812,6 +815,9 @@ def render_residual_report(
     lines.extend(f"- {reason}" for reason in evaluation.evaluation_skipped) or lines.append(
         "- none"
     )
+    ordered_proxy_skipped = sorted(proxy_skipped)
+    lines.extend(["", f"### Stored proxy exclusions ({len(ordered_proxy_skipped)})", ""])
+    lines.extend(f"- {reason}" for reason in ordered_proxy_skipped) or lines.append("- none")
     lines.extend(
         [
             "",
