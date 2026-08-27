@@ -120,7 +120,7 @@ class ArchiveBackfill:
         if max_new_requests is not None and max_new_requests < 0:
             raise ValueError("max_new_requests must be non-negative")
         if not games:
-            raise NoHistoricalGames("no historical NFL games are stored")
+            raise NoHistoricalGames("no historical games are stored")
         sports = {game.sport for game in games}
         if len(sports) != 1:
             raise MixedSports(sports)

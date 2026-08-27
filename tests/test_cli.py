@@ -164,6 +164,44 @@ def test_evaluate_coinflip_writes_deterministic_auditable_artifacts(tmp_path):
     assert first_report.read_bytes().endswith(b"\n")
 
 
+def test_evaluate_coinflip_rejects_a_run_before_determinism_is_compared(tmp_path, monkeypatch):
+    """Catches the CLI certifying a one-pass evaluation as deterministic."""
+    import pickem.cli as cli
+
+    db = tmp_path / "coinflip.duckdb"
+    _seed_coinflip_experiment(db)
+    real_evaluate = cli.evaluate_coinflip
+    calls = 0
+
+    def mismatched_evaluate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = real_evaluate(*args, **kwargs)
+        if calls == 2:
+            return result.model_copy(update={"accuracy_delta": 0.1234})
+        return result
+
+    monkeypatch.setattr(cli, "evaluate_coinflip", mismatched_evaluate)
+    result = runner.invoke(
+        app,
+        [
+            "evaluate-coinflip",
+            "--sport",
+            "cfb",
+            "--predictions",
+            str(tmp_path / "predictions.jsonl"),
+            "--report",
+            str(tmp_path / "report.md"),
+            "--db",
+            str(db),
+        ],
+    )
+
+    assert calls == 2
+    assert result.exit_code != 0
+    assert "not deterministic" in str(result.exception)
+
+
 def test_evaluate_coinflip_refuses_nfl(tmp_path):
     """Catches the approved CFB-only experiment silently accepting NFL data."""
     result = runner.invoke(

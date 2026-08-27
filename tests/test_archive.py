@@ -166,7 +166,7 @@ def test_no_stored_games_fails_before_constructing_a_client(store):
     def explode():
         raise AssertionError("empty run constructed the paid adapter")
 
-    with pytest.raises(NoHistoricalGames):
+    with pytest.raises(NoHistoricalGames, match="no historical games are stored"):
         ArchiveBackfill(store, TeamResolver.default(), explode).run(
             [], max_credits=20_000, execute=True
         )

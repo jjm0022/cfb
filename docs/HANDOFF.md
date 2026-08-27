@@ -21,8 +21,9 @@ allocation problem.
 
 ## Start here
 
-You have a working system with a real result. Nothing is half-finished and
-there is no branch to merge. Orient yourself in about two minutes:
+You have a working system with a real result. Nothing is half-finished; the
+work is on `feature/cfb-coinflip-model` pending its integration. Orient
+yourself in about two minutes:
 
 ```bash
 uv run pytest -q                              # expect 313 passed
@@ -166,8 +167,9 @@ synced or graded. Task 12 is terminal: Candidate 1 remains NULL, Elo remains
 live, no model artifact exists, and Candidate 2 remains blocked on new design
 approval.
 
-- **Branch:** all work is on `master`, working tree clean. There is no remote
-  configured, so `git log` is the only history and nothing is pushed anywhere.
+- **Branch:** the CFB COINFLIP work is on `feature/cfb-coinflip-model`, pending
+  integration. There is no remote configured, so `git log` is the only history
+  and nothing is pushed anywhere.
 - **Tests:** 313 passing, `uv run pytest -q`. The suite is fully offline — HTTP
   is injected via `httpx.MockTransport` and loaders are injected. Keep it that
   way; no test may touch the network.

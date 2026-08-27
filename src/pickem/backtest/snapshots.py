@@ -10,10 +10,10 @@ The two proxies are timed differently on purpose:
   so it is one snapshot per week at a fixed early-week instant. A true "opening
   line" would be whenever each book first posted — a different and less
   relevant moment.
-* the SUBMISSION anchor imitates pressing submit, so it is the last snapshot
-  before each game's own kickoff. Kickoffs are staggered, so this is one
-  request per distinct kickoff slot: never one per week, and never one per
-  game, since a single snapshot carries every game with posted odds.
+* the SUBMISSION anchor imitates pressing submit, so it is a bounded-age,
+  pre-kickoff batch for games whose kickoffs are close together. Kickoffs are
+  staggered, so this is neither one request per week nor necessarily one per
+  game: a single snapshot carries every game with posted odds.
 """
 
 from __future__ import annotations
@@ -164,7 +164,7 @@ def plan_snapshots(
                     kind=SnapshotKind.SUBMISSION,
                     at=request_at,
                     window=window,
-                    # Narrowed to this slot, so a game can never be graded
+                    # Narrowed to this bounded-age batch, so a game can never be graded
                     # against a snapshot taken after it kicked off.
                     slate=frozenset(g.game_id for g in batch),
                     season=season,

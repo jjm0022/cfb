@@ -102,8 +102,8 @@ class CoinflipEvaluation(BaseModel):
     bootstrap_lower: float | None = None
     bootstrap_upper: float | None = None
     positive_seasons: int = 0
-    leakage_safe: bool = True
-    deterministic: bool = True
+    leakage_safe: bool = False
+    deterministic: bool = False
 
 
 def evaluate_coinflip(
@@ -151,6 +151,11 @@ def evaluate_coinflip(
             )
         )
         probabilities = pipeline.predict_proba(_features(test_rows))[:, 1]
+        # Historical candidate scoring deliberately retains the estimator's
+        # class prediction at exactly 0.5.  This keeps Candidate 1 independent
+        # of the Elo comparator it is measured against.  Prospective live
+        # artifact inference, if authorized, instead delegates an exact half
+        # probability to Elo (design §2); that path is not this evaluator.
         candidate_labels = pipeline.predict(_features(test_rows))
         for row, probability, candidate_label in zip(
             test_rows, probabilities, candidate_labels, strict=True
@@ -247,6 +252,7 @@ def summarize_coinflip_predictions(
         bootstrap_lower=bootstrap_lower,
         bootstrap_upper=bootstrap_upper,
         positive_seasons=sum(delta.candidate_minus_elo > 0 for delta in season_deltas),
+        leakage_safe=_has_safe_fold_boundaries(ordered, folds),
     )
 
 
@@ -261,6 +267,13 @@ def passes_acceptance_gate(evaluation: CoinflipEvaluation) -> bool:
         and evaluation.leakage_safe
         and evaluation.deterministic
     )
+
+
+def evaluations_are_byte_identical(first: CoinflipEvaluation, second: CoinflipEvaluation) -> bool:
+    """Compare independently evaluated candidate results before certification."""
+    return first.model_dump_json() == second.model_dump_json() and render_predictions_jsonl(
+        first
+    ) == render_predictions_jsonl(second)
 
 
 def replay_elo_sides(
@@ -477,6 +490,25 @@ def render_coinflip_report(
         lines.append("- none")
     lines.extend(["", f"Candidate 1: {'PASS' if gate else 'NULL — retain Elo'}", ""])
     return "\n".join(lines)
+
+
+def _has_safe_fold_boundaries(
+    predictions: Sequence[CoinflipPrediction], folds: Sequence[CoinflipFold]
+) -> bool:
+    """Verify that every prediction belongs to a strictly prior-trained fold."""
+    if not folds:
+        return False
+    by_test_season = {fold.test_season: fold for fold in folds}
+    if len(by_test_season) != len(folds):
+        return False
+    if any(
+        fold.train_from > fold.train_through or fold.train_through >= fold.test_season
+        for fold in folds
+    ):
+        return False
+    return bool(predictions) and all(
+        prediction.season in by_test_season for prediction in predictions
+    )
 
 
 def _calibration(scores: Sequence[float], targets: Sequence[int]) -> list[CalibrationBin]:

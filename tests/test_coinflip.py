@@ -5,6 +5,7 @@ import pytest
 
 from pickem.backtest.coinflip import (
     CoinflipEvaluation,
+    CoinflipFold,
     CoinflipPrediction,
     CoinflipRow,
     build_coinflip_rows,
@@ -229,6 +230,7 @@ def test_outer_folds_never_train_on_the_test_or_future_season():
         (2023, 2024),
         (2024, 2025),
     ]
+    assert result.leakage_safe
 
 
 def test_selected_c_always_comes_from_the_fixed_grid():
@@ -404,6 +406,28 @@ def test_summary_keeps_log_loss_finite_at_numeric_probability_limits():
     assert math.isfinite(result.log_loss)
 
 
+def test_summary_cannot_self_certify_an_invalid_fold_boundary():
+    """Catches a direct summary claiming leakage safety without valid fold evidence."""
+    result = summarize_coinflip_predictions(
+        [prediction("held-out", 2022, 1, 0.6, 1, True, False)],
+        folds=[
+            CoinflipFold(
+                train_from=2021,
+                train_through=2022,
+                test_season=2022,
+                selected_c=0.1,
+                means=[0.0, 0.0, 0.0],
+                scales=[1.0, 1.0, 1.0],
+                coefficients=[0.0, 0.0, 0.0],
+                intercept=0.0,
+            )
+        ],
+    )
+
+    assert not result.leakage_safe
+    assert not result.deterministic
+
+
 def passing_evaluation() -> CoinflipEvaluation:
     return CoinflipEvaluation(
         folds=[],
@@ -441,6 +465,28 @@ def test_gate_requires_one_percentage_point_three_seasons_and_brier_below_quarte
     assert not passes_acceptance_gate(with_delta(0.0099))
     assert not passes_acceptance_gate(with_positive_seasons(2))
     assert not passes_acceptance_gate(with_brier(0.25))
+
+
+def test_gate_rejects_an_evaluation_that_relies_on_certification_defaults():
+    """Catches default model fields allowing an unverified result through the gate."""
+    unverified = CoinflipEvaluation(
+        folds=[],
+        predictions=[],
+        pushes=0,
+        candidate_wins=52,
+        candidate_losses=48,
+        elo_wins=51,
+        elo_losses=49,
+        candidate_accuracy=0.52,
+        elo_accuracy=0.51,
+        accuracy_delta=0.01,
+        brier_score=0.24,
+        positive_seasons=3,
+    )
+
+    assert not unverified.leakage_safe
+    assert not unverified.deterministic
+    assert not passes_acceptance_gate(unverified)
 
 
 def test_replay_elo_sides_matches_live_coinflip_decisions_with_prior_week_history_only():

@@ -25,6 +25,7 @@ from pickem.backtest.calibration import DEFAULT_TOLERANCE, calibrate
 from pickem.backtest.coinflip import (
     build_coinflip_rows,
     evaluate_coinflip,
+    evaluations_are_byte_identical,
     passes_acceptance_gate,
     render_coinflip_report,
     render_predictions_jsonl,
@@ -544,6 +545,10 @@ def evaluate_coinflip_cmd(
         if next(row.season for row in dataset.rows if row.game_id == game_id) != first_season
     }
     evaluation = evaluate_coinflip(dataset.rows, elo_sides)
+    repeated_evaluation = evaluate_coinflip(dataset.rows, elo_sides)
+    if not evaluations_are_byte_identical(evaluation, repeated_evaluation):
+        raise RuntimeError("coinflip evaluation is not deterministic across independent runs")
+    evaluation = evaluation.model_copy(update={"deterministic": True})
 
     predictions.parent.mkdir(parents=True, exist_ok=True)
     report.parent.mkdir(parents=True, exist_ok=True)
