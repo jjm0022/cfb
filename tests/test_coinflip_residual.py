@@ -142,6 +142,22 @@ def residual_evaluation_row(row: ResidualTrainingRow) -> CoinflipRow:
     )
 
 
+def stored_games_for(rows: list[CoinflipRow]) -> list[Game]:
+    """Create stored-game inputs whose kickoff timestamps match evaluation rows."""
+    return [
+        Game(
+            game_id=f"stored-{row.game_id}",
+            sport=Sport.CFB,
+            season=row.season,
+            week=row.week,
+            kickoff_utc=row.kickoff_utc,
+            home_team_id="STORED_HOME",
+            away_team_id="STORED_AWAY",
+        )
+        for row in rows
+    ]
+
+
 DATASET_ROWS = [
     residual_dataset_row(season, week, index)
     for season in range(2021, 2026)
@@ -265,9 +281,105 @@ def test_later_outer_fold_uses_only_expanding_prior_seasons():
 
 def test_tied_inner_accuracy_selects_largest_alpha():
     """Catches selecting less shrinkage when chronological scores tie."""
-    selection = _select_alpha(TIED_DATASET, test_season=2025)
+    selection = _select_alpha(
+        TIED_DATASET,
+        test_season=2025,
+        outer_cutoff=datetime(2025, 9, 1, 17, tzinfo=UTC),
+    )
 
     assert selection.alpha == 100.0
+
+
+def test_outer_cutoff_uses_earliest_stored_game_before_proxy_filtering(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Catches deriving an outer cutoff only from proxy-eligible Candidate 2 rows."""
+    earliest_stored = Game(
+        game_id="cfb-2022-ineligible-earliest",
+        sport=Sport.CFB,
+        season=2022,
+        week=1,
+        kickoff_utc=datetime(2022, 8, 1, 17, tzinfo=UTC),
+        home_team_id="INELIGIBLE_HOME",
+        away_team_id="INELIGIBLE_AWAY",
+    )
+    expected_cutoffs = {
+        2022: earliest_stored.kickoff_utc,
+        **{
+            season: min(row.kickoff_utc for row in DATASET.evaluation_rows if row.season == season)
+            for season in range(2023, 2026)
+        },
+    }
+    selected_cutoffs: dict[int, datetime] = {}
+    fitted_cutoffs: list[datetime] = []
+    original_fit = residual_module._fit_residual_model
+
+    monkeypatch.setattr(residual_module, "build_residual_dataset", lambda *_: DATASET)
+    monkeypatch.setattr(
+        residual_module,
+        "replay_elo_sides",
+        lambda *_: {row.game_id: Side.HOME for row in DATASET.evaluation_rows},
+    )
+
+    def select_alpha(
+        _dataset: object,
+        test_season: int,
+        outer_cutoff: datetime,
+    ) -> InnerSelection:
+        selected_cutoffs[test_season] = outer_cutoff
+        return InnerSelection(
+            alpha=100.0,
+            correct_by_alpha={10.0: 0, 30.0: 0, 100.0: 0},
+            residuals=[WeightedResidual(error=0.0, weight=1.0)] * 100,
+        )
+
+    def fit(rows: object, cutoff: datetime, alpha: float):
+        fitted_cutoffs.append(cutoff)
+        return original_fit(rows, cutoff, alpha)
+
+    monkeypatch.setattr(residual_module, "_select_alpha", select_alpha)
+    monkeypatch.setattr(residual_module, "_fit_residual_model", fit)
+
+    stored_games = [
+        earliest_stored,
+        *[
+            Game(
+                game_id=f"stored-{row.game_id}",
+                sport=Sport.CFB,
+                season=row.season,
+                week=row.week,
+                kickoff_utc=row.kickoff_utc,
+                home_team_id="STORED_HOME",
+                away_team_id="STORED_AWAY",
+            )
+            for row in DATASET.evaluation_rows
+            if row.season >= 2023
+        ],
+    ]
+    result = evaluate_residual_candidate(stored_games, [], [])
+
+    assert selected_cutoffs == expected_cutoffs
+    assert [fold.cutoff_utc for fold in result.folds] == list(expected_cutoffs.values())
+    assert fitted_cutoffs == list(expected_cutoffs.values())
+
+
+def test_alpha_oof_weights_use_the_explicit_outer_cutoff():
+    """Catches OOF residual recency weighting from a filtered-season cutoff."""
+    outer_cutoff = datetime(2025, 8, 1, 17, tzinfo=UTC)
+    selection = _select_alpha(
+        TIED_DATASET,
+        test_season=2025,
+        outer_cutoff=outer_cutoff,
+    )
+    validation_rows = [
+        row for row in TIED_DATASET.training_rows if row.season in (2022, 2023, 2024)
+    ]
+    expected_weights = sorted(
+        2 ** (-(outer_cutoff - row.kickoff_utc).total_seconds() / 86400.0 / 365.0)
+        for row in validation_rows
+    )
+
+    assert [residual.weight for residual in selection.residuals] == pytest.approx(expected_weights)
 
 
 def test_weighted_empirical_probability_uses_half_weight_for_ties_and_smoothing():
@@ -367,7 +479,7 @@ def test_outer_models_are_season_locked_and_predict_the_exact_paired_population(
         ),
     )
 
-    result = evaluate_residual_candidate([], [], [])
+    result = evaluate_residual_candidate(stored_games_for(DATASET.evaluation_rows), [], [])
 
     assert [(fold.train_through, fold.test_season) for fold in result.folds] == [
         (2021, 2022),

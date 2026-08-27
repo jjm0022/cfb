@@ -344,7 +344,9 @@ def _build_inner_partition(
     )
 
 
-def _select_alpha(dataset: ResidualDataset, test_season: int) -> InnerSelection:
+def _select_alpha(
+    dataset: ResidualDataset, test_season: int, outer_cutoff: datetime
+) -> InnerSelection:
     """Choose ridge shrinkage on chronological COINFLIP accuracy and retain OOF errors."""
     partitions = _inner_partitions(dataset, test_season)
     if not partitions:
@@ -369,25 +371,12 @@ def _select_alpha(dataset: ResidualDataset, test_season: int) -> InnerSelection:
 
     highest_correct = max(correct_by_alpha.values())
     alpha = max(value for value, correct in correct_by_alpha.items() if correct == highest_correct)
-    outer_cutoff = _outer_cutoff(dataset, test_season)
     residuals = _out_of_fold_residuals(partitions, alpha, outer_cutoff)
     return InnerSelection(
         alpha=alpha,
         correct_by_alpha=correct_by_alpha,
         residuals=sorted(residuals, key=lambda row: (row.error, row.weight)),
     )
-
-
-def _outer_cutoff(dataset: ResidualDataset, test_season: int) -> datetime:
-    """Find the fixed opening cutoff for a season-locked outer fold."""
-    cutoffs = [
-        row.kickoff_utc
-        for row in [*dataset.training_rows, *dataset.evaluation_rows]
-        if row.season == test_season
-    ]
-    if not cutoffs:
-        raise ValueError("outer selection requires a cutoff in the test season")
-    return min(cutoffs)
 
 
 def _out_of_fold_residuals(
@@ -436,6 +425,11 @@ def evaluate_residual_candidate(
     if any(game.season < 2021 or game.season > 2025 for game in games):
         raise ValueError("residual evaluation only permits seasons 2021 through 2025")
     permitted_games = list(games)
+    season_cutoffs = {
+        season: min(game.kickoff_utc for game in permitted_games if game.season == season)
+        for season in range(2022, 2026)
+        if any(game.season == season for game in permitted_games)
+    }
     dataset = build_residual_dataset(permitted_games, frozen_lines, submission_lines)
     elo_sides = replay_elo_sides(permitted_games, frozen_lines, submission_lines)
     training_by_game = {row.game_id: row for row in dataset.training_rows}
@@ -449,8 +443,10 @@ def evaluate_residual_candidate(
         )
         if not test_rows:
             continue
-        cutoff = min(row.kickoff_utc for row in test_rows)
-        selection = _select_alpha(dataset, test_season)
+        cutoff = season_cutoffs.get(test_season)
+        if cutoff is None:
+            raise ValueError("outer evaluation requires a stored cutoff in the test season")
+        selection = _select_alpha(dataset, test_season, cutoff)
         train_rows = [
             row
             for row in dataset.training_rows
