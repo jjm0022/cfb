@@ -7,11 +7,16 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime
 
-from pydantic import BaseModel
+import numpy as np
+from pydantic import BaseModel, model_validator
+from sklearn.linear_model import Ridge
 
 from pickem.backtest.coinflip import CoinflipRow, build_coinflip_rows, latest_by_book
 from pickem.edge.divergence import consensus_spread
 from pickem.models import Game, MarketLine, Sport
+
+ALPHA_GRID = (10.0, 30.0, 100.0)
+HALF_LIFE_DAYS = 365.0
 
 
 class ResidualTrainingRow(BaseModel):
@@ -30,6 +35,26 @@ class ResidualDataset(BaseModel):
     evaluation_rows: list[CoinflipRow]
     training_skipped: list[str]
     evaluation_skipped: list[str]
+
+
+class ResidualFit(BaseModel):
+    """A fitted, recency-weighted ridge model of market residuals."""
+
+    cutoff_utc: datetime
+    alpha: float
+    intercept: float
+    teams: list[str]
+    team_effects: dict[str, float]
+    training_rows: int
+    effective_weight: float
+
+    @model_validator(mode="after")
+    def validate_finite_values(self) -> ResidualFit:
+        """Reject non-finite values before they can be serialized."""
+        values = [self.alpha, self.intercept, self.effective_weight, *self.team_effects.values()]
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("residual fit values must be finite")
+        return self
 
 
 def build_residual_dataset(
@@ -78,6 +103,57 @@ def build_residual_dataset(
         training_skipped=skipped,
         evaluation_skipped=evaluation.skipped,
     )
+
+
+def _recency_weights(rows: Sequence[ResidualTrainingRow], cutoff: datetime) -> np.ndarray:
+    """Return exponentially decayed weights for rows strictly preceding ``cutoff``."""
+    ages = np.asarray(
+        [(cutoff - row.kickoff_utc).total_seconds() / 86400.0 for row in rows], dtype=float
+    )
+    if np.any(ages <= 0):
+        raise ValueError("every training row must be strictly before fit cutoff")
+    return np.power(2.0, -ages / HALF_LIFE_DAYS)
+
+
+def _fit_residual_model(
+    rows: Sequence[ResidualTrainingRow], cutoff: datetime, alpha: float
+) -> ResidualFit:
+    """Fit the fixed-alpha ridge model using sorted home-plus/away-minus encoding."""
+    if alpha not in ALPHA_GRID:
+        raise ValueError(f"alpha must be one of {ALPHA_GRID}")
+
+    teams = sorted({team for row in rows for team in (row.home_team_id, row.away_team_id)})
+    if not rows or not teams:
+        raise ValueError("residual fit requires at least one training row")
+
+    index = {team: column for column, team in enumerate(teams)}
+    matrix = np.zeros((len(rows), len(teams)), dtype=float)
+    for row_index, row in enumerate(rows):
+        matrix[row_index, index[row.home_team_id]] = 1.0
+        matrix[row_index, index[row.away_team_id]] = -1.0
+
+    weights = _recency_weights(rows, cutoff)
+    target = np.asarray([row.market_error for row in rows], dtype=float)
+    model = Ridge(alpha=alpha, fit_intercept=True).fit(matrix, target, sample_weight=weights)
+    effects = {team: float(model.coef_[index[team]]) for team in teams}
+
+    return ResidualFit(
+        cutoff_utc=cutoff,
+        alpha=alpha,
+        intercept=float(model.intercept_),
+        teams=teams,
+        team_effects=effects,
+        training_rows=len(rows),
+        effective_weight=float(np.sum(weights)),
+    )
+
+
+def _predict_market_error(fit: ResidualFit, home: str, away: str) -> float:
+    """Predict the market error, treating teams absent from the fit as neutral."""
+    prediction = fit.intercept + fit.team_effects.get(home, 0.0) - fit.team_effects.get(away, 0.0)
+    if not math.isfinite(prediction):
+        raise ValueError("residual prediction must be finite")
+    return prediction
 
 
 def _group_by_game(lines: Sequence[MarketLine]) -> dict[str, list[MarketLine]]:
