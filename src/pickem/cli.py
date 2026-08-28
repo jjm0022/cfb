@@ -8,6 +8,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import duckdb
 import typer
 
 from pickem import config
@@ -47,6 +48,7 @@ from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cf
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import CFB_KEY, NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
 from pickem.models import Game, Sport
+from pickem.operations.preflight import evaluate_preflight, render_preflight
 from pickem.report.sheet import render_sheet
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
@@ -179,6 +181,43 @@ def poll_odds(
         store.append_market_lines(result.lines)
         typer.echo(f"appended {len(result.lines)} market lines")
         _warn_skipped("market rows not stored", result.skipped)
+
+
+@app.command("preflight")
+def preflight(
+    sport: Sport = typer.Option(...),
+    season: int = typer.Option(...),
+    week: int = typer.Option(...),
+    expected_games: int = typer.Option(..., "--expected-games"),
+    max_age_minutes: int = typer.Option(60, "--max-age-minutes"),
+    min_books: int = typer.Option(3, "--min-books"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Check that the live weekly slate is ready for one final report."""
+    if not db.exists():
+        typer.secho(f"no database at {db}; run ingest-cbs first", fg="red", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        with Store(db, read_only=True) as store:
+            dataset = store.load_week(sport, season, week)
+            history = store.games_before(sport, season, week)
+    except duckdb.Error as exc:
+        typer.secho(f"could not read database {db}: {exc}", fg="red", err=True)
+        raise typer.Exit(code=1) from exc
+
+    result = evaluate_preflight(
+        dataset,
+        history,
+        sport=sport,
+        now=datetime.now(tz=UTC),
+        expected_games=expected_games,
+        max_age_minutes=max_age_minutes,
+        min_books=min_books,
+    )
+    typer.echo(render_preflight(result))
+    if not result.ready:
+        raise typer.Exit(code=1)
 
 
 @app.command("report")

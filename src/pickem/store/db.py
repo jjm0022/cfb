@@ -55,8 +55,8 @@ def _market_line_from_row(row: tuple) -> MarketLine:
 
 
 class Store:
-    def __init__(self, path: Path | str) -> None:
-        self._con = duckdb.connect(str(path))
+    def __init__(self, path: Path | str, *, read_only: bool = False) -> None:
+        self._con = duckdb.connect(str(path), read_only=read_only)
         # Fixes the session timezone so TIMESTAMPTZ round-trips are
         # deterministic regardless of the host machine's local timezone.
         self._con.execute("SET TimeZone='UTC'")
