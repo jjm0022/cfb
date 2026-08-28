@@ -43,9 +43,10 @@ uv run pickem poll-odds \
   --sport cfb --season 2026 --week 1 --days 11 \
   --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.rehearsal.duckdb
 
-# Near kickoff, poll again with a shorter window to avoid unrelated events.
+# Near kickoff, poll again with a shorter window that still covers the complete
+# Sep 5–7 slate; a two-day window would omit the later Sunday/Monday games.
 uv run pickem poll-odds \
-  --sport cfb --season 2026 --week 1 --days 2 \
+  --sport cfb --season 2026 --week 1 --days 7 \
   --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.rehearsal.duckdb
 
 uv run pickem preflight \
@@ -78,9 +79,10 @@ uv run pickem poll-odds \
   --sport cfb --season 2026 --week 1 --days 11 \
   --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
 
-# Repeat close to the first kickoff with a short window.
+# Repeat close to the first kickoff with a window that still covers every
+# Sep 5–7 game; keep the full-week bound so later games are not left stale.
 uv run pickem poll-odds \
-  --sport cfb --season 2026 --week 1 --days 2 \
+  --sport cfb --season 2026 --week 1 --days 7 \
   --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
 ```
 
@@ -124,9 +126,10 @@ the week's notes alongside the report hash. If CBS changes or locks the sheet
 while reviewing, stop and repeat the saved-page ingest, poll, preflight, and
 single final report sequence rather than mixing artifacts from two versions.
 
-After CBS locks, capture the opponent's visible picks and tiebreak in the same
-notes. This is an external manual record and is intentionally not written to
-the pick database.
+As each individual game starts, capture every participant's visible pick and
+tiebreak incrementally in the same notes; picks become visible game by game,
+not as one batch when CBS locks. This is an external manual record and is
+intentionally not written to the pick database.
 
 ## 6. Post-week sync
 

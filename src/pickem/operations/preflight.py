@@ -54,8 +54,8 @@ def evaluate_preflight(
     This function only inspects its inputs. The CLI supplies an existing
     ``StoredDataset`` and prior-game history loaded through a read-only Store.
     """
-    if expected_games < 0:
-        raise ValueError("expected_games must be non-negative")
+    if expected_games <= 0:
+        raise ValueError("expected_games must be positive")
     if max_age_minutes < 0:
         raise ValueError("max_age_minutes must be non-negative")
     if min_books < 1:

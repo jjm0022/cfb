@@ -1,6 +1,7 @@
 import hashlib
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from typer.testing import CliRunner
 
 from pickem.cli import app
@@ -64,6 +65,19 @@ def test_a_complete_future_slate_with_fresh_live_books_is_ready():
     assert result.ready is True
     assert result.reasons == []
     assert result.games[0].ready is True
+
+
+def test_expected_games_must_be_positive_even_for_an_empty_slate():
+    empty = StoredDataset(games=[], league_lines=[], market_lines=[])
+
+    with pytest.raises(ValueError, match="expected_games must be positive"):
+        evaluate_preflight(
+            empty,
+            _history(),
+            sport=Sport.NFL,
+            now=NOW,
+            expected_games=0,
+        )
 
 
 def _history() -> list[Game]:
