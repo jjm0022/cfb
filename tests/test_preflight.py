@@ -178,6 +178,25 @@ def test_latest_snapshot_must_have_enough_distinct_books():
     assert "1 distinct books; 3 required" in result.games[0].reasons[0]
 
 
+def test_distinct_books_are_counted_only_at_the_latest_snapshot():
+    lines = _dataset().market_lines
+    dataset = _dataset().model_copy(
+        update={
+            "market_lines": [
+                lines[0].model_copy(update={"captured_at": NOW - timedelta(minutes=1)}),
+                lines[1].model_copy(update={"captured_at": NOW - timedelta(minutes=1)}),
+                lines[2].model_copy(update={"captured_at": NOW - timedelta(minutes=15)}),
+            ]
+        }
+    )
+
+    result = _evaluate(dataset, min_books=3)
+
+    assert result.ready is False
+    assert result.games[0].distinct_books == 2
+    assert any("2 distinct books; 3 required" in reason for reason in result.games[0].reasons)
+
+
 def test_kickoff_must_be_valid_and_in_the_future():
     invalid = _dataset().model_copy(
         update={"games": [_game().model_copy(update={"kickoff_utc": datetime(2026, 9, 5, 17)})]}
@@ -204,6 +223,28 @@ def test_elo_requires_prior_completed_history_for_the_same_sport():
 
     assert result.ready is False
     assert "no prior completed nfl history for Elo" in result.reasons
+
+
+def test_completed_history_must_match_the_target_sport():
+    dataset = _dataset().model_copy(
+        update={"games": [_game().model_copy(update={"sport": Sport.CFB})]}
+    )
+
+    result = evaluate_preflight(
+        dataset,
+        _history(),
+        sport=Sport.CFB,
+        now=NOW,
+        expected_games=1,
+    )
+
+    assert result.ready is False
+    assert "no prior completed cfb history for Elo" in result.reasons
+
+
+def test_evaluator_requires_the_target_sport_argument():
+    with pytest.raises(TypeError, match="missing 1 required keyword-only argument: 'sport'"):
+        evaluate_preflight(_dataset(), _history(), now=NOW, expected_games=1)
 
 
 def test_read_only_store_cannot_write(tmp_path):
@@ -249,6 +290,107 @@ def test_preflight_cli_refuses_a_missing_database(tmp_path):
     assert result.exit_code != 0
     assert "no database" in result.output.lower()
     assert not db.exists()
+
+
+def test_preflight_cli_rejects_zero_expected_games_with_typer_validation(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "preflight",
+            "--sport",
+            "nfl",
+            "--season",
+            "2026",
+            "--week",
+            "1",
+            "--expected-games",
+            "0",
+            "--db",
+            str(tmp_path / "missing.duckdb"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Invalid value" in result.output
+    assert "--expected-games" in result.output
+    assert "no database" not in result.output.lower()
+
+
+def test_preflight_cli_rejects_zero_min_books_with_typer_validation(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "preflight",
+            "--sport",
+            "nfl",
+            "--season",
+            "2026",
+            "--week",
+            "1",
+            "--expected-games",
+            "1",
+            "--min-books",
+            "0",
+            "--db",
+            str(tmp_path / "missing.duckdb"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Invalid value" in result.output
+    assert "--min-books" in result.output
+    assert "no database" not in result.output.lower()
+
+
+def test_preflight_cli_rejects_negative_max_age_with_typer_validation(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "preflight",
+            "--sport",
+            "nfl",
+            "--season",
+            "2026",
+            "--week",
+            "1",
+            "--expected-games",
+            "1",
+            "--max-age-minutes",
+            "-1",
+            "--db",
+            str(tmp_path / "missing.duckdb"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Invalid value" in result.output
+    assert "--max-age-minutes" in result.output
+    assert "no database" not in result.output.lower()
+
+
+def test_preflight_cli_reports_an_unreadable_database(tmp_path):
+    db = tmp_path / "not-a-database.duckdb"
+    db.write_bytes(b"not a duckdb database")
+
+    result = runner.invoke(
+        app,
+        [
+            "preflight",
+            "--sport",
+            "nfl",
+            "--season",
+            "2026",
+            "--week",
+            "1",
+            "--expected-games",
+            "1",
+            "--db",
+            str(db),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "could not read database" in result.output.lower()
 
 
 def test_preflight_cli_reads_without_writing_the_database(tmp_path):

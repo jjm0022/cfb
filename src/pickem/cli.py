@@ -188,9 +188,9 @@ def preflight(
     sport: Sport = typer.Option(...),
     season: int = typer.Option(...),
     week: int = typer.Option(...),
-    expected_games: int = typer.Option(..., "--expected-games"),
-    max_age_minutes: int = typer.Option(60, "--max-age-minutes"),
-    min_books: int = typer.Option(3, "--min-books"),
+    expected_games: int = typer.Option(..., "--expected-games", min=1),
+    max_age_minutes: int = typer.Option(60, "--max-age-minutes", min=0),
+    min_books: int = typer.Option(3, "--min-books", min=1),
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
     """Check that the live weekly slate is ready for one final report."""

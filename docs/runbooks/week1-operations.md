@@ -10,17 +10,35 @@ slate.
 ## 1. Back up and hash the live database
 
 Do this before any ingest or polling command. Never use the live database as a
-rehearsal target.
+rehearsal target. Keep this shell open so the unique paths are reused below;
+rerunning with an existing `RUN_ID` is a stop condition, not permission to
+overwrite the recovery point.
 
 ```bash
-cp /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb \
-  /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.backup.duckdb
-shasum -a 256 /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb \
-  | tee /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.sha256
+set -eu
+ROOT=/Users/jmiller/Dropbox/Personal/Betting/cfb
+LIVE_DB="$ROOT/data/pickem.duckdb"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP_DB="$ROOT/data/pickem.week1.backup.${RUN_ID}.duckdb"
+HASH_FILE="$ROOT/data/pickem.week1.${RUN_ID}.sha256"
+REHEARSAL_DB="$ROOT/data/pickem.week1.rehearsal.${RUN_ID}.duckdb"
+export ROOT LIVE_DB RUN_ID BACKUP_DB HASH_FILE REHEARSAL_DB
+
+if [ -e "$BACKUP_DB" ] || [ -e "$HASH_FILE" ] || [ -e "$REHEARSAL_DB" ]; then
+  echo "refusing to overwrite an existing Week 1 artifact" >&2
+  exit 1
+fi
+cp -n "$LIVE_DB" "$BACKUP_DB"
+set -C
+shasum -a 256 "$LIVE_DB" > "$HASH_FILE"
+set +C
 ```
 
-Stop if the source database does not exist, the copy fails, or the checksum
-cannot be recorded. Keep the backup and checksum until the week is graded.
+The timestamped backup, hash, and rehearsal paths are unique recovery points;
+`cp -n` and shell `noclobber` make a rerun fail closed rather than destroy an
+earlier artifact. Stop if the source database does not exist, the copy fails,
+or the checksum cannot be recorded. Keep the backup and checksum until the
+week is graded.
 
 ## 2. Rehearse against a database copy
 
@@ -29,30 +47,29 @@ sequence there first. This checks the saved CBS page, aliases, game count, and
 market join without changing live history.
 
 ```bash
-cp /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb \
-  /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.rehearsal.duckdb
+cp -n "$LIVE_DB" "$REHEARSAL_DB"
 
 uv run pickem ingest-cbs \
   --html \
-  --file /Users/jmiller/Dropbox/Personal/Betting/cfb/data/cbs/week1.html \
+  --file "$ROOT/data/cbs/week1.html" \
   --sport cfb --season 2026 --week 1 \
-  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.rehearsal.duckdb
+  --db "$REHEARSAL_DB"
 
 # Wide first poll: cover games that are still up to 11 days from kickoff.
 uv run pickem poll-odds \
   --sport cfb --season 2026 --week 1 --days 11 \
-  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.rehearsal.duckdb
+  --db "$REHEARSAL_DB"
 
 # Near kickoff, poll again with a shorter window that still covers the complete
 # Sep 5–7 slate; a two-day window would omit the later Sunday/Monday games.
 uv run pickem poll-odds \
   --sport cfb --season 2026 --week 1 --days 7 \
-  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.rehearsal.duckdb
+  --db "$REHEARSAL_DB"
 
 uv run pickem preflight \
   --sport cfb --season 2026 --week 1 --expected-games 15 \
   --max-age-minutes 60 --min-books 3 \
-  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.week1.rehearsal.duckdb
+  --db "$REHEARSAL_DB"
 ```
 
 The rehearsal preflight must print `Overall: READY` and one ready row for each
@@ -103,19 +120,26 @@ Elo tiebreak.
 uv run pickem preflight \
   --sport cfb --season 2026 --week 1 --expected-games 15 \
   --max-age-minutes 60 --min-books 3 \
-  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
-
-uv run pickem report \
+  --db "$LIVE_DB" \
+&& uv run pickem report \
   --sport cfb --season 2026 --week 1 \
-  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb \
-  --out /Users/jmiller/Dropbox/Personal/Betting/cfb/data/cbs/week1-picks.md
+  --db "$LIVE_DB" \
+  --out "$ROOT/data/cbs/week1-v1-picks.md"
 ```
 
-Only run `report` after `Overall: READY`. Run it once for the final sheet and
-retain the markdown artifact. Every `report` invocation writes a pick batch to
-the `picks` table, including a rerun, so a second report is a second recorded
+The shell `&&` is deliberate: a nonzero preflight exits before `report` can
+run. Run one report for each confirmed slate version and retain the versioned
+markdown artifact. Every `report` invocation writes a pick batch to the
+`picks` table, including a rerun, so a second report is a second recorded
 decision rather than a harmless preview. `preflight` is the preview/readiness
 probe when no write is wanted.
+
+If CBS changes the slate or line before submission, do not overwrite version 1.
+Ingest the new saved page, poll, and preflight again; after it is READY, write a
+new artifact such as `week1-v2-picks.md` and mark version 1 **superseded** in
+the notes. Preserve both markdown artifacts and both recorded pick batches for
+audit history. If CBS changes after submission, record the change and the
+supersession without deleting the original batch.
 
 ## 5. Submit manually and record the tiebreak
 
@@ -139,13 +163,43 @@ week's Elo history is trained and the completed week can be audited.
 ```bash
 uv run pickem sync-results \
   --sport cfb --season 2026 --week 1 \
-  --db /Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb
+  --db "$LIVE_DB"
 ```
 
-Stop and investigate if sync reports unresolved teams, zero final scores, or a
-game count that does not match the submitted slate. Keep the original backup,
-checksum, saved CBS HTML, final report, submission notes, and post-week sync
-output together.
+`sync-results` fetches the complete CFBD week, which can contain more games
+than the 15-game CBS slate. Do not compare its fetch total with 15. Instead,
+run this exact read-only audit against the 15 league-line IDs and verify every
+one has both final scores:
+
+```bash
+uv run python - <<'PY'
+import duckdb
+
+db = "/Users/jmiller/Dropbox/Personal/Betting/cfb/data/pickem.duckdb"
+con = duckdb.connect(db, read_only=True)
+rows = con.execute(
+    """
+    SELECT l.game_id, g.home_score, g.away_score
+    FROM league_lines AS l
+    JOIN games AS g USING (game_id)
+    WHERE g.sport = 'cfb' AND g.season = 2026 AND g.week = 1
+    ORDER BY l.game_id
+    """
+).fetchall()
+con.close()
+if len(rows) != 15:
+    raise SystemExit(f"expected 15 league-line IDs, found {len(rows)}")
+missing = [game_id for game_id, home, away in rows if home is None or away is None]
+if missing:
+    raise SystemExit(f"missing final scores for: {', '.join(missing)}")
+print(f"audited {len(rows)} CBS league-line IDs; all have final scores")
+PY
+```
+
+Stop and investigate if sync reports unresolved teams, or if this audit finds
+fewer/more than 15 league-line IDs or any missing final score. Keep the
+original unique backup, checksum, saved CBS HTML, versioned final report(s),
+submission notes, and post-week sync/audit output together.
 
 ## Stop and fallback gates
 

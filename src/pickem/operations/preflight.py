@@ -43,7 +43,7 @@ def evaluate_preflight(
     dataset: StoredDataset,
     history: Sequence[Game],
     *,
-    sport: Sport | None = None,
+    sport: Sport,
     now: datetime,
     expected_games: int,
     max_age_minutes: int = 60,
@@ -64,9 +64,7 @@ def evaluate_preflight(
     if checked_now is None:
         raise ValueError("now must be timezone-aware")
 
-    target_sport = (
-        Sport(sport) if sport is not None else (dataset.games[0].sport if dataset.games else None)
-    )
+    target_sport = Sport(sport)
     reasons: list[str] = []
     if len(dataset.games) != expected_games:
         reasons.append(f"expected {expected_games} games, found {len(dataset.games)}")
@@ -77,9 +75,8 @@ def evaluate_preflight(
         game.sport == target_sport and game.home_score is not None and game.away_score is not None
         for game in history
     )
-    sport_label = target_sport.value if target_sport is not None else "target sport"
     if not completed_history:
-        reasons.append(f"no prior completed {sport_label} history for Elo")
+        reasons.append(f"no prior completed {target_sport.value} history for Elo")
 
     league_game_ids = {line.game_id for line in dataset.league_lines}
     live_by_game: dict[str, list[MarketLine]] = {}
