@@ -1,7 +1,7 @@
 # Handoff — CFB/NFL Pick'em Edge Engine
 
 **Written:** 2026-08-11
-**Last updated:** 2026-08-27, after the corrected Candidate 2 residual result freeze
+**Last updated:** 2026-08-28, after Week 1 preflight integration
 **Purpose:** resume work after a context reset. Read this first, then the ledger.
 
 ## What we're building
@@ -15,21 +15,29 @@ number and the live market line at submission time — not a homebrew prediction
 model. Line movement is a stronger ATS signal than anything we could forecast
 ourselves.
 
-Scoring is flat (1 point per correct pick) with a tiebreaker, so the goal is
-simply to maximize expected correct picks. There is no confidence-point
-allocation problem.
+Scoring is flat (1 point per correct pick) with a tiebreaker, so the incumbent
+decision rule maximizes expected correct picks and has no confidence-point
+allocation problem. The 2026-08-28 strategy research additionally considers
+the user's stated objective—winning at least one weekly pool—where opponent
+duplication and prize share matter.
 
 ## Start here
 
-You have a working system with a real result. Nothing is half-finished; the
-work is on `feature/cfb-coinflip-model` pending its integration. Orient
-yourself in about two minutes:
+You have a working system with a real result. The completed CFB COINFLIP and
+Week 1 preflight work is integrated in `master` at `6ed6ed7`. Orient yourself
+in about two minutes:
 
 ```bash
-uv run pytest -q                              # expect 313 passed
+uv run pytest -q                              # verify current integrated suite
 uv run pickem backtest --from 2020 --to 2025  # expect the result below
-uv run pickem --help                          # the whole surface, 10 commands
+uv run pickem --help                          # the whole surface, 11 commands
 ```
+
+The authoritative checkout is `master` at `6ed6ed7`. The Week 1 readiness
+implementation is integrated there by fast-forward from
+`feature/week1-preflight`; it adds the `preflight` command and its tests, so
+the help surface has 11 commands. Review and verify the integrated change
+before live execution.
 
 Then read "The phase-exit result" at the bottom of this file — it is the
 finding everything else now serves — and "Remaining work" for what to do next.
@@ -52,6 +60,13 @@ wrong and are recorded there with their reasons.
    thresholds are staying at 2.0/1.0, and why `strong` is not a tuning knob
 6. **Ledger:** `.superpowers/sdd/2026-08-11-pickem-edge-engine/progress.md` —
    Phase A only. Trust it and `git log` over memory.
+7. **Weekly-win research:**
+   `docs/research/2026-08-28-weekly-win-coinflip-strategy.md` — the no-cost
+   opponent-aware experiment, paid-data ranking, and purchase break-even gate.
+8. **Week 1 operations runbook:**
+   `docs/runbooks/week1-operations.md` — backup, rehearsal, preflight-gated
+   report generation, manual submission, incremental observation, and results
+   auditing.
 
 ## Current state
 
@@ -82,6 +97,50 @@ are `9ea82a2157c15b284c505613ec3ec3f0be9884fea17b17a5f296b66556ede29b` and
 `de65aa2be13bcf92d152f0881e0da0d81df2bc5e1bbf9b9583b2de65adc401fb`.
 
 Candidate 2 is NULL. Elo remains the CFB COINFLIP decider. No Candidate 2 model artifact exists. The team-residual family is closed; Tasks 7–9 were not started.
+
+### Weekly-win strategy research (2026-08-28)
+
+The Heavy research deployment reframed the improvement target as winning at
+least one weekly pool, not merely improving independent ATS accuracy. It
+recommends a no-cost, COINFLIP-only, opponent-aware prospective paper test:
+retain the incumbent beside a candidate that combines timestamp-safe market
+cover estimates with expected opponent duplication, using Action Network `% of
+bets` only as an explicitly imperfect public proxy and locked CBS picks when
+available. No live routing changed and no 2026 outcomes were fit.
+
+Do not purchase data yet. If the paper test supports a paid experiment, the
+best candidate is retaining book-level Odds API price/juice, update time, and
+book identity at the existing submission snapshots. The pool currently has 51
+entrants with at least a few more expected, approximately $200 weekly prizes,
+and the full 18-week NFL regular season starts next week and ends when the
+playoffs begin. Its tiebreak is the Monday Night Football total. The research
+report contains the predeclared gate and break-even formulas; final entrant
+count, exact payout/tie rules, and scoring details are still required before
+estimating whether one weekly win can repay a subscription. Opponent picks
+unlock only when each particular game starts, so they are useful for later-week
+calibration but unavailable for same-week adaptation.
+
+### Week 1 operational readiness (completed 2026-08-28)
+
+The Heavy deployment `week1_preflight_20260828` implemented the operational
+guard and was integrated into `master` at `6ed6ed7` by fast-forward from
+`feature/week1-preflight`. It adds a read-only `preflight` command, a
+read-only DuckDB Store connection, pure readiness evaluation, dedicated tests,
+and the operator runbook `docs/runbooks/week1-operations.md`. No live database
+state, market poll, result sync, model routing, or pick decision changed.
+
+Before a final report, `preflight` requires an explicit sport and expected
+slate size; exact game and league-line counts; future kickoffs; per-game live
+Odds API coverage; fresh latest snapshots; minimum distinct-book depth at each
+latest snapshot; and completed same-sport history for the Elo tiebreak. It
+prints a per-game table and returns nonzero on a failed hard gate. `report`
+remains the only command that records a pick batch.
+
+Next, review the integrated implementation and run its preflight tests and the
+full suite. Then rehearse `ingest-cbs`, `poll-odds`, `preflight`, `report`, and
+post-game `sync-results` against an isolated database copy. Keep opponent picks
+out of same-week decisions and keep tiebreak capture requirements explicit
+before any live mutation.
 
 The corrected fixed 2022–2025 walk-forward replay produced 1,577 paired
 predictions and 1,549 decided outcomes (28 pushes), with zero 2026 rows.
@@ -191,12 +250,14 @@ synced or graded. Task 12 is terminal: Candidate 1 remains NULL, Elo remains
 live, no model artifact exists, and Candidate 2 remains blocked on new design
 approval.
 
-- **Branch:** the CFB COINFLIP work is on `feature/cfb-coinflip-model`, pending
-  integration. There is no remote configured, so `git log` is the only history
-  and nothing is pushed anywhere.
-- **Tests:** 313 passing, `uv run pytest -q`. The suite is fully offline — HTTP
-  is injected via `httpx.MockTransport` and loaders are injected. Keep it that
-  way; no test may touch the network.
+- **Branch:** the CFB COINFLIP work is integrated in `master` at `1620de3` by
+  fast-forward from `feature/cfb-coinflip-model`. There is no remote configured,
+  so `git log` is the only history and nothing is pushed anywhere.
+- **Tests:** the last recorded full-suite run before the Week 1 changes was
+  346 passing, `uv run pytest -q`. Run the current integrated suite before live
+  execution. The suite is fully offline — HTTP is injected via
+  `httpx.MockTransport` and loaders are injected. Keep it that way; no test may
+  touch the network.
 - **Lint:** `uv run ruff check src tests` and `uv run ruff format --check src tests`
   are both clean repo-wide.
 - **Phase A is code-complete** (tasks 1-15, amendments 9a/12a/13a/14a, a final
@@ -621,7 +682,13 @@ permanently into the append-only `lines` table while the real week reported
 Task 12 is complete, and the Candidate 2 team-residual family is closed. Do not
 retune Candidate 1, refit on 2026, alter thresholds, or treat either frozen
 result as permission for a feature search. The CFB 2021–2025 archive is
-complete, so there is no CFB historical backfill remaining to buy.
+complete. The Week 1 operational-readiness deployment
+`week1_preflight_20260828` is complete and integrated at `master` commit
+`6ed6ed7`. The next work is the no-cost, COINFLIP-only,
+opponent-aware paper experiment described in
+`docs/research/2026-08-28-weekly-win-coinflip-strategy.md`; do not buy a new
+backfill until its predeclared gate and pool-specific break-even calculation
+support the spend.
 
 Season timing, for context: the CFB season opens in late August 2026 and NFL
 week 1 is early September 2026. In-season polling is cheap (1 credit per call),
