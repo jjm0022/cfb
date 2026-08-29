@@ -57,11 +57,14 @@ class FakeMonitor:
 class FakeFollowup:
     def __init__(self, events: list[str]):
         self.events = events
-        self.messages: list[tuple[str, bool]] = []
+        self.messages: list[tuple[str | None, bool]] = []
+        self.embeds: list[object] = []
 
-    async def send(self, message: str, ephemeral: bool = False):
+    async def send(self, message: str | None = None, ephemeral: bool = False, *, embed=None):
         self.events.append("followup")
         self.messages.append((message, ephemeral))
+        if embed is not None:
+            self.embeds.append(embed)
 
 
 class FakeResponse:
@@ -212,23 +215,67 @@ async def test_refresh_rejects_non_owner_before_refreshing(settings):
 
 
 @pytest.mark.asyncio
-async def test_refresh_reports_unchanged_changed_and_failure(settings):
-    for result, expected in (
-        (RefreshResult(changed=False), "Recommendations unchanged."),
-        (RefreshResult(changed=True), "Recommendations changed."),
-        (RefreshResult(changed=False, error=RuntimeError("quota exhausted")), "Refresh failed"),
-    ):
-        events: list[str] = []
-        monitor = FakeMonitor(result, events)
-        bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
-        interaction = FakeInteraction(user_id=settings.owner_id, events=events)
+async def test_refresh_lists_updated_picks_in_changed_embed(settings):
+    snapshot = RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 8, 29, 14, tzinfo=UTC),
+        edges=(
+            Edge(
+                game_id="game-a",
+                side=Side.AWAY,
+                delta=3.0,
+                tier=Tier.LEAN,
+                league_spread=-3.0,
+                market_spread=-6.0,
+                rationale="test",
+            ),
+        ),
+    )
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    bot = PickemBot(
+        settings,
+        FakeMonitor(RefreshResult(changed=True, snapshot=snapshot)),
+        scheduler=FakeScheduler(),
+    )
 
-        await bot.refresh(interaction)
+    await bot.refresh(interaction)
 
-        assert expected in interaction.followup.messages[0][0]
-        assert interaction.followup.messages[0][1] is False
-        assert monitor.calls == 1
-        assert events == ["defer", "monitor", "followup"]
+    assert interaction.followup.messages == [(None, False)]
+    embed = interaction.followup.embeds[0]
+    assert embed.title == "🏈 Recommendations Updated"
+    assert embed.description == "**NFL • 2026 — Week 1**"
+    assert embed.fields[0].name == "Current Recommended Picks"
+    assert embed.fields[0].value == "• `game-a` — **away**"
+
+
+@pytest.mark.asyncio
+async def test_refresh_shows_unchanged_embed(settings):
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+
+    await bot.refresh(interaction)
+
+    assert interaction.followup.messages == [(None, False)]
+    assert interaction.followup.embeds[0].title == "✅ Recommendations Unchanged"
+
+
+@pytest.mark.asyncio
+async def test_refresh_shows_failure_embed(settings):
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    bot = PickemBot(
+        settings,
+        FakeMonitor(RefreshResult(changed=False, error=RuntimeError("quota exhausted"))),
+        scheduler=FakeScheduler(),
+    )
+
+    await bot.refresh(interaction)
+
+    assert interaction.followup.messages == [(None, False)]
+    embed = interaction.followup.embeds[0]
+    assert embed.title == "⚠️ Refresh Failed"
+    assert "quota exhausted" in embed.description
 
 
 @pytest.mark.asyncio
@@ -242,7 +289,8 @@ async def test_refresh_defers_before_monitor_and_uses_followup(settings):
 
     assert events == ["defer", "monitor", "followup"]
     assert interaction.response.messages == []
-    assert interaction.followup.messages == [("Recommendations changed.", False)]
+    assert interaction.followup.messages == [(None, False)]
+    assert interaction.followup.embeds[0].title == "🏈 Recommendations Updated"
 
 
 @pytest.mark.asyncio

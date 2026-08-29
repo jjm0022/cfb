@@ -210,6 +210,19 @@ def _next_scheduled_event(scheduler: Any) -> str:
     return f"{getattr(job, 'id', 'scheduled job')} at {_format_timestamp(job.next_run_time)}"
 
 
+def _scope_description(settings: DiscordSettings) -> str:
+    return f"**{settings.sport.value.upper()} • {settings.season} — Week {settings.week}**"
+
+
+def _format_recommendations(snapshot: Any | None) -> str:
+    if snapshot is None:
+        return "Updated recommendations were not returned."
+    return (
+        "\n".join(f"• `{edge.game_id}` — **{edge.side.value}**" for edge in snapshot.edges)
+        or "No recommendations stored yet."
+    )
+
+
 def _format_status(
     settings: DiscordSettings,
     state: AutomationState,
@@ -217,9 +230,7 @@ def _format_status(
     market_timestamp: datetime | None,
     scheduler: Any,
 ) -> discord.Embed:
-    recommendations = "\n".join(
-        f"• `{edge.game_id}` — **{edge.side.value}**" for edge in snapshot.edges
-    ) or "No recommendations stored yet."
+    recommendations = _format_recommendations(snapshot)
     monitoring = "\n".join(
         [
             f"Last successful check: {_format_timestamp(state.checked_at)}",
@@ -227,14 +238,47 @@ def _format_status(
             f"Next scheduled event: {_next_scheduled_event(scheduler)}",
         ]
     )
+    return (
+        discord.Embed(
+            title="🏈 Pick'em Status",
+            description=_scope_description(settings),
+            color=discord.Color.blurple(),
+        )
+        .add_field(name="Recommended Picks", value=recommendations, inline=False)
+        .add_field(name="Monitoring", value=monitoring, inline=False)
+    )
+
+
+def _format_refresh_result(
+    settings: DiscordSettings,
+    result: RefreshResult | None = None,
+    error: BaseException | None = None,
+) -> discord.Embed:
+    if error is not None:
+        return discord.Embed(
+            title="⚠️ Refresh Failed",
+            description=f"{_scope_description(settings)}\n\n{error}",
+            color=discord.Color.red(),
+        )
+    if result is not None and result.error is not None:
+        return _format_refresh_result(settings, error=result.error)
+    if result is not None and result.changed:
+        return discord.Embed(
+            title="🏈 Recommendations Updated",
+            description=_scope_description(settings),
+            color=discord.Color.green(),
+        ).add_field(
+            name="Current Recommended Picks",
+            value=_format_recommendations(result.snapshot),
+            inline=False,
+        )
     return discord.Embed(
-        title="🏈 Pick'em Status",
+        title="✅ Recommendations Unchanged",
         description=(
-            f"**{settings.sport.value.upper()} • {settings.season} — Week {settings.week}**"
+            f"{_scope_description(settings)}\n\nThe latest odds refresh completed with no "
+            "recommendation changes."
         ),
         color=discord.Color.blurple(),
-    ).add_field(name="Recommended Picks", value=recommendations, inline=False).add_field(
-        name="Monitoring", value=monitoring, inline=False
     )
 
 
@@ -259,19 +303,23 @@ class PickemBot(commands.Bot):
         self._load_state = lambda scope: _load_state(settings, scope)
         self._save_state = lambda scope, state: _save_state(settings, scope, state)
         self._send_owner_dm = lambda message: send_dm(self, settings, message)
-        self.monitor = monitor if monitor is not None else RecommendationMonitor(
-            refresh_week=lambda scope: asyncio.to_thread(
-                refresh_recommendations,
-                settings.db,
-                scope.sport,
-                scope.season,
-                scope.week,
-                datetime.now(UTC),
-            ),
-            load_state=self._load_state,
-            save_state=self._save_state,
-            notify=self._send_owner_dm,
-            scope=self.scope,
+        self.monitor = (
+            monitor
+            if monitor is not None
+            else RecommendationMonitor(
+                refresh_week=lambda scope: asyncio.to_thread(
+                    refresh_recommendations,
+                    settings.db,
+                    scope.sport,
+                    scope.season,
+                    scope.week,
+                    datetime.now(UTC),
+                ),
+                load_state=self._load_state,
+                save_state=self._save_state,
+                notify=self._send_owner_dm,
+                scope=self.scope,
+            )
         )
         command_context = app_commands.AppCommandContext(
             guild=False, dm_channel=True, private_channel=False
@@ -335,9 +383,7 @@ class PickemBot(commands.Bot):
                 datetime.now(UTC),
             )
             market_timestamp = _latest_market_timestamp(self.settings, self.scope)
-            embed = _format_status(
-                self.settings, state, snapshot, market_timestamp, self.scheduler
-            )
+            embed = _format_status(self.settings, state, snapshot, market_timestamp, self.scheduler)
         except Exception as error:
             await interaction.response.send_message(f"Status unavailable: {error}")
             return
@@ -351,15 +397,10 @@ class PickemBot(commands.Bot):
         try:
             result: RefreshResult = await self.monitor.refresh()
         except Exception as error:
-            message = f"Refresh failed: {error}"
+            embed = _format_refresh_result(self.settings, error=error)
         else:
-            if result.error is not None:
-                message = f"Refresh failed: {result.error}"
-            elif result.changed:
-                message = "Recommendations changed."
-            else:
-                message = "Recommendations unchanged."
-        await interaction.followup.send(message)
+            embed = _format_refresh_result(self.settings, result=result)
+        await interaction.followup.send(embed=embed)
 
 
 def create_bot(
