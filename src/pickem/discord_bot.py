@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ from pickem.store.db import AutomationState, Store
 EASTERN = ZoneInfo("America/New_York")
 REMINDER_MESSAGE = "Reminder: submit this week's picks."
 PRIVATE_MESSAGE = "This bot is private."
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,15 @@ async def _invoke(callback: Callable[..., Any], *args: Any) -> Any:
     return result
 
 
+def _scheduled_error_message(settings: DiscordSettings, error: BaseException) -> str:
+    """Format a refresh failure without exposing environment configuration."""
+    detail = str(error)
+    for value in (settings.token, str(settings.owner_id), str(settings.db)):
+        if value:
+            detail = detail.replace(value, "[redacted]")
+    return f"{type(error).__name__}: {detail}"
+
+
 def build_schedule(
     settings: DiscordSettings,
     monitor: RecommendationMonitor,
@@ -75,7 +86,12 @@ def build_schedule(
         await _invoke(send_dm, REMINDER_MESSAGE)
 
     async def refresh_job() -> None:
-        await _invoke(monitor.refresh)
+        result = await _invoke(monitor.refresh)
+        if isinstance(result, RefreshResult) and result.error is not None:
+            logger.error(
+                "scheduled recommendation refresh failed: %s",
+                _scheduled_error_message(settings, result.error),
+            )
 
     scheduler.add_job(
         reminder_job,
@@ -275,6 +291,7 @@ class PickemBot(commands.Bot):
         """Run one serialized recommendation refresh and report its outcome."""
         if await self._reject_private(interaction):
             return
+        await interaction.response.defer()
         try:
             result: RefreshResult = await self.monitor.refresh()
         except Exception as error:
@@ -286,7 +303,7 @@ class PickemBot(commands.Bot):
                 message = "Recommendations changed."
             else:
                 message = "Recommendations unchanged."
-        await interaction.response.send_message(message)
+        await interaction.followup.send(message)
 
 
 def create_bot(

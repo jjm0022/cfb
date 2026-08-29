@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,27 +40,47 @@ class FakeScheduler:
 
 
 class FakeMonitor:
-    def __init__(self, result: RefreshResult | None = None):
+    def __init__(self, result: RefreshResult | None = None, events: list[str] | None = None):
         self.result = result or RefreshResult(changed=False)
         self.calls = 0
+        self.events = events
 
     async def refresh(self):
+        if self.events is not None:
+            self.events.append("monitor")
         self.calls += 1
         return self.result
 
 
-class FakeResponse:
-    def __init__(self):
+class FakeFollowup:
+    def __init__(self, events: list[str]):
+        self.events = events
         self.messages: list[tuple[str, bool]] = []
 
+    async def send(self, message: str, ephemeral: bool = False):
+        self.events.append("followup")
+        self.messages.append((message, ephemeral))
+
+
+class FakeResponse:
+    def __init__(self, events: list[str] | None = None):
+        self.events = events if events is not None else []
+        self.messages: list[tuple[str, bool]] = []
+
+    async def defer(self):
+        self.events.append("defer")
+
     async def send_message(self, message: str, ephemeral: bool = False):
+        self.events.append("initial")
         self.messages.append((message, ephemeral))
 
 
 class FakeInteraction:
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int, events: list[str] | None = None):
         self.user = SimpleNamespace(id=user_id)
-        self.response = FakeResponse()
+        self.events = events if events is not None else []
+        self.response = FakeResponse(self.events)
+        self.followup = FakeFollowup(self.events)
         self.guild = None
 
 
@@ -85,6 +106,13 @@ def test_settings_use_required_environment_values(settings):
     assert settings.week == 1
 
 
+def test_project_packages_discord_console_entry_point():
+    with (Path(__file__).parents[1] / "pyproject.toml").open("rb") as project_file:
+        project = tomllib.load(project_file)
+
+    assert project["project"]["scripts"]["pickem-discord-bot"] == "pickem.discord_bot:main"
+
+
 def test_settings_missing_secret_uses_config_required_policy(monkeypatch):
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     with pytest.raises(RuntimeError, match="DISCORD_BOT_TOKEN"):
@@ -106,6 +134,17 @@ def test_build_schedule_adds_tuesday_reminder_and_weekday_refreshes(settings):
         "minute": "0",
     }
     assert scheduler.jobs[0].timezone.key == "America/New_York"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_logs_a_result_error(settings, caplog):
+    monitor = FakeMonitor(RefreshResult(changed=False, error=RuntimeError("quota exhausted")))
+    scheduler = FakeScheduler()
+    build_schedule(settings, monitor, lambda _message: None, scheduler)
+
+    await scheduler.jobs[1].func()
+
+    assert "quota exhausted" in caplog.text
 
 
 def test_bot_uses_no_privileged_intents_and_registers_dm_commands(settings):
@@ -146,15 +185,31 @@ async def test_refresh_reports_unchanged_changed_and_failure(settings):
         (RefreshResult(changed=True), "Recommendations changed."),
         (RefreshResult(changed=False, error=RuntimeError("quota exhausted")), "Refresh failed"),
     ):
-        monitor = FakeMonitor(result)
+        events: list[str] = []
+        monitor = FakeMonitor(result, events)
         bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
-        interaction = FakeInteraction(user_id=settings.owner_id)
+        interaction = FakeInteraction(user_id=settings.owner_id, events=events)
 
         await bot.refresh(interaction)
 
-        assert expected in interaction.response.messages[0][0]
-        assert interaction.response.messages[0][1] is False
+        assert expected in interaction.followup.messages[0][0]
+        assert interaction.followup.messages[0][1] is False
         assert monitor.calls == 1
+        assert events == ["defer", "monitor", "followup"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_defers_before_monitor_and_uses_followup(settings):
+    events: list[str] = []
+    monitor = FakeMonitor(RefreshResult(changed=True), events)
+    bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id, events=events)
+
+    await bot.refresh(interaction)
+
+    assert events == ["defer", "monitor", "followup"]
+    assert interaction.response.messages == []
+    assert interaction.followup.messages == [("Recommendations changed.", False)]
 
 
 @pytest.mark.asyncio

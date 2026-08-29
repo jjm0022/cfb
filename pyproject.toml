@@ -28,6 +28,7 @@ build-backend = "uv_build"
 
 [project.scripts]
 pickem = "pickem.cli:app"
+pickem-discord-bot = "pickem.discord_bot:main"
 
 [dependency-groups]
 dev = [
