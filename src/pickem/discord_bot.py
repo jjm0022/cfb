@@ -13,6 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import discord
+import yaml
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from discord import app_commands
@@ -25,6 +26,7 @@ from pickem.operations.recommendations import generate_recommendations, refresh_
 from pickem.store.db import AutomationState, Store
 
 EASTERN = ZoneInfo("America/New_York")
+DEFAULT_CONFIG_PATH = Path("config/discord-bot.yaml")
 REMINDER_MESSAGE = "Reminder: submit this week's picks."
 PRIVATE_MESSAGE = "This bot is private."
 logger = logging.getLogger(__name__)
@@ -40,22 +42,57 @@ class DiscordSettings:
     season: int
     week: int
     db: Path = config.DEFAULT_DB
+    timezone: ZoneInfo = EASTERN
+    reminder_day: str = "tue"
+    reminder_hour: int = 10
+    reminder_minute: int = 0
+    refresh_days: str = "wed-sun,mon"
+    refresh_hour: int = 10
+    refresh_minute: int = 0
 
     @classmethod
-    def from_env(cls, *, db: Path | None = None) -> DiscordSettings:
-        """Read required values without ever printing a secret."""
+    def from_env(
+        cls, *, config_path: Path = DEFAULT_CONFIG_PATH, db: Path | None = None
+    ) -> DiscordSettings:
+        """Read secrets from the environment and operational values from YAML."""
+        try:
+            raw = yaml.safe_load(config_path.read_text())
+            active_week = raw["active_week"]
+            schedule = raw["schedule"]
+            reminder_hour, reminder_minute = _parse_time(schedule["reminder"]["time"])
+            refresh_hour, refresh_minute = _parse_time(schedule["refresh"]["time"])
+            refresh_days = ",".join(schedule["refresh"]["days"])
+            timezone = ZoneInfo(raw["timezone"])
+        except (KeyError, TypeError, ValueError, OSError, yaml.YAMLError) as error:
+            raise RuntimeError(
+                f"invalid Discord bot configuration at {config_path}: {error}"
+            ) from error
         return cls(
             token=config.discord_bot_token(),
             owner_id=config.discord_owner_id(),
-            sport=Sport(config._required("PICKEM_SPORT")),
-            season=int(config._required("PICKEM_SEASON")),
-            week=int(config._required("PICKEM_WEEK")),
-            db=Path(db) if db is not None else config.DEFAULT_DB,
+            sport=Sport(active_week["sport"]),
+            season=int(active_week["season"]),
+            week=int(active_week["week"]),
+            db=Path(db) if db is not None else Path(raw["database"]),
+            timezone=timezone,
+            reminder_day=schedule["reminder"]["day"],
+            reminder_hour=reminder_hour,
+            reminder_minute=reminder_minute,
+            refresh_days=refresh_days,
+            refresh_hour=refresh_hour,
+            refresh_minute=refresh_minute,
         )
 
     @property
     def scope(self) -> MonitorScope:
         return MonitorScope(self.sport, self.season, self.week)
+
+
+def _parse_time(value: str) -> tuple[int, int]:
+    hour, minute = (int(part) for part in value.split(":", maxsplit=1))
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError(f"invalid time {value!r}")
+    return hour, minute
 
 
 async def _invoke(callback: Callable[..., Any], *args: Any) -> Any:
@@ -95,15 +132,23 @@ def build_schedule(
 
     scheduler.add_job(
         reminder_job,
-        CronTrigger(day_of_week="tue", hour=10, minute=0, timezone=EASTERN),
+        CronTrigger(
+            day_of_week=settings.reminder_day,
+            hour=settings.reminder_hour,
+            minute=settings.reminder_minute,
+            timezone=settings.timezone,
+        ),
         id="pick-reminder",
         replace_existing=True,
     )
     scheduler.add_job(
         refresh_job,
-        # APScheduler does not allow a wrapping weekday range (``wed-mon``).
-        # Two expressions represent the same Wednesday-through-Monday set.
-        CronTrigger(day_of_week="wed-sun,mon", hour=10, minute=0, timezone=EASTERN),
+        CronTrigger(
+            day_of_week=settings.refresh_days,
+            hour=settings.refresh_hour,
+            minute=settings.refresh_minute,
+            timezone=settings.timezone,
+        ),
         id="recommendation-refresh",
         replace_existing=True,
     )
@@ -199,7 +244,9 @@ class PickemBot(commands.Bot):
             intents=discord.Intents.none(),
         )
         self.settings = settings
-        self.scheduler = scheduler if scheduler is not None else AsyncIOScheduler(timezone=EASTERN)
+        self.scheduler = (
+            scheduler if scheduler is not None else AsyncIOScheduler(timezone=settings.timezone)
+        )
         self.scope = settings.scope
         self._load_state = lambda scope: _load_state(settings, scope)
         self._save_state = lambda scope, state: _save_state(settings, scope, state)

@@ -41,15 +41,12 @@ User ID**. The ID is a numeric value and is not the bot token.
 ## 2. Create the environment file
 
 Create `/home/jmiller/cfb/.env` on the host where the service will run. Do not
-commit it or paste its contents into a ticket or log. The bot token, owner ID,
-and active-week values are required:
+commit it or paste its contents into a ticket or log. Only credentials are
+required:
 
 ```dotenv
 DISCORD_BOT_TOKEN=paste-the-token-here
 DISCORD_OWNER_ID=123456789012345678
-PICKEM_SPORT=nfl
-PICKEM_SEASON=2026
-PICKEM_WEEK=1
 ```
 
 The bot's refresh path needs the existing Odds API credential. Add it if it is
@@ -62,12 +59,15 @@ ODDS_API_KEY=paste-the-odds-api-key-here
 The CFBD credential is used by separate CFBD ingest/result commands, not by
 this long-running Discord refresh process, so it is not a service requirement.
 
-Use the actual sport, season, and week to monitor. Keep the file readable only
-by the account running the user service:
+Keep the file readable only by the account running the user service:
 
 ```bash
 chmod 600 /home/jmiller/cfb/.env
 ```
+
+Set the active sport, season, week, database path, timezone, and schedules in
+the tracked `/home/jmiller/cfb/config/discord-bot.yaml`. Update and commit the
+`active_week` values for each new week, then restart the service.
 
 The database defaults to `data/pickem.duckdb` under the project directory.
 Run the normal data-ingest and preflight workflow before asking the bot to

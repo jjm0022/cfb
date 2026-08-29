@@ -89,16 +89,29 @@ def settings(monkeypatch, tmp_path: Path):
     values = {
         "DISCORD_BOT_TOKEN": "test-token",
         "DISCORD_OWNER_ID": "123",
-        "PICKEM_SPORT": "nfl",
-        "PICKEM_SEASON": "2026",
-        "PICKEM_WEEK": "1",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
-    return DiscordSettings.from_env(db=tmp_path / "pickem.duckdb")
+    config_path = tmp_path / "discord-bot.yaml"
+    config_path.write_text(
+        "active_week:\n"
+        "  sport: nfl\n"
+        "  season: 2026\n"
+        "  week: 1\n"
+        "database: pickem.duckdb\n"
+        "timezone: America/New_York\n"
+        "schedule:\n"
+        "  reminder:\n"
+        "    day: tue\n"
+        "    time: '10:00'\n"
+        "  refresh:\n"
+        "    days: [wed, thu, fri, sat, sun, mon]\n"
+        "    time: '10:00'\n"
+    )
+    return DiscordSettings.from_env(config_path=config_path, db=tmp_path / "pickem.duckdb")
 
 
-def test_settings_use_required_environment_values(settings):
+def test_settings_use_secrets_from_environment_and_active_scope_from_yaml(settings):
     assert settings.token == "test-token"
     assert settings.owner_id == 123
     assert settings.sport is Sport.NFL
@@ -142,7 +155,7 @@ def test_build_schedule_adds_tuesday_reminder_and_weekday_refreshes(settings):
         "minute": "0",
     }
     assert scheduler.jobs[1].trigger_fields == {
-        "day_of_week": "wed-sun,mon",
+        "day_of_week": "wed,thu,fri,sat,sun,mon",
         "hour": "10",
         "minute": "0",
     }

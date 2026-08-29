@@ -1,0 +1,15 @@
+active_week:
+  sport: nfl
+  season: 2026
+  week: 1
+
+database: data/pickem.duckdb
+timezone: America/New_York
+
+schedule:
+  reminder:
+    day: tue
+    time: "10:00"
+  refresh:
+    days: [wed, thu, fri, sat, sun, mon]
+    time: "10:00"
