@@ -33,3 +33,13 @@ def odds_api_key() -> str:
 
 def cfbd_api_key() -> str:
     return _required("CFBD_API_KEY")
+
+
+def discord_bot_token() -> str:
+    """Return the Discord token using the shared required-value policy."""
+    return _required("DISCORD_BOT_TOKEN")
+
+
+def discord_owner_id() -> int:
+    """Return the configured Discord owner ID."""
+    return int(_required("DISCORD_OWNER_ID"))
