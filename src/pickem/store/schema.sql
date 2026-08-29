@@ -52,3 +52,13 @@ CREATE TABLE IF NOT EXISTS archive_requests (
     line_count       INTEGER NOT NULL,
     completed_at     TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS automation_state (
+    sport                    VARCHAR NOT NULL,
+    season                   INTEGER NOT NULL,
+    week                     INTEGER NOT NULL,
+    recommendation_signature VARCHAR,
+    checked_at               TIMESTAMPTZ,
+    error_fingerprint        VARCHAR,
+    PRIMARY KEY (sport, season, week)
+);

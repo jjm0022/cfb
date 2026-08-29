@@ -23,6 +23,12 @@ class StoredDataset(BaseModel):
     market_lines: list[MarketLine]
 
 
+class AutomationState(BaseModel):
+    signature: str | None = None
+    checked_at: datetime | None = None
+    error_fingerprint: str | None = None
+
+
 def _game_from_row(row: tuple) -> Game:
     return Game(
         game_id=row[0],
@@ -308,3 +314,38 @@ class Store:
             """,
             [season, week],
         ).fetchall()
+
+    def automation_state(self, sport: Sport, season: int, week: int) -> AutomationState:
+        row = self._con.execute(
+            """
+            SELECT recommendation_signature, checked_at, error_fingerprint
+            FROM automation_state
+            WHERE sport = ? AND season = ? AND week = ?
+            """,
+            [sport.value, season, week],
+        ).fetchone()
+        if row is None:
+            return AutomationState()
+        return AutomationState(signature=row[0], checked_at=row[1], error_fingerprint=row[2])
+
+    def save_automation_state(
+        self,
+        sport: Sport,
+        season: int,
+        week: int,
+        signature: str | None,
+        checked_at: datetime | None,
+        error_fingerprint: str | None,
+    ) -> None:
+        self._con.execute(
+            """
+            INSERT INTO automation_state
+                (sport, season, week, recommendation_signature, checked_at, error_fingerprint)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (sport, season, week) DO UPDATE SET
+                recommendation_signature = excluded.recommendation_signature,
+                checked_at = excluded.checked_at,
+                error_fingerprint = excluded.error_fingerprint
+            """,
+            [sport.value, season, week, signature, checked_at, error_fingerprint],
+        )

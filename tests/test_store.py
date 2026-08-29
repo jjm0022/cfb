@@ -49,6 +49,18 @@ def test_roundtrips_a_game(store):
     assert got[0].kickoff_utc.tzinfo is not None
 
 
+def test_automation_state_upsert_is_isolated_from_picks(tmp_path):
+    checked_at = datetime(2026, 9, 2, tzinfo=UTC)
+    with Store(tmp_path / "pickem.duckdb") as store:
+        store.init_schema()
+        store.save_automation_state(Sport.NFL, 2026, 1, "game-a:home", checked_at, None)
+        state = store.automation_state(Sport.NFL, 2026, 1)
+
+    assert state.signature == "game-a:home"
+    assert state.checked_at == checked_at
+    assert state.error_fingerprint is None
+
+
 def test_upserting_a_game_updates_scores_rather_than_duplicating(store):
     store.upsert_games([game()])
     store.upsert_games([game(home_score=24, away_score=17)])
