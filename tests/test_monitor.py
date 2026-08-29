@@ -242,6 +242,116 @@ def test_refresh_preserves_baseline_when_state_loading_fails():
     assert persisted["state"].signature == "game-a:away"
 
 
+def test_refresh_notifies_once_when_initial_state_save_fails():
+    fake = FakeMonitor([snapshot_with({"game-a": Side.HOME})])
+    notifications: list[str] = []
+    save_attempts = 0
+
+    def failing_save(_scope, _state):
+        nonlocal save_attempts
+        save_attempts += 1
+        raise OSError("checkpoint unavailable")
+
+    async def notify(message: str):
+        notifications.append(message)
+
+    monitor = RecommendationMonitor(
+        fake.refresh_week,
+        fake.load_state,
+        failing_save,
+        notify,
+        SCOPE,
+    )
+
+    first = asyncio.run(monitor.refresh())
+    # Reuse the same snapshot to exercise the same failed checkpoint again.
+    fake.snapshots.append(snapshot_with({"game-a": Side.HOME}))
+    second = asyncio.run(monitor.refresh())
+
+    assert first.error is not None
+    assert second.error is not None
+    assert save_attempts == 2
+    assert notifications == ["Recommendation refresh failed: checkpoint unavailable"]
+
+
+def test_refresh_notifies_once_when_unchanged_state_save_fails():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME}),
+            snapshot_with({"game-a": Side.HOME}, generated_at=GENERATED_AT.replace(minute=1)),
+            snapshot_with({"game-a": Side.HOME}, generated_at=GENERATED_AT.replace(minute=2)),
+        ]
+    )
+    notifications: list[str] = []
+    save_attempts = 0
+
+    def save_state(scope, state):
+        nonlocal save_attempts
+        save_attempts += 1
+        if save_attempts > 1:
+            raise OSError("checkpoint unavailable")
+        fake.save_state(scope, state)
+
+    async def notify(message: str):
+        notifications.append(message)
+
+    monitor = RecommendationMonitor(
+        fake.refresh_week,
+        fake.load_state,
+        save_state,
+        notify,
+        SCOPE,
+    )
+
+    first = asyncio.run(monitor.refresh())
+    second = asyncio.run(monitor.refresh())
+    third = asyncio.run(monitor.refresh())
+
+    assert first.error is None
+    assert second.error is not None
+    assert third.error is not None
+    assert notifications == ["Recommendation refresh failed: checkpoint unavailable"]
+
+
+def test_refresh_deduplicates_changed_checkpoint_failure_but_retries_change_notice():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME}),
+            snapshot_with({"game-a": Side.AWAY}),
+            snapshot_with({"game-a": Side.AWAY}),
+        ]
+    )
+    notifications: list[str] = []
+
+    def save_state(scope, state):
+        if state.signature == "game-a:away":
+            raise OSError("checkpoint unavailable")
+        fake.save_state(scope, state)
+
+    async def notify(message: str):
+        notifications.append(message)
+
+    monitor = RecommendationMonitor(
+        fake.refresh_week,
+        fake.load_state,
+        save_state,
+        notify,
+        SCOPE,
+    )
+
+    asyncio.run(monitor.refresh())
+    first_change = asyncio.run(monitor.refresh())
+    second_change = asyncio.run(monitor.refresh())
+
+    assert first_change.changed is True
+    assert second_change.changed is True
+    assert notifications == [
+        "Recommendations changed: changed: game-a home → away",
+        "Recommendation refresh failed: checkpoint unavailable",
+        "Recommendations changed: changed: game-a home → away",
+    ]
+
+
 def test_refresh_deduplicates_same_failure_until_success():
     fake = FakeMonitor([snapshot_with({"game-a": Side.HOME})])
     calls = 0

@@ -114,6 +114,7 @@ class RecommendationMonitor:
         self._scope = scope
         self._lock = asyncio.Lock()
         self._load_error_fingerprint: str | None = None
+        self._persistence_error_fingerprint: str | None = None
 
     async def refresh(self) -> RefreshResult:
         """Refresh the active week while serializing all state transitions."""
@@ -154,6 +155,12 @@ class RecommendationMonitor:
         try:
             if state.error_fingerprint != fingerprint:
                 await _invoke(self._notify, f"Recommendation refresh failed: {error}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as notification_error:
+            return RefreshResult(False, error=notification_error)
+
+        try:
             await _invoke(
                 self._save_state,
                 self._scope,
@@ -162,7 +169,20 @@ class RecommendationMonitor:
         except asyncio.CancelledError:
             raise
         except Exception as persistence_error:
-            return RefreshResult(False, error=persistence_error)
+            return await self._record_persistence_failure(persistence_error)
+        return RefreshResult(False, error=error)
+
+    async def _record_persistence_failure(self, error: Exception) -> RefreshResult:
+        """Report a checkpoint failure when it cannot be persisted itself."""
+        fingerprint = _failure_fingerprint(error)
+        try:
+            if self._persistence_error_fingerprint != fingerprint:
+                await _invoke(self._notify, f"Recommendation refresh failed: {error}")
+                self._persistence_error_fingerprint = fingerprint
+        except asyncio.CancelledError:
+            raise
+        except Exception as notification_error:
+            return RefreshResult(False, error=notification_error)
         return RefreshResult(False, error=error)
 
     async def _record_success(
@@ -181,11 +201,19 @@ class RecommendationMonitor:
         try:
             if changed:
                 await _invoke(self._notify, _change_message(state.signature, snapshot))
+        except asyncio.CancelledError:
+            raise
+        except Exception as notification_error:
+            return RefreshResult(changed, snapshot=snapshot, error=notification_error)
+
+        try:
             await _invoke(self._save_state, self._scope, next_state)
+            self._persistence_error_fingerprint = None
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            return RefreshResult(changed, snapshot=snapshot, error=error)
+            persistence_result = await self._record_persistence_failure(error)
+            return RefreshResult(changed, snapshot=snapshot, error=persistence_result.error)
 
         return RefreshResult(changed, snapshot=snapshot)
 
