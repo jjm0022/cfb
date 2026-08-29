@@ -52,13 +52,15 @@ PICKEM_SEASON=2026
 PICKEM_WEEK=1
 ```
 
-The bot's refresh path also needs the existing Pickem API credentials. Add
-them if they are not already present in the file:
+The bot's refresh path needs the existing Odds API credential. Add it if it is
+not already present in the file:
 
 ```dotenv
 ODDS_API_KEY=paste-the-odds-api-key-here
-CFBD_API_KEY=paste-the-cfbd-api-key-here
 ```
+
+The CFBD credential is used by separate CFBD ingest/result commands, not by
+this long-running Discord refresh process, so it is not a service requirement.
 
 Use the actual sport, season, and week to monitor. Keep the file readable only
 by the account running the user service:
@@ -105,12 +107,17 @@ mkdir -p ~/.config/systemd/user
 cp /home/jmiller/cfb/deploy/pickem-discord-bot.service \
   ~/.config/systemd/user/pickem-discord-bot.service
 systemctl --user daemon-reload
+systemctl --user show pickem-discord-bot.service \
+  --property=Environment --property=ExecStart --property=WorkingDirectory
 systemctl --user enable --now pickem-discord-bot
 ```
 
 The unit uses `WorkingDirectory=/home/jmiller/cfb` and loads
 `EnvironmentFile=/home/jmiller/cfb/.env`, so both paths must be accessible to
-the same user. `systemd --user` does not read a shell's exported variables as a
+the same user. The `systemctl --user show` output must include
+`PATH=/home/jmiller/.local/bin:/usr/local/bin:/usr/bin`; this checks the
+service manager's loaded environment rather than only the interactive shell's
+`PATH`. `systemd --user` does not read a shell's exported variables as a
 replacement for this environment file.
 
 ## 5. Check status and logs

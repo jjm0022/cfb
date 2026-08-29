@@ -114,11 +114,16 @@ def test_project_packages_discord_console_entry_point():
 
 
 def test_systemd_service_uses_project_directory_and_restart_policy():
-    service = Path("deploy/pickem-discord-bot.service").read_text()
+    repository_root = Path(__file__).parents[1]
+    service = (repository_root / "deploy/pickem-discord-bot.service").read_text()
 
+    assert "Type=simple" in service
     assert "WorkingDirectory=/home/jmiller/cfb" in service
+    assert "EnvironmentFile=/home/jmiller/cfb/.env" in service
     assert "ExecStart=/usr/bin/env uv run pickem-discord-bot" in service
     assert "Restart=on-failure" in service
+    assert "RestartSec=5" in service
+    assert "Environment=PATH=/home/jmiller/.local/bin:/usr/local/bin:/usr/bin" in service
 
 
 def test_settings_missing_secret_uses_config_required_policy(monkeypatch):
