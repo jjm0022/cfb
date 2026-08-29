@@ -1,0 +1,15 @@
+[Unit]
+Description=Pick'em Discord recommendation bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jmiller/cfb
+EnvironmentFile=/home/jmiller/cfb/.env
+ExecStart=/usr/bin/env uv run pickem-discord-bot
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

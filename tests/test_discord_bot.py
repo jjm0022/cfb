@@ -113,6 +113,14 @@ def test_project_packages_discord_console_entry_point():
     assert project["project"]["scripts"]["pickem-discord-bot"] == "pickem.discord_bot:main"
 
 
+def test_systemd_service_uses_project_directory_and_restart_policy():
+    service = Path("deploy/pickem-discord-bot.service").read_text()
+
+    assert "WorkingDirectory=/home/jmiller/cfb" in service
+    assert "ExecStart=/usr/bin/env uv run pickem-discord-bot" in service
+    assert "Restart=on-failure" in service
+
+
 def test_settings_missing_secret_uses_config_required_policy(monkeypatch):
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     with pytest.raises(RuntimeError, match="DISCORD_BOT_TOKEN"):
