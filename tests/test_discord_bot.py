@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +10,8 @@ import pytest
 
 from pickem.automation.monitor import RefreshResult
 from pickem.discord_bot import DiscordSettings, PickemBot, build_schedule, send_dm
-from pickem.models import Sport
+from pickem.models import Edge, Side, Sport, Tier
+from pickem.operations.recommendations import RecommendationSnapshot
 
 
 @dataclass
@@ -65,14 +67,19 @@ class FakeFollowup:
 class FakeResponse:
     def __init__(self, events: list[str] | None = None):
         self.events = events if events is not None else []
-        self.messages: list[tuple[str, bool]] = []
+        self.messages: list[tuple[str | None, bool]] = []
+        self.embeds: list[object] = []
 
     async def defer(self):
         self.events.append("defer")
 
-    async def send_message(self, message: str, ephemeral: bool = False):
+    async def send_message(
+        self, message: str | None = None, ephemeral: bool = False, *, embed=None
+    ):
         self.events.append("initial")
         self.messages.append((message, ephemeral))
+        if embed is not None:
+            self.embeds.append(embed)
 
 
 class FakeInteraction:
@@ -239,18 +246,52 @@ async def test_refresh_defers_before_monitor_and_uses_followup(settings):
 
 
 @pytest.mark.asyncio
-async def test_status_reports_stored_market_and_monitor_state_without_refresh(settings):
+async def test_status_shows_an_embed_with_no_stored_recommendations(settings):
     monitor = FakeMonitor()
     bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
     interaction = FakeInteraction(user_id=settings.owner_id)
 
     await bot.status(interaction)
 
-    message = interaction.response.messages[0][0]
-    assert "Active scope: nfl 2026 week 1" in message
-    assert "Current recommendations (from stored market data): none" in message
-    assert "Last successful check (stored): never" in message
+    assert interaction.response.messages == [(None, False)]
+    assert interaction.response.embeds
+    embed = interaction.response.embeds[0]
+    assert embed.title == "🏈 Pick'em Status"
+    assert embed.description == "**NFL • 2026 — Week 1**"
+    assert embed.fields[0].name == "Recommended Picks"
+    assert embed.fields[0].value == "No recommendations stored yet."
+    assert embed.fields[1].name == "Monitoring"
+    assert "Last successful check: never" in embed.fields[1].value
     assert monitor.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_status_lists_each_stored_recommendation_in_its_embed(settings, monkeypatch):
+    snapshot = RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 8, 29, 14, tzinfo=UTC),
+        edges=(
+            Edge(
+                game_id="game-a",
+                side=Side.AWAY,
+                delta=3.0,
+                tier=Tier.LEAN,
+                league_spread=-3.0,
+                market_spread=-6.0,
+                rationale="test",
+            ),
+        ),
+    )
+    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    await bot.status(interaction)
+
+    embed = interaction.response.embeds[0]
+    assert embed.fields[0].value == "• `game-a` — **away**"
 
 
 @pytest.mark.asyncio

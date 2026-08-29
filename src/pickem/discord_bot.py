@@ -194,7 +194,9 @@ def _latest_market_timestamp(settings: DiscordSettings, scope: MonitorScope) -> 
 
 
 def _format_timestamp(value: datetime | None) -> str:
-    return value.isoformat() if value is not None else "never"
+    if value is None:
+        return "never"
+    return value.astimezone(EASTERN).strftime("%b %-d, %Y at %-I:%M %p %Z")
 
 
 def _next_scheduled_event(scheduler: Any) -> str:
@@ -214,19 +216,25 @@ def _format_status(
     snapshot: Any,
     market_timestamp: datetime | None,
     scheduler: Any,
-) -> str:
-    recommendations = ", ".join(
-        f"{edge.game_id}: {edge.side.value}" for edge in snapshot.edges
-    ) or "none"
-    return "\n".join(
+) -> discord.Embed:
+    recommendations = "\n".join(
+        f"• `{edge.game_id}` — **{edge.side.value}**" for edge in snapshot.edges
+    ) or "No recommendations stored yet."
+    monitoring = "\n".join(
         [
-            f"Active scope: {settings.sport.value} {settings.season} week {settings.week}",
+            f"Last successful check: {_format_timestamp(state.checked_at)}",
+            f"Stored market data: {_format_timestamp(market_timestamp)}",
             f"Next scheduled event: {_next_scheduled_event(scheduler)}",
-            f"Last successful check (stored): {_format_timestamp(state.checked_at)}",
-            f"Stored market timestamp: {_format_timestamp(market_timestamp)}",
-            f"Current recommendations (from stored market data): {recommendations}",
-            f"Stored signature: {state.signature or 'none'}",
         ]
+    )
+    return discord.Embed(
+        title="🏈 Pick'em Status",
+        description=(
+            f"**{settings.sport.value.upper()} • {settings.season} — Week {settings.week}**"
+        ),
+        color=discord.Color.blurple(),
+    ).add_field(name="Recommended Picks", value=recommendations, inline=False).add_field(
+        name="Monitoring", value=monitoring, inline=False
     )
 
 
@@ -327,12 +335,13 @@ class PickemBot(commands.Bot):
                 datetime.now(UTC),
             )
             market_timestamp = _latest_market_timestamp(self.settings, self.scope)
-            message = _format_status(
+            embed = _format_status(
                 self.settings, state, snapshot, market_timestamp, self.scheduler
             )
         except Exception as error:
-            message = f"Status unavailable: {error}"
-        await interaction.response.send_message(message)
+            await interaction.response.send_message(f"Status unavailable: {error}")
+            return
+        await interaction.response.send_message(embed=embed)
 
     async def refresh(self, interaction: discord.Interaction) -> None:
         """Run one serialized recommendation refresh and report its outcome."""
