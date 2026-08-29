@@ -113,15 +113,21 @@ class RecommendationMonitor:
         self._notify = notify
         self._scope = scope
         self._lock = asyncio.Lock()
+        self._load_error_fingerprint: str | None = None
 
     async def refresh(self) -> RefreshResult:
         """Refresh the active week while serializing all state transitions."""
         async with self._lock:
-            state = AutomationState()
             try:
                 loaded_state = await _invoke(self._load_state, self._scope)
-                if loaded_state is not None:
-                    state = loaded_state
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                return await self._record_load_failure(error)
+
+            self._load_error_fingerprint = None
+            state = loaded_state if loaded_state is not None else AutomationState()
+            try:
                 snapshot = await _invoke(self._refresh_week, self._scope)
             except asyncio.CancelledError:
                 raise
@@ -129,6 +135,19 @@ class RecommendationMonitor:
                 return await self._record_failure(state, error)
 
             return await self._record_success(state, snapshot)
+
+    async def _record_load_failure(self, error: Exception) -> RefreshResult:
+        """Report a state-read failure without overwriting durable state."""
+        fingerprint = _failure_fingerprint(error)
+        try:
+            if self._load_error_fingerprint != fingerprint:
+                await _invoke(self._notify, f"Recommendation refresh failed: {error}")
+                self._load_error_fingerprint = fingerprint
+        except asyncio.CancelledError:
+            raise
+        except Exception as notification_error:
+            return RefreshResult(False, error=notification_error)
+        return RefreshResult(False, error=error)
 
     async def _record_failure(self, state: AutomationState, error: Exception) -> RefreshResult:
         fingerprint = _failure_fingerprint(error)

@@ -189,6 +189,59 @@ def test_refresh_keeps_old_baseline_when_changed_notice_fails():
     assert failures == 2
 
 
+def test_refresh_preserves_baseline_when_state_loading_fails():
+    checked_at = GENERATED_AT.replace(minute=30)
+    persisted = {
+        "state": AutomationState(
+            signature="game-a:home",
+            checked_at=checked_at,
+            error_fingerprint=None,
+        )
+    }
+    load_attempts = 0
+    notifications: list[str] = []
+
+    def load_state(_scope):
+        nonlocal load_attempts
+        load_attempts += 1
+        if load_attempts == 1:
+            raise OSError("state unavailable")
+        return persisted["state"]
+
+    def save_state(_scope, state):
+        persisted["state"] = state
+
+    snapshots = iter(
+        [
+            snapshot_with({"game-a": Side.AWAY}),
+        ]
+    )
+
+    async def refresh_week(_scope):
+        return next(snapshots)
+
+    async def notify(message: str):
+        notifications.append(message)
+
+    monitor = RecommendationMonitor(
+        refresh_week,
+        load_state,
+        save_state,
+        notify,
+        SCOPE,
+    )
+
+    failed = asyncio.run(monitor.refresh())
+    assert failed.error is not None
+    assert persisted["state"].signature == "game-a:home"
+
+    changed = asyncio.run(monitor.refresh())
+
+    assert changed.changed is True
+    assert notifications[-1] == "Recommendations changed: changed: game-a home → away"
+    assert persisted["state"].signature == "game-a:away"
+
+
 def test_refresh_deduplicates_same_failure_until_success():
     fake = FakeMonitor([snapshot_with({"game-a": Side.HOME})])
     calls = 0
