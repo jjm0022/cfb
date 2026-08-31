@@ -9,9 +9,16 @@ from types import SimpleNamespace
 import pytest
 
 from pickem.automation.monitor import RefreshResult
-from pickem.discord_bot import DiscordSettings, PickemBot, build_schedule, send_dm
-from pickem.models import Edge, Side, Sport, Tier
+from pickem.discord_bot import (
+    DiscordSettings,
+    PickemBot,
+    build_schedule,
+    resolve_pickem_scopes,
+    send_dm,
+)
+from pickem.models import Edge, Game, LeagueLine, Side, Sport, Tier
 from pickem.operations.recommendations import RecommendationSnapshot
+from pickem.store.db import Store
 
 
 @dataclass
@@ -104,10 +111,6 @@ def settings(monkeypatch, tmp_path: Path):
         monkeypatch.setenv(name, value)
     config_path = tmp_path / "discord-bot.yaml"
     config_path.write_text(
-        "active_week:\n"
-        "  sport: nfl\n"
-        "  season: 2026\n"
-        "  week: 1\n"
         "database: pickem.duckdb\n"
         "timezone: America/New_York\n"
         "schedule:\n"
@@ -121,12 +124,153 @@ def settings(monkeypatch, tmp_path: Path):
     return DiscordSettings.from_env(config_path=config_path, db=tmp_path / "pickem.duckdb")
 
 
-def test_settings_use_secrets_from_environment_and_active_scope_from_yaml(settings):
+def test_settings_use_secrets_and_runtime_configuration_without_an_active_week(settings):
     assert settings.token == "test-token"
     assert settings.owner_id == 123
-    assert settings.sport is Sport.NFL
-    assert settings.season == 2026
-    assert settings.week == 1
+    assert settings.db.name == "pickem.duckdb"
+    assert not hasattr(settings, "scope")
+
+
+def add_pick_scope(settings, sport: Sport = Sport.NFL) -> Game:
+    game = Game(
+        game_id=f"{sport.value}-2026-01-A-at-B",
+        sport=sport,
+        season=2026,
+        week=1,
+        kickoff_utc=datetime(2026, 8, 30, 17, tzinfo=UTC),
+        home_team_id="B",
+        away_team_id="A",
+    )
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.upsert_games([game])
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id=game.game_id,
+                    season=game.season,
+                    week=game.week,
+                    spread_home=-3.0,
+                    posted_at=game.kickoff_utc,
+                )
+            ]
+        )
+    return game
+
+
+def test_scope_resolution_discovers_only_the_active_sports_with_picks(settings):
+    with Store(settings.db) as store:
+        store.init_schema()
+        game = Game(
+            game_id="cfb-2026-01-A-at-B",
+            sport=Sport.CFB,
+            season=2026,
+            week=1,
+            kickoff_utc=datetime(2026, 8, 30, 17, tzinfo=UTC),
+            home_team_id="B",
+            away_team_id="A",
+        )
+        store.upsert_games([game])
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id=game.game_id,
+                    season=game.season,
+                    week=game.week,
+                    spread_home=-3.0,
+                    posted_at=game.kickoff_utc,
+                )
+            ]
+        )
+
+    assert resolve_pickem_scopes(settings.db, datetime(2026, 8, 31, tzinfo=UTC)) == (
+        (Sport.CFB, 2026, 1),
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_uses_the_discovered_cfb_scope(settings, monkeypatch):
+    game = Game(
+        game_id="cfb-2026-01-A-at-B",
+        sport=Sport.CFB,
+        season=2026,
+        week=1,
+        kickoff_utc=datetime(2026, 8, 30, 17, tzinfo=UTC),
+        home_team_id="B",
+        away_team_id="A",
+    )
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.upsert_games([game])
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id=game.game_id,
+                    season=game.season,
+                    week=game.week,
+                    spread_home=-3.0,
+                    posted_at=game.kickoff_utc,
+                )
+            ]
+        )
+    snapshot = RecommendationSnapshot(
+        sport=Sport.CFB,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 8, 31, tzinfo=UTC),
+        edges=(),
+    )
+    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    await bot.status(interaction)
+
+    embed = interaction.response.embeds[0]
+    assert embed.title == "🏈 Pick'em Status"
+    assert embed.description == "Current active pick'em scopes."
+    assert embed.fields[0].name == "CFB • 2026 — Week 1"
+
+
+@pytest.mark.asyncio
+async def test_status_accepts_an_explicit_season_and_week_for_every_sport(settings, monkeypatch):
+    add_pick_scope(settings, Sport.CFB)
+    add_pick_scope(settings, Sport.NFL)
+    generated_for: list[Sport] = []
+
+    def generate(_db, sport, season, week, now):
+        generated_for.append(sport)
+        return RecommendationSnapshot(sport, season, week, now, ())
+
+    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", generate)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    await bot.status(interaction, season=2026, week=1)
+
+    embed = interaction.response.embeds[0]
+    assert [field.name for field in embed.fields[:2]] == [
+        "CFB • 2026 — Week 1",
+        "NFL • 2026 — Week 1",
+    ]
+    assert generated_for == [Sport.CFB, Sport.NFL]
+
+
+@pytest.mark.asyncio
+async def test_refresh_processes_every_discovered_sport(settings):
+    add_pick_scope(settings, Sport.CFB)
+    add_pick_scope(settings, Sport.NFL)
+    monitor = FakeMonitor()
+    bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    await bot.refresh(interaction)
+
+    assert monitor.calls == 2
+    assert [field.name for field in interaction.followup.embeds[0].fields] == [
+        "CFB • 2026 — Week 1",
+        "NFL • 2026 — Week 1",
+    ]
 
 
 def test_project_packages_discord_console_entry_point():
@@ -216,6 +360,7 @@ async def test_refresh_rejects_non_owner_before_refreshing(settings):
 
 @pytest.mark.asyncio
 async def test_refresh_lists_updated_picks_in_changed_embed(settings):
+    add_pick_scope(settings)
     snapshot = RecommendationSnapshot(
         sport=Sport.NFL,
         season=2026,
@@ -245,13 +390,13 @@ async def test_refresh_lists_updated_picks_in_changed_embed(settings):
     assert interaction.followup.messages == [(None, False)]
     embed = interaction.followup.embeds[0]
     assert embed.title == "🏈 Recommendations Updated"
-    assert embed.description == "**NFL • 2026 — Week 1**"
-    assert embed.fields[0].name == "Current Recommended Picks"
+    assert embed.fields[0].name == "NFL • 2026 — Week 1"
     assert embed.fields[0].value == "• `game-a` — **away**"
 
 
 @pytest.mark.asyncio
 async def test_refresh_shows_unchanged_embed(settings):
+    add_pick_scope(settings)
     interaction = FakeInteraction(user_id=settings.owner_id)
     bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
 
@@ -263,6 +408,7 @@ async def test_refresh_shows_unchanged_embed(settings):
 
 @pytest.mark.asyncio
 async def test_refresh_shows_failure_embed(settings):
+    add_pick_scope(settings)
     interaction = FakeInteraction(user_id=settings.owner_id)
     bot = PickemBot(
         settings,
@@ -274,12 +420,13 @@ async def test_refresh_shows_failure_embed(settings):
 
     assert interaction.followup.messages == [(None, False)]
     embed = interaction.followup.embeds[0]
-    assert embed.title == "⚠️ Refresh Failed"
-    assert "quota exhausted" in embed.description
+    assert embed.title == "⚠️ Refresh Completed with Errors"
+    assert "quota exhausted" in embed.fields[0].value
 
 
 @pytest.mark.asyncio
 async def test_refresh_defers_before_monitor_and_uses_followup(settings):
+    add_pick_scope(settings)
     events: list[str] = []
     monitor = FakeMonitor(RefreshResult(changed=True), events)
     bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
@@ -294,7 +441,7 @@ async def test_refresh_defers_before_monitor_and_uses_followup(settings):
 
 
 @pytest.mark.asyncio
-async def test_status_shows_an_embed_with_no_stored_recommendations(settings):
+async def test_status_shows_an_embed_when_no_active_picks_are_stored(settings):
     monitor = FakeMonitor()
     bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
     interaction = FakeInteraction(user_id=settings.owner_id)
@@ -305,16 +452,13 @@ async def test_status_shows_an_embed_with_no_stored_recommendations(settings):
     assert interaction.response.embeds
     embed = interaction.response.embeds[0]
     assert embed.title == "🏈 Pick'em Status"
-    assert embed.description == "**NFL • 2026 — Week 1**"
-    assert embed.fields[0].name == "Recommended Picks"
-    assert embed.fields[0].value == "No recommendations stored yet."
-    assert embed.fields[1].name == "Monitoring"
-    assert "Last successful check: never" in embed.fields[1].value
+    assert embed.description == "No active pick'em scopes with stored picks."
     assert monitor.calls == 0
 
 
 @pytest.mark.asyncio
 async def test_status_lists_each_stored_recommendation_in_its_embed(settings, monkeypatch):
+    add_pick_scope(settings)
     snapshot = RecommendationSnapshot(
         sport=Sport.NFL,
         season=2026,
@@ -339,7 +483,7 @@ async def test_status_lists_each_stored_recommendation_in_its_embed(settings, mo
     await bot.status(interaction)
 
     embed = interaction.response.embeds[0]
-    assert embed.fields[0].value == "• `game-a` — **away**"
+    assert embed.fields[0].value.startswith("• `game-a` — **away**")
 
 
 @pytest.mark.asyncio

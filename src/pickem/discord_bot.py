@@ -38,9 +38,6 @@ class DiscordSettings:
 
     token: str
     owner_id: int
-    sport: Sport
-    season: int
-    week: int
     db: Path = config.DEFAULT_DB
     timezone: ZoneInfo = EASTERN
     reminder_day: str = "tue"
@@ -57,7 +54,6 @@ class DiscordSettings:
         """Read secrets from the environment and operational values from YAML."""
         try:
             raw = yaml.safe_load(config_path.read_text())
-            active_week = raw["active_week"]
             schedule = raw["schedule"]
             reminder_hour, reminder_minute = _parse_time(schedule["reminder"]["time"])
             refresh_hour, refresh_minute = _parse_time(schedule["refresh"]["time"])
@@ -70,9 +66,6 @@ class DiscordSettings:
         return cls(
             token=config.discord_bot_token(),
             owner_id=config.discord_owner_id(),
-            sport=Sport(active_week["sport"]),
-            season=int(active_week["season"]),
-            week=int(active_week["week"]),
             db=Path(db) if db is not None else Path(raw["database"]),
             timezone=timezone,
             reminder_day=schedule["reminder"]["day"],
@@ -82,11 +75,6 @@ class DiscordSettings:
             refresh_hour=refresh_hour,
             refresh_minute=refresh_minute,
         )
-
-    @property
-    def scope(self) -> MonitorScope:
-        return MonitorScope(self.sport, self.season, self.week)
-
 
 def _parse_time(value: str) -> tuple[int, int]:
     hour, minute = (int(part) for part in value.split(":", maxsplit=1))
@@ -113,7 +101,7 @@ def _scheduled_error_message(settings: DiscordSettings, error: BaseException) ->
 
 def build_schedule(
     settings: DiscordSettings,
-    monitor: RecommendationMonitor,
+    refresh: Callable[[], Awaitable[Any] | Any] | RecommendationMonitor,
     send_dm: Callable[[str], Awaitable[None] | None],
     scheduler: Any,
 ) -> None:
@@ -123,12 +111,20 @@ def build_schedule(
         await _invoke(send_dm, REMINDER_MESSAGE)
 
     async def refresh_job() -> None:
-        result = await _invoke(monitor.refresh)
+        callback = getattr(refresh, "refresh", refresh)
+        result = await _invoke(callback)
         if isinstance(result, RefreshResult) and result.error is not None:
             logger.error(
                 "scheduled recommendation refresh failed: %s",
                 _scheduled_error_message(settings, result.error),
             )
+        elif isinstance(result, tuple):
+            for _, scope_result in result:
+                if scope_result.error is not None:
+                    logger.error(
+                        "scheduled recommendation refresh failed: %s",
+                        _scheduled_error_message(settings, scope_result.error),
+                    )
 
     scheduler.add_job(
         reminder_job,
@@ -185,6 +181,28 @@ def _save_state(settings: DiscordSettings, scope: MonitorScope, state: Automatio
         )
 
 
+def resolve_pickem_scopes(
+    db: Path, now: datetime, *, season: int | None = None, week: int | None = None
+) -> tuple[tuple[Sport, int, int], ...]:
+    """Resolve the sports and weeks the bot should currently monitor.
+
+    An explicit season and week returns every sport with stored pick lines for
+    that slate.  Without overrides, each sport contributes its earliest
+    incomplete picked week, so a week remains visible until its final score is
+    present in the database.
+    """
+    if (season is None) != (week is None):
+        raise ValueError("season and week must be provided together")
+    _ensure_store_parent(db)
+    with Store(db) as store:
+        store.init_schema()
+        if season is not None and week is not None:
+            scopes = store.pickem_scopes_for_week(season, week)
+        else:
+            scopes = store.active_pickem_scopes(now)
+    return tuple(scopes)
+
+
 def _latest_market_timestamp(settings: DiscordSettings, scope: MonitorScope) -> datetime | None:
     _ensure_store_parent(settings.db)
     with Store(settings.db) as store:
@@ -210,8 +228,8 @@ def _next_scheduled_event(scheduler: Any) -> str:
     return f"{getattr(job, 'id', 'scheduled job')} at {_format_timestamp(job.next_run_time)}"
 
 
-def _scope_description(settings: DiscordSettings) -> str:
-    return f"**{settings.sport.value.upper()} • {settings.season} — Week {settings.week}**"
+def _scope_description(scope: MonitorScope) -> str:
+    return f"{scope.sport.value.upper()} • {scope.season} — Week {scope.week}"
 
 
 def _format_recommendations(snapshot: Any | None) -> str:
@@ -223,63 +241,79 @@ def _format_recommendations(snapshot: Any | None) -> str:
     )
 
 
-def _format_status(
-    settings: DiscordSettings,
-    state: AutomationState,
-    snapshot: Any,
-    market_timestamp: datetime | None,
-    scheduler: Any,
-) -> discord.Embed:
-    recommendations = _format_recommendations(snapshot)
-    monitoring = "\n".join(
-        [
-            f"Last successful check: {_format_timestamp(state.checked_at)}",
-            f"Stored market data: {_format_timestamp(market_timestamp)}",
-            f"Next scheduled event: {_next_scheduled_event(scheduler)}",
-        ]
-    )
-    return (
-        discord.Embed(
+@dataclass(frozen=True)
+class ScopeStatus:
+    """The stored and computed status for one currently selected scope."""
+
+    scope: MonitorScope
+    state: AutomationState
+    snapshot: Any
+    market_timestamp: datetime | None
+
+
+def _format_status(statuses: tuple[ScopeStatus, ...], scheduler: Any) -> discord.Embed:
+    if not statuses:
+        return discord.Embed(
             title="🏈 Pick'em Status",
-            description=_scope_description(settings),
+            description="No active pick'em scopes with stored picks.",
             color=discord.Color.blurple(),
         )
-        .add_field(name="Recommended Picks", value=recommendations, inline=False)
-        .add_field(name="Monitoring", value=monitoring, inline=False)
+    embed = discord.Embed(
+        title="🏈 Pick'em Status",
+        description="Current active pick'em scopes.",
+        color=discord.Color.blurple(),
+    )
+    for status in statuses:
+        monitoring = "\n".join(
+            [
+                _format_recommendations(status.snapshot),
+                f"Last successful check: {_format_timestamp(status.state.checked_at)}",
+                f"Stored market data: {_format_timestamp(status.market_timestamp)}",
+            ]
+        )
+        embed.add_field(name=_scope_description(status.scope), value=monitoring, inline=False)
+    return embed.add_field(
+        name="Scheduling",
+        value=f"Next scheduled event: {_next_scheduled_event(scheduler)}",
+        inline=False,
     )
 
 
-def _format_refresh_result(
-    settings: DiscordSettings,
-    result: RefreshResult | None = None,
+def _format_refresh_results(
+    results: tuple[tuple[MonitorScope, RefreshResult], ...],
     error: BaseException | None = None,
 ) -> discord.Embed:
     if error is not None:
         return discord.Embed(
             title="⚠️ Refresh Failed",
-            description=f"{_scope_description(settings)}\n\n{error}",
+            description=str(error),
             color=discord.Color.red(),
         )
-    if result is not None and result.error is not None:
-        return _format_refresh_result(settings, error=result.error)
-    if result is not None and result.changed:
+    if not results:
         return discord.Embed(
-            title="🏈 Recommendations Updated",
-            description=_scope_description(settings),
-            color=discord.Color.green(),
-        ).add_field(
-            name="Current Recommended Picks",
-            value=_format_recommendations(result.snapshot),
-            inline=False,
+            title="🏈 Pick'em Refresh",
+            description="No active pick'em scopes with stored picks.",
+            color=discord.Color.blurple(),
         )
-    return discord.Embed(
-        title="✅ Recommendations Unchanged",
-        description=(
-            f"{_scope_description(settings)}\n\nThe latest odds refresh completed with no "
-            "recommendation changes."
-        ),
-        color=discord.Color.blurple(),
+    has_error = any(result.error is not None for _, result in results)
+    changed = any(result.changed for _, result in results)
+    title = "⚠️ Refresh Completed with Errors" if has_error else (
+        "🏈 Recommendations Updated" if changed else "✅ Recommendations Unchanged"
     )
+    color = discord.Color.red() if has_error else (
+        discord.Color.green() if changed else discord.Color.blurple()
+    )
+    embed = discord.Embed(title=title, color=color)
+    for scope, result in results:
+        value = (
+            f"Refresh failed: {result.error}"
+            if result.error is not None
+            else _format_recommendations(result.snapshot)
+            if result.changed
+            else "The latest odds refresh completed with no recommendation changes."
+        )
+        embed.add_field(name=_scope_description(scope), value=value, inline=False)
+    return embed
 
 
 class PickemBot(commands.Bot):
@@ -299,28 +333,12 @@ class PickemBot(commands.Bot):
         self.scheduler = (
             scheduler if scheduler is not None else AsyncIOScheduler(timezone=settings.timezone)
         )
-        self.scope = settings.scope
         self._load_state = lambda scope: _load_state(settings, scope)
         self._save_state = lambda scope, state: _save_state(settings, scope, state)
         self._send_owner_dm = lambda message: send_dm(self, settings, message)
-        self.monitor = (
-            monitor
-            if monitor is not None
-            else RecommendationMonitor(
-                refresh_week=lambda scope: asyncio.to_thread(
-                    refresh_recommendations,
-                    settings.db,
-                    scope.sport,
-                    scope.season,
-                    scope.week,
-                    datetime.now(UTC),
-                ),
-                load_state=self._load_state,
-                save_state=self._save_state,
-                notify=self._send_owner_dm,
-                scope=self.scope,
-            )
-        )
+        self._injected_monitor = monitor
+        self._monitors: dict[MonitorScope, RecommendationMonitor] = {}
+        self._refresh_lock = asyncio.Lock()
         command_context = app_commands.AppCommandContext(
             guild=False, dm_channel=True, private_channel=False
         )
@@ -346,7 +364,7 @@ class PickemBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
-        build_schedule(self.settings, self.monitor, self._send_owner_dm, self.scheduler)
+        build_schedule(self.settings, self._scheduled_refresh, self._send_owner_dm, self.scheduler)
         start = getattr(self.scheduler, "start", None)
         if start is not None and not getattr(self.scheduler, "running", False):
             start()
@@ -365,7 +383,61 @@ class PickemBot(commands.Bot):
         await interaction.response.send_message(PRIVATE_MESSAGE, ephemeral=True)
         return True
 
-    async def status(self, interaction: discord.Interaction) -> None:
+    def _resolve_scopes(
+        self, season: int | None = None, week: int | None = None
+    ) -> tuple[MonitorScope, ...]:
+        return tuple(
+            MonitorScope(sport, scope_season, scope_week)
+            for sport, scope_season, scope_week in resolve_pickem_scopes(
+                self.settings.db, datetime.now(UTC), season=season, week=week
+            )
+        )
+
+    def _monitor_for(self, scope: MonitorScope) -> RecommendationMonitor | Any:
+        if self._injected_monitor is not None:
+            return self._injected_monitor
+        monitor = self._monitors.get(scope)
+        if monitor is None:
+            monitor = RecommendationMonitor(
+                refresh_week=lambda current_scope: asyncio.to_thread(
+                    refresh_recommendations,
+                    self.settings.db,
+                    current_scope.sport,
+                    current_scope.season,
+                    current_scope.week,
+                    datetime.now(UTC),
+                ),
+                load_state=self._load_state,
+                save_state=self._save_state,
+                notify=self._send_owner_dm,
+                scope=scope,
+            )
+            self._monitors[scope] = monitor
+        return monitor
+
+    async def _refresh_scopes(
+        self, season: int | None = None, week: int | None = None
+    ) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
+        async with self._refresh_lock:
+            scopes = self._resolve_scopes(season, week)
+            results: list[tuple[MonitorScope, RefreshResult]] = []
+            for scope in scopes:
+                try:
+                    result = await self._monitor_for(scope).refresh()
+                except Exception as error:
+                    result = RefreshResult(changed=False, error=error)
+                results.append((scope, result))
+            return tuple(results)
+
+    async def _scheduled_refresh(self) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
+        return await self._refresh_scopes()
+
+    async def status(
+        self,
+        interaction: discord.Interaction,
+        season: int | None = None,
+        week: int | None = None,
+    ) -> None:
         """Show current recommendations computed from stored market data."""
         if await self._reject_private(interaction):
             return
@@ -374,32 +446,43 @@ class PickemBot(commands.Bot):
             # interaction's loop so the connection is opened and closed on
             # one thread; live refreshes are the intentionally offloaded
             # operation in the monitor composition below.
-            state = self._load_state(self.scope)
-            snapshot = generate_recommendations(
-                self.settings.db,
-                self.scope.sport,
-                self.scope.season,
-                self.scope.week,
-                datetime.now(UTC),
+            statuses = tuple(
+                ScopeStatus(
+                    scope=scope,
+                    state=self._load_state(scope),
+                    snapshot=generate_recommendations(
+                        self.settings.db,
+                        scope.sport,
+                        scope.season,
+                        scope.week,
+                        datetime.now(UTC),
+                    ),
+                    market_timestamp=_latest_market_timestamp(self.settings, scope),
+                )
+                for scope in self._resolve_scopes(season, week)
             )
-            market_timestamp = _latest_market_timestamp(self.settings, self.scope)
-            embed = _format_status(self.settings, state, snapshot, market_timestamp, self.scheduler)
+            embed = _format_status(statuses, self.scheduler)
         except Exception as error:
             await interaction.response.send_message(f"Status unavailable: {error}")
             return
         await interaction.response.send_message(embed=embed)
 
-    async def refresh(self, interaction: discord.Interaction) -> None:
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+        season: int | None = None,
+        week: int | None = None,
+    ) -> None:
         """Run one serialized recommendation refresh and report its outcome."""
         if await self._reject_private(interaction):
             return
         await interaction.response.defer()
         try:
-            result: RefreshResult = await self.monitor.refresh()
+            results = await self._refresh_scopes(season, week)
         except Exception as error:
-            embed = _format_refresh_result(self.settings, error=error)
+            embed = _format_refresh_results((), error=error)
         else:
-            embed = _format_refresh_result(self.settings, result=result)
+            embed = _format_refresh_results(results)
         await interaction.followup.send(embed=embed)
 
 
@@ -433,5 +516,6 @@ __all__ = [
     "build_bot",
     "create_bot",
     "main",
+    "resolve_pickem_scopes",
     "send_dm",
 ]

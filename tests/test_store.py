@@ -61,6 +61,95 @@ def test_automation_state_upsert_is_isolated_from_picks(tmp_path):
     assert state.error_fingerprint is None
 
 
+def test_active_pickem_scopes_keep_a_sport_on_its_current_week_until_final(store):
+    now = datetime(2026, 9, 6, 18, tzinfo=UTC)
+    cfb_week_one = Game(
+        game_id="cfb-2026-01-A-at-B",
+        sport=Sport.CFB,
+        season=2026,
+        week=1,
+        kickoff_utc=datetime(2026, 9, 5, 17, tzinfo=UTC),
+        home_team_id="B",
+        away_team_id="A",
+    )
+    cfb_week_two = cfb_week_one.model_copy(
+        update={
+            "game_id": "cfb-2026-02-C-at-D",
+            "week": 2,
+            "kickoff_utc": datetime(2026, 9, 12, 17, tzinfo=UTC),
+            "home_team_id": "D",
+            "away_team_id": "C",
+        }
+    )
+    nfl_week_one = cfb_week_one.model_copy(
+        update={
+            "game_id": "nfl-2026-01-E-at-F",
+            "sport": Sport.NFL,
+            "home_team_id": "F",
+            "away_team_id": "E",
+        }
+    )
+    store.upsert_games([cfb_week_one, cfb_week_two, nfl_week_one])
+    store.upsert_league_lines(
+        [
+            LeagueLine(
+                game_id=game.game_id,
+                season=game.season,
+                week=game.week,
+                spread_home=-3.0,
+                posted_at=now,
+            )
+            for game in (cfb_week_one, cfb_week_two, nfl_week_one)
+        ]
+    )
+
+    assert store.active_pickem_scopes(now) == [(Sport.CFB, 2026, 1), (Sport.NFL, 2026, 1)]
+
+    store.upsert_games(
+        [cfb_week_one.model_copy(update={"home_score": 24, "away_score": 17})]
+    )
+
+    assert store.active_pickem_scopes(now) == [(Sport.CFB, 2026, 2), (Sport.NFL, 2026, 1)]
+
+
+def test_pickem_scopes_for_week_returns_every_sport_with_stored_picks(store):
+    cfb = Game(
+        game_id="cfb-2026-01-A-at-B",
+        sport=Sport.CFB,
+        season=2026,
+        week=1,
+        kickoff_utc=datetime(2026, 9, 5, 17, tzinfo=UTC),
+        home_team_id="B",
+        away_team_id="A",
+    )
+    nfl = cfb.model_copy(
+        update={
+            "game_id": "nfl-2026-01-C-at-D",
+            "sport": Sport.NFL,
+            "home_team_id": "D",
+            "away_team_id": "C",
+        }
+    )
+    store.upsert_games([cfb, nfl])
+    store.upsert_league_lines(
+        [
+            LeagueLine(
+                game_id=game.game_id,
+                season=game.season,
+                week=game.week,
+                spread_home=-3.0,
+                posted_at=game.kickoff_utc,
+            )
+            for game in (cfb, nfl)
+        ]
+    )
+
+    assert store.pickem_scopes_for_week(2026, 1) == [
+        (Sport.CFB, 2026, 1),
+        (Sport.NFL, 2026, 1),
+    ]
+
+
 def test_upserting_a_game_updates_scores_rather_than_duplicating(store):
     store.upsert_games([game()])
     store.upsert_games([game(home_score=24, away_score=17)])

@@ -65,9 +65,14 @@ Keep the file readable only by the account running the user service:
 chmod 600 /home/jmiller/cfb/.env
 ```
 
-Set the active sport, season, week, database path, timezone, and schedules in
-the tracked `/home/jmiller/cfb/config/discord-bot.yaml`. Update and commit the
-`active_week` values for each new week, then restart the service.
+Set the database path, timezone, and schedules in the tracked
+`/home/jmiller/cfb/config/discord-bot.yaml`. The bot automatically discovers
+each sport's current stored pick week, keeping it active until all of its pick
+games have final scores. No weekly configuration edit or restart is required.
+
+`/status` and `/refresh` also accept optional `season` and `week` arguments.
+Supply both to view or refresh every sport with stored picks for that exact
+week; omit both for the automatically selected current scopes.
 
 The database defaults to `data/pickem.duckdb` under the project directory.
 Run the normal data-ingest and preflight workflow before asking the bot to

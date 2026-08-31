@@ -286,6 +286,64 @@ class Store:
             [sport.value, season, start_week, end_week],
         )
 
+    def active_pickem_scopes(self, now: datetime) -> list[tuple[Sport, int, int]]:
+        """Return the current incomplete pick week for every sport.
+
+        A week's picks remain active until every picked game has a final
+        score.  Once it is complete, the next incomplete picked week for that
+        sport becomes active, even when its games have not kicked off yet.
+        ``now`` is accepted so the resolver's time-based policy can stay at
+        this database boundary as it evolves.
+        """
+        del now
+        rows = self._con.execute(
+            """
+            WITH weekly AS (
+                SELECT
+                    g.sport,
+                    g.season,
+                    g.week,
+                    COUNT(*) AS game_count,
+                    COUNT(g.home_score) + COUNT(g.away_score) AS score_count
+                FROM games g
+                JOIN league_lines l USING (game_id)
+                GROUP BY g.sport, g.season, g.week
+            ), incomplete AS (
+                SELECT
+                    sport,
+                    season,
+                    week,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY sport ORDER BY season, week
+                    ) AS scope_rank
+                FROM weekly
+                WHERE score_count < game_count * 2
+            )
+            SELECT sport, season, week
+            FROM incomplete
+            WHERE scope_rank = 1
+            ORDER BY sport
+            """
+        ).fetchall()
+        return [(Sport(sport), season, week) for sport, season, week in rows]
+
+    def pickem_scopes_for_week(self, season: int, week: int) -> list[tuple[Sport, int, int]]:
+        """Return every sport that has stored league picks for an exact week."""
+        rows = self._con.execute(
+            """
+            SELECT DISTINCT g.sport, g.season, g.week
+            FROM games g
+            JOIN league_lines l USING (game_id)
+            WHERE g.season = ? AND g.week = ?
+            ORDER BY g.sport
+            """,
+            [season, week],
+        ).fetchall()
+        return [
+            (Sport(sport), scope_season, scope_week)
+            for sport, scope_season, scope_week in rows
+        ]
+
     def load_seasons(self, sport: Sport, start_season: int, end_season: int) -> StoredDataset:
         return self._load_dataset(
             "g.sport = ? AND g.season BETWEEN ? AND ?",

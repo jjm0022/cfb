@@ -1,8 +1,3 @@
-active_week:
-  sport: nfl
-  season: 2026
-  week: 1
-
 database: data/pickem.duckdb
 timezone: America/New_York
 
