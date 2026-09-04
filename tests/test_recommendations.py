@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from pickem.models import Game, LeagueLine, MarketLine, MarketLinesResult, Sport
+from pickem.models import Game, LeagueLine, MarketLine, MarketLinesResult, Sport, Tier
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
 from pickem.store.db import Store
 
@@ -51,6 +51,30 @@ def test_generate_recommendations_returns_ranked_edges_without_recording_picks(d
     assert [edge.game_id for edge in snapshot.edges] == ["nfl:away:home"]
     with Store(db, read_only=True) as store:
         assert store.picks_for_week(2026, 1) == []
+
+
+def test_generation_logs_an_exact_summary(records, db, seeded_week):
+    snapshot = generate_recommendations(
+        db, Sport.NFL, 2026, 1, datetime(2026, 9, 2, tzinfo=UTC)
+    )
+
+    summaries = [
+        record for record in records if record["extra"].get("event") == "recommendations_generated"
+    ]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary["level"].name == "INFO"
+    assert summary["extra"]["sport"] == "nfl"
+    assert summary["extra"]["season"] == 2026
+    assert summary["extra"]["week"] == 1
+    assert summary["extra"]["edges"] == 1
+    assert summary["extra"]["tiers"] == {
+        Tier.STRONG.value: 0,
+        Tier.LEAN.value: 0,
+        Tier.COINFLIP.value: 0,
+        Tier.NO_MARKET.value: 1,
+    }
+    assert len(snapshot.edges) == summary["extra"]["edges"]
 
 
 def test_refresh_recommendations_appends_live_snapshot_before_generating(

@@ -67,6 +67,71 @@ def test_a_complete_future_slate_with_fresh_live_books_is_ready():
     assert result.games[0].ready is True
 
 
+def test_ready_preflight_logs_a_summary_without_game_warnings(records):
+    result = evaluate_preflight(
+        _dataset(),
+        _history(),
+        sport=Sport.NFL,
+        now=NOW,
+        expected_games=1,
+    )
+
+    assert result.ready is True
+    assert not any(
+        record["extra"].get("event") == "preflight_game_not_ready" for record in records
+    )
+    summaries = [
+        record for record in records if record["extra"].get("event") == "preflight_evaluated"
+    ]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary["level"].name == "INFO"
+    expected_fields = {
+        "event": "preflight_evaluated",
+        "sport": "nfl",
+        "ready": True,
+        "expected_games": 1,
+        "game_count": 1,
+        "league_line_count": 1,
+        "not_ready": 0,
+    }
+    for field, expected in expected_fields.items():
+        assert summary["extra"][field] == expected
+
+
+def test_not_ready_games_log_one_warning_with_complete_reasons(records):
+    stale_dataset = _dataset().model_copy(
+        update={
+            "league_lines": [],
+            "market_lines": [
+                line.model_copy(update={"captured_at": NOW - timedelta(minutes=61)})
+                for line in _dataset().market_lines
+            ],
+        }
+    )
+
+    result = evaluate_preflight(
+        stale_dataset,
+        _history(),
+        sport=Sport.NFL,
+        now=NOW,
+        expected_games=1,
+    )
+
+    assert not result.ready
+    warnings = [
+        record for record in records if record["extra"].get("event") == "preflight_game_not_ready"
+    ]
+    assert len(warnings) == sum(not game.ready for game in result.games)
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert warning["level"].name == "WARNING"
+    assert warning["extra"]["game_id"] == result.games[0].game_id
+    assert warning["extra"]["reasons"] == result.games[0].reasons
+    assert warning["extra"]["distinct_books"] == result.games[0].distinct_books
+    assert warning["extra"]["latest_snapshot_at"] == result.games[0].latest_snapshot_at
+
+
 def test_expected_games_must_be_positive_even_for_an_empty_slate():
     empty = StoredDataset(games=[], league_lines=[], market_lines=[])
 

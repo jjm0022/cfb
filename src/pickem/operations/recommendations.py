@@ -12,11 +12,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from loguru import logger
+
 from pickem import config
 from pickem.edge.divergence import rank_edges
 from pickem.edge.pipeline import decide_edges
 from pickem.ingest.odds import CFB_KEY, NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
-from pickem.models import Edge, MarketLinesResult, Sport
+from pickem.models import Edge, MarketLinesResult, Sport, Tier
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
 
@@ -63,7 +65,16 @@ def generate_recommendations(
             dataset.games,
             store.games_before(sport, season, week),
         )
-    return RecommendationSnapshot(sport, season, week, now, tuple(rank_edges(edges)))
+    ranked = tuple(rank_edges(edges))
+    logger.bind(
+        event="recommendations_generated",
+        sport=sport.value,
+        season=season,
+        week=week,
+        edges=len(ranked),
+        tiers={tier.value: sum(1 for edge in ranked if edge.tier is tier) for tier in Tier},
+    ).info(f"generated {len(ranked)} recommendations")
+    return RecommendationSnapshot(sport, season, week, now, ranked)
 
 
 def poll_odds_snapshot(

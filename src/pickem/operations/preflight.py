@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+from loguru import logger
 from pydantic import BaseModel
 
 from pickem.models import LIVE_SOURCE, Game, MarketLine, Sport
@@ -134,6 +135,26 @@ def evaluate_preflight(
 
     for game_result in game_results:
         reasons.extend(f"{game_result.game_id}: {reason}" for reason in game_result.reasons)
+
+    for game_result in game_results:
+        if not game_result.ready:
+            logger.bind(
+                event="preflight_game_not_ready",
+                game_id=game_result.game_id,
+                reasons=game_result.reasons,
+                distinct_books=game_result.distinct_books,
+                latest_snapshot_at=game_result.latest_snapshot_at,
+            ).warning(f"{game_result.game_id} not ready: {'; '.join(game_result.reasons)}")
+
+    logger.bind(
+        event="preflight_evaluated",
+        sport=target_sport.value,
+        ready=not reasons,
+        expected_games=expected_games,
+        game_count=len(dataset.games),
+        league_line_count=len(dataset.league_lines),
+        not_ready=sum(1 for game_result in game_results if not game_result.ready),
+    ).info("preflight ready" if not reasons else "preflight not ready")
 
     return PreflightResult(
         ready=not reasons,
