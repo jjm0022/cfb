@@ -47,6 +47,7 @@ from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cf
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
 from pickem.models import Game, Sport
+from pickem.obs.log import configure_logging, run_context
 from pickem.operations.preflight import evaluate_preflight, render_preflight
 from pickem.operations.recommendations import (
     RecommendationDatabaseMissing,
@@ -59,6 +60,12 @@ from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
 
 app = typer.Typer(help="Rank pick'em selections by frozen-line vs market divergence.")
+
+
+@app.callback()
+def _configure() -> None:
+    """Configure logging once, before any command body runs."""
+    configure_logging("pickem")
 
 
 def _store(db: Path) -> Store:
@@ -136,49 +143,52 @@ def poll_odds(
     days: int = typer.Option(7, help="Kickoff window ahead of now that this week occupies"),
 ) -> None:
     """Append a market snapshot for the active week."""
-    if not db.exists():
-        typer.secho(f"no database at {db}; run ingest-cbs first", fg="red", err=True)
-        raise typer.Exit(code=1)
+    with run_context(
+        "cli:poll-odds", sport=sport.value, season=season, week=week, db=str(db)
+    ):
+        if not db.exists():
+            typer.secho(f"no database at {db}; run ingest-cbs first", fg="red", err=True)
+            raise typer.Exit(code=1)
 
-    now = datetime.now(tz=UTC)
-    try:
-        # Keep the existing CLI-level OddsClient seam so offline CLI tests and
-        # callers that provide a transport continue to work after extraction.
-        result = poll_odds_snapshot(
-            db,
-            sport,
-            season,
-            week,
-            now,
-            days=days,
-            client_factory=OddsClient,
-        )
-    except RecommendationDatabaseMissing:
-        # The existence check above preserves the original user-facing path;
-        # this also protects the race where the file disappears between checks.
-        typer.secho(f"no database at {db}; run ingest-cbs first", fg="red", err=True)
-        raise typer.Exit(code=1) from None
-    except RecommendationSlateMissing as exc:
-        typer.secho(str(exc), fg="red", err=True)
-        raise typer.Exit(code=1) from exc
-    except QuotaExhausted as exc:
-        typer.secho(
-            f"odds quota exhausted: {exc}; reports will use cached snapshots",
-            fg="yellow",
-            err=True,
-        )
-        raise typer.Exit(code=2) from exc
-    except OddsApiError as exc:
-        typer.secho(f"odds feed unavailable: {exc}", fg="red", err=True)
-        raise typer.Exit(code=1) from exc
-    except UnknownTeamError as exc:
-        # Still fail loud — an in-window team we cannot name is a real gap —
-        # but name it instead of raising a traceback at the user.
-        typer.secho(f"unresolved team in the kickoff window: {exc}", fg="red", err=True)
-        raise typer.Exit(code=1) from exc
+        now = datetime.now(tz=UTC)
+        try:
+            # Keep the existing CLI-level OddsClient seam so offline CLI tests and
+            # callers that provide a transport continue to work after extraction.
+            result = poll_odds_snapshot(
+                db,
+                sport,
+                season,
+                week,
+                now,
+                days=days,
+                client_factory=OddsClient,
+            )
+        except RecommendationDatabaseMissing:
+            # The existence check above preserves the original user-facing path;
+            # this also protects the race where the file disappears between checks.
+            typer.secho(f"no database at {db}; run ingest-cbs first", fg="red", err=True)
+            raise typer.Exit(code=1) from None
+        except RecommendationSlateMissing as exc:
+            typer.secho(str(exc), fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        except QuotaExhausted as exc:
+            typer.secho(
+                f"odds quota exhausted: {exc}; reports will use cached snapshots",
+                fg="yellow",
+                err=True,
+            )
+            raise typer.Exit(code=2) from exc
+        except OddsApiError as exc:
+            typer.secho(f"odds feed unavailable: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        except UnknownTeamError as exc:
+            # Still fail loud — an in-window team we cannot name is a real gap —
+            # but name it instead of raising a traceback at the user.
+            typer.secho(f"unresolved team in the kickoff window: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
 
-    typer.echo(f"appended {len(result.lines)} market lines")
-    _warn_skipped("market rows not stored", result.skipped)
+        typer.echo(f"appended {len(result.lines)} market lines")
+        _warn_skipped("market rows not stored", result.skipped)
 
 
 @app.command("preflight")
@@ -227,55 +237,56 @@ def report(
     out: Path = typer.Option(None, help="Also write the sheet to this markdown file"),
 ) -> None:
     """Render the ranked pick sheet."""
-    now = datetime.now(tz=UTC)
-    try:
-        snapshot = generate_recommendations(db, sport, season, week, now)
-    except MissingGameError as exc:
-        typer.secho(f"cannot resolve a tiebreak: {exc}", fg="red", err=True)
-        raise typer.Exit(code=1) from exc
+    with run_context("cli:report", sport=sport.value, season=season, week=week, db=str(db)):
+        now = datetime.now(tz=UTC)
+        try:
+            snapshot = generate_recommendations(db, sport, season, week, now)
+        except MissingGameError as exc:
+            typer.secho(f"cannot resolve a tiebreak: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
 
-    with _store(db) as store:
-        dataset = store.load_week(sport, season, week)
-        games = dataset.games
+        with _store(db) as store:
+            dataset = store.load_week(sport, season, week)
+            games = dataset.games
 
-        # Games the market never repriced fall through to the rating, built
-        # from every completed game already stored — prior seasons included,
-        # without which every early-season rating is still the initial value.
-        market = dataset.market_lines
-        newest = max((line.captured_at for line in market), default=None)
-        history = store.games_before(sport, season, week)
-        untrained = not any(
-            game.home_score is not None and game.away_score is not None for game in history
-        )
-        # The caveat belongs in the artifact, not only in the terminal — a
-        # written sheet has to carry the standing of its own numbers.
-        provenance = "CBS frozen league lines vs latest stored market consensus"
-        if untrained:
-            provenance += (
-                "; NO completed games stored, so every tiebreak rating is still "
-                "the initial value and reduces to home field"
+            # Games the market never repriced fall through to the rating, built
+            # from every completed game already stored — prior seasons included,
+            # without which every early-season rating is still the initial value.
+            market = dataset.market_lines
+            newest = max((line.captured_at for line in market), default=None)
+            history = store.games_before(sport, season, week)
+            untrained = not any(
+                game.home_score is not None and game.away_score is not None for game in history
             )
+            # The caveat belongs in the artifact, not only in the terminal — a
+            # written sheet has to carry the standing of its own numbers.
+            provenance = "CBS frozen league lines vs latest stored market consensus"
+            if untrained:
+                provenance += (
+                    "; NO completed games stored, so every tiebreak rating is still "
+                    "the initial value and reduces to home field"
+                )
 
-        age = (now - newest).total_seconds() / 60 if newest else None
-        sheet = render_sheet(
-            snapshot.edges,
-            games,
-            generated_at=now,
-            provenance=provenance,
-            snapshot_age_minutes=age,
-        )
-        typer.echo(sheet)
-        if untrained:
-            typer.secho(
-                "warning: no completed games in the store, so every tiebreak "
-                "rating is still the initial value and reduces to home field",
-                fg="yellow",
-                err=True,
+            age = (now - newest).total_seconds() / 60 if newest else None
+            sheet = render_sheet(
+                snapshot.edges,
+                games,
+                generated_at=now,
+                provenance=provenance,
+                snapshot_age_minutes=age,
             )
-        if out:
-            out.write_text(sheet)
-        # Recorded so the live picks can be graded against the backtest later.
-        store.record_picks(snapshot.edges, season, week, now)
+            typer.echo(sheet)
+            if untrained:
+                typer.secho(
+                    "warning: no completed games in the store, so every tiebreak "
+                    "rating is still the initial value and reduces to home field",
+                    fg="yellow",
+                    err=True,
+                )
+            if out:
+                out.write_text(sheet)
+            # Recorded so the live picks can be graded against the backtest later.
+            store.record_picks(snapshot.edges, season, week, now)
 
 
 @app.command("sync-results")

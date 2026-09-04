@@ -8,6 +8,37 @@ from pickem.obs.log import configure_logging, run_context
 SECRET = "sk-live-abcdef0123456789"
 
 
+def test_cli_callback_configures_logging(tmp_path, monkeypatch):
+    """Catches a CLI invocation that skips logging setup before command work."""
+    from typer.testing import CliRunner
+
+    from pickem.cli import app
+
+    log_directory = tmp_path / "logs"
+    monkeypatch.setenv("PICKEM_LOG_DIR", str(log_directory))
+    monkeypatch.setenv("PICKEM_LOG_CONSOLE", "off")
+    try:
+        result = CliRunner().invoke(
+            app,
+            [
+                "poll-odds",
+                "--sport",
+                "nfl",
+                "--season",
+                "2026",
+                "--week",
+                "1",
+                "--db",
+                str(tmp_path / "missing.duckdb"),
+            ],
+        )
+    finally:
+        logger.remove()
+
+    assert result.exit_code == 1
+    assert log_directory.is_dir()
+
+
 @pytest.fixture
 def log_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ODDS_API_KEY", SECRET)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,10 +17,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from discord import app_commands
 from discord.ext import commands
+from loguru import logger
 
 from pickem import config
 from pickem.automation.monitor import MonitorScope, RecommendationMonitor, RefreshResult
 from pickem.models import Game, Side, Sport, Tier
+from pickem.obs.log import configure_logging
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
 from pickem.resolve.resolver import TeamResolver
 from pickem.store.db import AutomationState, Store
@@ -30,7 +31,6 @@ EASTERN = ZoneInfo("America/New_York")
 DEFAULT_CONFIG_PATH = Path("config/discord-bot.yaml")
 REMINDER_MESSAGE = "Reminder: submit this week's picks."
 PRIVATE_MESSAGE = "This bot is private."
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -115,17 +115,16 @@ def build_schedule(
         callback = getattr(refresh, "refresh", refresh)
         result = await _invoke(callback)
         if isinstance(result, RefreshResult) and result.error is not None:
-            logger.error(
-                "scheduled recommendation refresh failed: %s",
-                _scheduled_error_message(settings, result.error),
+            logger.bind(event="refresh_failed").error(
+                _scheduled_error_message(settings, result.error)
             )
         elif isinstance(result, tuple):
-            for _, scope_result in result:
+            for scope, scope_result in result:
                 if scope_result.error is not None:
-                    logger.error(
-                        "scheduled recommendation refresh failed: %s",
-                        _scheduled_error_message(settings, scope_result.error),
-                    )
+                    logger.bind(
+                        event="refresh_failed",
+                        scope=f"{scope.sport.value}/{scope.season}/wk{scope.week}",
+                    ).error(_scheduled_error_message(settings, scope_result.error))
 
     scheduler.add_job(
         reminder_job,
@@ -610,7 +609,9 @@ build_bot = create_bot
 
 
 def main() -> None:
+    configure_logging("pickem", console="off")
     settings = DiscordSettings.from_env()
+    logger.bind(event="bot_starting", db=str(settings.db)).info("starting discord bot")
     create_bot(settings).run(settings.token)
 
 

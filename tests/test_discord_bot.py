@@ -467,14 +467,18 @@ def test_build_schedule_adds_tuesday_reminder_and_weekday_refreshes(settings):
 
 
 @pytest.mark.asyncio
-async def test_scheduled_refresh_logs_a_result_error(settings, caplog):
+async def test_scheduled_refresh_logs_a_result_error(settings, records):
     monitor = FakeMonitor(RefreshResult(changed=False, error=RuntimeError("quota exhausted")))
     scheduler = FakeScheduler()
     build_schedule(settings, monitor, lambda _message: None, scheduler)
 
     await scheduler.jobs[1].func()
 
-    assert "quota exhausted" in caplog.text
+    failures = [record for record in records if record["extra"].get("event") == "refresh_failed"]
+    assert len(failures) == 1
+    assert failures[0]["extra"]["event"] == "refresh_failed"
+    assert "scope" not in failures[0]["extra"]
+    assert failures[0]["message"] == "RuntimeError: quota exhausted"
 
 
 @pytest.mark.asyncio
