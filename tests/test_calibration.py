@@ -1,5 +1,7 @@
+import json
 from datetime import UTC, datetime, timedelta
 
+from loguru import logger
 from typer.testing import CliRunner
 
 from pickem import cli
@@ -242,6 +244,29 @@ def test_the_cli_says_so_plainly_when_no_paste_has_been_ingested(tmp_path):
     assert result.exit_code == 0, result.output
     assert "no CBS line could be compared" in result.output
     assert "0.00" not in result.output
+
+
+def test_empty_calibration_exits_cleanly_inside_run_context(tmp_path, monkeypatch):
+    """A successful empty calibration must finish without a false ERROR."""
+    log_dir = tmp_path / "logs"
+    monkeypatch.setenv("PICKEM_LOG_DIR", str(log_dir))
+    monkeypatch.setenv("PICKEM_LOG_CONSOLE", "off")
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["calibrate", "--season", "2025", "--db", str(tmp_path / "empty.duckdb")],
+    )
+
+    assert result.exit_code == 0, result.output
+    logger.complete()
+    rows = [
+        json.loads(line)
+        for line in (log_dir / "pickem.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert sum(row["event"] == "run_finished" for row in rows) == 1
+    assert not any(row["event"] == "run_failed" for row in rows)
+    assert not any(row["level"] == "ERROR" for row in rows)
 
 
 def test_a_poll_taken_just_after_the_paste_still_counts():

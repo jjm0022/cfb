@@ -570,7 +570,7 @@ def calibrate_cmd(
                 fg="yellow",
             )
             _warn_skipped("league lines not calibrated", result.skipped)
-            raise typer.Exit(0)
+            return
 
         noun = "line" if result.compared == 1 else "lines"
         typer.echo(

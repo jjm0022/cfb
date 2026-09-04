@@ -23,3 +23,17 @@
   `src/pickem/backtest/calibration.py`, `src/pickem/cli.py`,
   `tests/test_backtest_runner.py`, `tests/test_calibration.py`,
   `tests/test_cli.py`.
+
+## Fix round 1
+
+- Finding: the empty-result `calibrate` CLI path raised `typer.Exit(0)` inside
+  `run_context`, which produced a false traceback-bearing `run_failed` ERROR
+  and skipped `run_finished`.
+- Fix: return normally after the existing empty-result output. Typer retains
+  the successful exit code and the context now closes normally.
+- RED/GREEN evidence: the sink-backed regression failed with `0` finished
+  rows before the fix and passes after it, asserting exit 0, exactly one
+  `run_finished`, and no ERROR rows.
+- Verification: owned calibration/CLI tests and Ruff pass; no concurrent
+  ContextVar or pre-existing teardown issue was changed.
+- Fix commit: follow-up to `089d7fc` (Task 9 fix round 1).
