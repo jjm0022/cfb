@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from statistics import median
 
 from loguru import logger
@@ -35,14 +36,60 @@ class Thresholds(BaseModel):
     lean: float = 1.0
 
 
+@dataclass(frozen=True)
+class _DecisionEvent:
+    level: str
+    message: str
+    fields: dict[str, object]
+
+
 _DECISION_LOGGING_ENABLED: ContextVar[bool] = ContextVar(
     "pickem_decision_logging_enabled", default=True
+)
+_DECISION_LOG_BUFFER: ContextVar[list[_DecisionEvent] | None] = ContextVar(
+    "pickem_decision_log_buffer", default=None
 )
 
 
 def _decision_logging_enabled() -> bool:
     """Return whether decision-layer records are enabled in this context."""
     return _DECISION_LOGGING_ENABLED.get()
+
+
+def _write_decision_event(event: _DecisionEvent) -> None:
+    logger.bind(**event.fields).log(event.level, event.message)
+
+
+def _emit_decision_event(level: str, message: str, **fields: object) -> None:
+    """Emit immediately or retain a decision record for a successful pipeline."""
+    if not _decision_logging_enabled():
+        return
+    event = _DecisionEvent(level, message, fields)
+    buffer = _DECISION_LOG_BUFFER.get()
+    if buffer is None:
+        _write_decision_event(event)
+    else:
+        buffer.append(event)
+
+
+@contextmanager
+def _buffer_decision_logging() -> Iterator[None]:
+    """Commit decision records only when the enclosed operation succeeds."""
+    parent = _DECISION_LOG_BUFFER.get()
+    token = _DECISION_LOG_BUFFER.set([])
+    try:
+        yield
+    except BaseException:
+        _DECISION_LOG_BUFFER.reset(token)
+        raise
+    else:
+        buffered = _DECISION_LOG_BUFFER.get()
+        _DECISION_LOG_BUFFER.reset(token)
+        if parent is not None:
+            parent.extend(buffered or [])
+        elif _decision_logging_enabled():
+            for event in buffered or []:
+                _write_decision_event(event)
 
 
 @contextmanager
@@ -76,15 +123,16 @@ def consensus_spread(lines: Sequence[MarketLine]) -> float | None:
         if current is None or line.captured_at > current.captured_at:
             latest[line.book] = line
     result = median(line.spread_home for line in latest.values())
-    if _decision_logging_enabled():
-        logger.bind(
-            event="consensus_computed",
-            game_id=next(iter(latest.values())).game_id,
-            consensus=result,
-            books_used=len(latest),
-            snapshots_collapsed=len(lines) - len(latest),
-            per_book={book: line.spread_home for book, line in latest.items()},
-        ).debug(f"consensus {result:+.1f} across {len(latest)} books")
+    _emit_decision_event(
+        "DEBUG",
+        f"consensus {result:+.1f} across {len(latest)} books",
+        event="consensus_computed",
+        game_id=next(iter(latest.values())).game_id,
+        consensus=result,
+        books_used=len(latest),
+        snapshots_collapsed=len(lines) - len(latest),
+        per_book={book: line.spread_home for book, line in latest.items()},
+    )
     return result
 
 
@@ -110,17 +158,18 @@ def _compute_edge(
     if consensus is None:
         # Never skipped. A game with no market is surfaced as NO_MARKET so the
         # caller can fall through to the tiebreak rating with its eyes open.
-        if _decision_logging_enabled():
-            logger.bind(
-                event="edge_measured",
-                game_id=league.game_id,
-                tier=Tier.NO_MARKET.value,
-                league_spread=league.spread_home,
-                market_spread=None,
-                delta=0.0,
-                threshold_strong=thresholds.strong,
-                threshold_lean=thresholds.lean,
-            ).debug("no market line available")
+        _emit_decision_event(
+            "DEBUG",
+            "no market line available",
+            event="edge_measured",
+            game_id=league.game_id,
+            tier=Tier.NO_MARKET.value,
+            league_spread=league.spread_home,
+            market_spread=None,
+            delta=0.0,
+            threshold_strong=thresholds.strong,
+            threshold_lean=thresholds.lean,
+        )
         return Edge(
             game_id=league.game_id,
             side=Side.HOME,
@@ -135,18 +184,19 @@ def _compute_edge(
     side = Side.HOME if delta > 0 else Side.AWAY
     moved_toward = "home" if delta > 0 else "away"
     tier = _tier(delta, thresholds)
-    if _decision_logging_enabled():
-        logger.bind(
-            event="edge_measured",
-            game_id=league.game_id,
-            tier=tier.value,
-            side=side.value,
-            league_spread=league.spread_home,
-            market_spread=consensus,
-            delta=delta,
-            threshold_strong=thresholds.strong,
-            threshold_lean=thresholds.lean,
-        ).debug(f"{abs(delta):.1f} pts toward {moved_toward}")
+    _emit_decision_event(
+        "DEBUG",
+        f"{abs(delta):.1f} pts toward {moved_toward}",
+        event="edge_measured",
+        game_id=league.game_id,
+        tier=tier.value,
+        side=side.value,
+        league_spread=league.spread_home,
+        market_spread=consensus,
+        delta=delta,
+        threshold_strong=thresholds.strong,
+        threshold_lean=thresholds.lean,
+    )
     return Edge(
         game_id=league.game_id,
         side=side,
@@ -164,10 +214,11 @@ def _compute_edge(
 def rank_edges(edges: Sequence[Edge]) -> list[Edge]:
     """Most divergent first — the order the pick sheet is read in."""
     ranked = sorted(edges, key=lambda e: abs(e.delta), reverse=True)
-    if _decision_logging_enabled():
-        logger.bind(
-            event="edges_ranked",
-            count=len(ranked),
-            order=[edge.game_id for edge in ranked],
-        ).info(f"ranked {len(ranked)} edges")
+    _emit_decision_event(
+        "INFO",
+        f"ranked {len(ranked)} edges",
+        event="edges_ranked",
+        count=len(ranked),
+        order=[edge.game_id for edge in ranked],
+    )
     return ranked

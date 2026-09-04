@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from pickem.edge import pipeline as pipeline_module
 from pickem.edge.divergence import Thresholds, rank_edges, suppress_decision_logging
 from pickem.edge.elo import EloConfig
 from pickem.edge.pipeline import MissingGameError, decide_edges, predict_tiebreaker_total
@@ -106,6 +107,25 @@ def test_a_missing_tiebreak_game_does_not_emit_decision_logs(records):
         "edges_ranked",
     }
     assert not any(r["extra"].get("event") in decision_events for r in records)
+
+
+def test_decide_edges_measures_each_edge_once(monkeypatch, records):
+    original_compute_edge = pipeline_module._compute_edge
+    calls = 0
+
+    def counted_compute_edge(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_compute_edge(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, "_compute_edge", counted_compute_edge)
+
+    [edge] = decide_edges([league(-3.0)], [market(-6.0)], [], HISTORY)
+
+    assert calls == 1
+    measured = [r for r in records if r["extra"].get("event") == "edge_measured"]
+    assert len(measured) == 1
+    assert measured[0]["extra"]["game_id"] == edge.game_id
 
 
 @pytest.mark.parametrize(
