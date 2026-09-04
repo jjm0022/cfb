@@ -12,7 +12,14 @@ from collections import defaultdict
 from collections.abc import Sequence
 from statistics import median
 
-from pickem.edge.divergence import Thresholds, _compute_edge
+from loguru import logger
+
+from pickem.edge.divergence import (
+    Thresholds,
+    _compute_edge,
+    _decision_logging_enabled,
+    suppress_decision_logging,
+)
 from pickem.edge.elo import EloConfig, build_ratings, projected_margin, tiebreak_side
 from pickem.models import Edge, Game, LeagueLine, MarketLine, Tier
 
@@ -36,11 +43,40 @@ def decide_edges(
     for line in market_lines:
         market_by_game[line.game_id].append(line)
 
+    # A missing game is an error, not a decision. Probe the measurement stage
+    # first so it cannot emit records before the later tiebreak validation
+    # raises. The real measurement below still owns all normal event details.
+    game_ids = {game.game_id for game in games}
+    effective_thresholds = thresholds or Thresholds()
+    for league in league_lines:
+        if league.game_id in game_ids:
+            continue
+        with suppress_decision_logging():
+            measured = _compute_edge(
+                league, market_by_game.get(league.game_id, []), effective_thresholds
+            )
+        if measured.tier in _TIEBREAK_TIERS:
+            raise MissingGameError(
+                f"{league.game_id} needs a {measured.tier.value} tiebreak but has no game record"
+            )
+
     measured = [
         _compute_edge(league, market_by_game.get(league.game_id, []), thresholds)
         for league in league_lines
     ]
-    return _apply_tiebreaks(measured, games, history, elo_config)
+    decided = _apply_tiebreaks(measured, games, history, elo_config)
+    if _decision_logging_enabled():
+        for edge in decided:
+            logger.bind(
+                event="edge_decided",
+                game_id=edge.game_id,
+                side=edge.side.value,
+                tier=edge.tier.value,
+                delta=round(edge.delta, 3),
+                league_spread=edge.league_spread,
+                market_spread=edge.market_spread,
+            ).info(edge.rationale)
+    return decided
 
 
 def _apply_tiebreaks(
@@ -70,6 +106,19 @@ def _apply_tiebreaks(
 
         margin = projected_margin(ratings, game.home_team_id, game.away_team_id, config)
         side = tiebreak_side(margin, edge.league_spread)
+        if _decision_logging_enabled():
+            logger.bind(
+                event="tiebreak_applied",
+                game_id=edge.game_id,
+                tier=edge.tier.value,
+                home_team_id=game.home_team_id,
+                away_team_id=game.away_team_id,
+                home_rating=ratings.get(game.home_team_id, config.initial),
+                away_rating=ratings.get(game.away_team_id, config.initial),
+                projected_margin=margin,
+                league_spread=edge.league_spread,
+                side=side.value,
+            ).info(f"Elo tiebreak projects home by {margin:+.1f}")
         resolved.append(
             edge.model_copy(
                 update={

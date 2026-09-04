@@ -13,9 +13,12 @@ Sign convention (everything is home-perspective):
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from statistics import median
 
+from loguru import logger
 from pydantic import BaseModel
 
 from pickem.models import Edge, LeagueLine, MarketLine, Side, Tier
@@ -32,6 +35,32 @@ class Thresholds(BaseModel):
     lean: float = 1.0
 
 
+_DECISION_LOGGING_ENABLED: ContextVar[bool] = ContextVar(
+    "pickem_decision_logging_enabled", default=True
+)
+
+
+def _decision_logging_enabled() -> bool:
+    """Return whether decision-layer records are enabled in this context."""
+    return _DECISION_LOGGING_ENABLED.get()
+
+
+@contextmanager
+def suppress_decision_logging() -> Iterator[None]:
+    """Temporarily suppress decision-layer records in the current context.
+
+    Backtesting and calibration can call the decision engine repeatedly without
+    producing a record for every replay. Context-local state keeps concurrent
+    runs isolated, and resetting the token restores the prior setting for
+    nested contexts and exceptions.
+    """
+    token = _DECISION_LOGGING_ENABLED.set(False)
+    try:
+        yield
+    finally:
+        _DECISION_LOGGING_ENABLED.reset(token)
+
+
 def consensus_spread(lines: Sequence[MarketLine]) -> float | None:
     """Median spread across books, using each book's most recent snapshot.
 
@@ -46,7 +75,17 @@ def consensus_spread(lines: Sequence[MarketLine]) -> float | None:
         current = latest.get(line.book)
         if current is None or line.captured_at > current.captured_at:
             latest[line.book] = line
-    return median(line.spread_home for line in latest.values())
+    result = median(line.spread_home for line in latest.values())
+    if _decision_logging_enabled():
+        logger.bind(
+            event="consensus_computed",
+            game_id=next(iter(latest.values())).game_id,
+            consensus=result,
+            books_used=len(latest),
+            snapshots_collapsed=len(lines) - len(latest),
+            per_book={book: line.spread_home for book, line in latest.items()},
+        ).debug(f"consensus {result:+.1f} across {len(latest)} books")
+    return result
 
 
 def _tier(delta: float, thresholds: Thresholds) -> Tier:
@@ -71,6 +110,17 @@ def _compute_edge(
     if consensus is None:
         # Never skipped. A game with no market is surfaced as NO_MARKET so the
         # caller can fall through to the tiebreak rating with its eyes open.
+        if _decision_logging_enabled():
+            logger.bind(
+                event="edge_measured",
+                game_id=league.game_id,
+                tier=Tier.NO_MARKET.value,
+                league_spread=league.spread_home,
+                market_spread=None,
+                delta=0.0,
+                threshold_strong=thresholds.strong,
+                threshold_lean=thresholds.lean,
+            ).debug("no market line available")
         return Edge(
             game_id=league.game_id,
             side=Side.HOME,
@@ -84,11 +134,24 @@ def _compute_edge(
     delta = league.spread_home - consensus
     side = Side.HOME if delta > 0 else Side.AWAY
     moved_toward = "home" if delta > 0 else "away"
+    tier = _tier(delta, thresholds)
+    if _decision_logging_enabled():
+        logger.bind(
+            event="edge_measured",
+            game_id=league.game_id,
+            tier=tier.value,
+            side=side.value,
+            league_spread=league.spread_home,
+            market_spread=consensus,
+            delta=delta,
+            threshold_strong=thresholds.strong,
+            threshold_lean=thresholds.lean,
+        ).debug(f"{abs(delta):.1f} pts toward {moved_toward}")
     return Edge(
         game_id=league.game_id,
         side=side,
         delta=delta,
-        tier=_tier(delta, thresholds),
+        tier=tier,
         league_spread=league.spread_home,
         market_spread=consensus,
         rationale=(
@@ -100,4 +163,11 @@ def _compute_edge(
 
 def rank_edges(edges: Sequence[Edge]) -> list[Edge]:
     """Most divergent first — the order the pick sheet is read in."""
-    return sorted(edges, key=lambda e: abs(e.delta), reverse=True)
+    ranked = sorted(edges, key=lambda e: abs(e.delta), reverse=True)
+    if _decision_logging_enabled():
+        logger.bind(
+            event="edges_ranked",
+            count=len(ranked),
+            order=[edge.game_id for edge in ranked],
+        ).info(f"ranked {len(ranked)} edges")
+    return ranked

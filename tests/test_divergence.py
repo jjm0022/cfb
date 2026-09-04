@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
 
-from pickem.edge.divergence import consensus_spread, rank_edges
-from pickem.models import Edge, MarketLine, Side, Tier
+import pytest
+
+from pickem.edge.divergence import Thresholds, _compute_edge, consensus_spread, rank_edges
+from pickem.models import Edge, LeagueLine, MarketLine, Side, Tier
 
 GID = "nfl-2025-03-BUF-at-MIA"
 T0 = datetime(2025, 9, 16, tzinfo=UTC)
@@ -83,3 +85,83 @@ def test_rank_edges_keeps_no_market_and_tied_edges_in_a_defined_order():
         ]
     )
     assert [edge.game_id for edge in ranked] == ["e", "b", "c", "a", "d"]
+
+
+def test_edge_measurement_records_the_thresholds_in_effect(records):
+    edge = _compute_edge(
+        LeagueLine(game_id="g1", season=2025, week=3, spread_home=-3.5, posted_at=T1),
+        [
+            MarketLine(
+                game_id="g1",
+                source="oddsapi",
+                book="dk",
+                spread_home=-1.5,
+                captured_at=T1,
+            )
+        ],
+    )
+
+    measured = next(r for r in records if r["extra"]["event"] == "edge_measured")
+    assert measured["extra"]["delta"] == pytest.approx(-2.0)
+    assert measured["extra"]["tier"] == edge.tier.value
+    assert measured["extra"]["threshold_strong"] == 2.0
+    assert measured["extra"]["threshold_lean"] == 1.0
+    assert measured["extra"]["side"] == edge.side.value
+
+
+def test_no_market_measurement_records_the_thresholds_in_effect(records):
+    _compute_edge(
+        LeagueLine(game_id="g1", season=2025, week=3, spread_home=-3.5, posted_at=T1),
+        [],
+        Thresholds(strong=4.0, lean=1.5),
+    )
+
+    measured = next(r for r in records if r["extra"]["event"] == "edge_measured")
+    assert measured["extra"]["tier"] == Tier.NO_MARKET.value
+    assert measured["extra"]["league_spread"] == -3.5
+    assert measured["extra"]["market_spread"] is None
+    assert measured["extra"]["delta"] == 0.0
+    assert measured["extra"]["threshold_strong"] == 4.0
+    assert measured["extra"]["threshold_lean"] == 1.5
+
+
+def test_consensus_records_the_books_it_collapsed(records):
+    lines = [
+        market(-1.0, "dk", T0),
+        market(-2.0, "dk", T1),
+        market(-3.0, "fd", T1),
+    ]
+
+    assert consensus_spread(lines) == pytest.approx(-2.5)
+    computed = next(r for r in records if r["extra"]["event"] == "consensus_computed")
+    assert computed["extra"]["books_used"] == 2
+    assert computed["extra"]["snapshots_collapsed"] == 1
+    assert computed["extra"]["per_book"] == {"dk": -2.0, "fd": -3.0}
+
+
+def test_rank_edges_records_the_result_order(records):
+    edges = [
+        Edge(
+            game_id="small",
+            side=Side.HOME,
+            delta=0.5,
+            tier=Tier.COINFLIP,
+            league_spread=-3.0,
+            market_spread=-3.5,
+            rationale="x",
+        ),
+        Edge(
+            game_id="large",
+            side=Side.HOME,
+            delta=6.0,
+            tier=Tier.STRONG,
+            league_spread=-3.0,
+            market_spread=-9.0,
+            rationale="x",
+        ),
+    ]
+
+    assert [edge.game_id for edge in rank_edges(edges)] == ["large", "small"]
+    ranked = next(r for r in records if r["extra"]["event"] == "edges_ranked")
+    assert ranked["extra"]["count"] == 2
+    assert ranked["extra"]["order"] == ["large", "small"]

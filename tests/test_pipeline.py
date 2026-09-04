@@ -2,7 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from pickem.edge.divergence import Thresholds
+from pickem.edge.divergence import Thresholds, rank_edges, suppress_decision_logging
+from pickem.edge.elo import EloConfig
 from pickem.edge.pipeline import MissingGameError, decide_edges, predict_tiebreaker_total
 from pickem.models import Game, LeagueLine, MarketLine, Side, Sport, Tier
 
@@ -93,6 +94,20 @@ def test_a_required_tiebreak_without_a_game_fails_loudly():
         decide_edges([league(-3.0)], [], [], HISTORY)
 
 
+def test_a_missing_tiebreak_game_does_not_emit_decision_logs(records):
+    with pytest.raises(MissingGameError):
+        decide_edges([league(-3.0)], [], [], HISTORY)
+
+    decision_events = {
+        "consensus_computed",
+        "edge_measured",
+        "tiebreak_applied",
+        "edge_decided",
+        "edges_ranked",
+    }
+    assert not any(r["extra"].get("event") in decision_events for r in records)
+
+
 @pytest.mark.parametrize(
     ("league_spread", "market_spread", "expected_side", "expected_delta"),
     [(-3.0, -6.0, Side.HOME, 3.0), (-6.0, -3.0, Side.AWAY, -3.0), (2.0, -1.0, Side.HOME, 3.0)],
@@ -145,3 +160,87 @@ def test_tiebreaker_total_ignores_books_without_a_total():
         market(-3.0).model_copy(update={"book": "b", "total": 45.0}),
     ]
     assert predict_tiebreaker_total(lines) == 45.0
+
+
+def test_every_decided_edge_is_logged_with_its_rationale(records):
+    edges = decide_edges([league(-3.0)], [market(-6.0)], [game()], HISTORY)
+
+    decided = [r for r in records if r["extra"]["event"] == "edge_decided"]
+    assert len(decided) == len(edges)
+    by_game = {r["extra"]["game_id"]: r for r in decided}
+    for edge in edges:
+        assert by_game[edge.game_id]["message"] == edge.rationale
+        assert by_game[edge.game_id]["extra"]["side"] == edge.side.value
+        assert by_game[edge.game_id]["extra"]["tier"] == edge.tier.value
+
+
+def test_tiebreak_log_contains_the_actual_default_ratings(records):
+    [edge] = decide_edges([league(-3.0)], [], [game()], [])
+
+    tiebreak = next(r for r in records if r["extra"]["event"] == "tiebreak_applied")
+    assert tiebreak["extra"]["game_id"] == edge.game_id
+    assert tiebreak["extra"]["tier"] == Tier.NO_MARKET.value
+    assert tiebreak["extra"]["home_team_id"] == "MIA"
+    assert tiebreak["extra"]["away_team_id"] == "BUF"
+    assert tiebreak["extra"]["home_rating"] == 1500.0
+    assert tiebreak["extra"]["away_rating"] == 1500.0
+    assert tiebreak["extra"]["projected_margin"] == pytest.approx(2.0)
+    assert tiebreak["extra"]["league_spread"] == -3.0
+    assert tiebreak["extra"]["side"] == edge.side.value
+
+
+def test_tiebreak_log_contains_ratings_updated_from_history(records):
+    history = [game(gid="history", week=1, home_score=13, away_score=10)]
+    config = EloConfig(k=2.0, home_field=0.0, points_per_elo=0.04, initial=1500.0)
+
+    [edge] = decide_edges([league(-3.0)], [], [game()], history, elo_config=config)
+
+    tiebreak = next(r for r in records if r["extra"]["event"] == "tiebreak_applied")
+    assert tiebreak["extra"]["home_rating"] == pytest.approx(1502.0)
+    assert tiebreak["extra"]["away_rating"] == pytest.approx(1498.0)
+    assert tiebreak["extra"]["projected_margin"] == pytest.approx(0.16)
+    assert tiebreak["extra"]["league_spread"] == -3.0
+    assert tiebreak["extra"]["side"] == edge.side.value
+
+
+def test_decision_logging_suppression_preserves_results_and_resets(records):
+    expected = decide_edges([league(-3.0)], [], [game()], [])
+    records.clear()
+
+    with suppress_decision_logging():
+        actual = decide_edges([league(-3.0)], [], [game()], [])
+        rank_edges(actual)
+
+    assert actual == expected
+    decision_events = {
+        "consensus_computed",
+        "edge_measured",
+        "tiebreak_applied",
+        "edge_decided",
+        "edges_ranked",
+    }
+    assert not any(r["extra"].get("event") in decision_events for r in records)
+
+    decide_edges([league(-3.0)], [], [game()], [])
+    assert any(r["extra"].get("event") == "edge_measured" for r in records)
+
+
+def test_decision_logging_suppression_nests_and_restores_after_exception(records):
+    decision_events = {
+        "consensus_computed",
+        "edge_measured",
+        "tiebreak_applied",
+        "edge_decided",
+        "edges_ranked",
+    }
+
+    with pytest.raises(RuntimeError, match="probe"):
+        with suppress_decision_logging():
+            decide_edges([league(-3.0)], [], [game()], [])
+            with suppress_decision_logging():
+                rank_edges([])
+            assert not any(r["extra"].get("event") in decision_events for r in records)
+            raise RuntimeError("probe")
+
+    decide_edges([league(-3.0)], [], [game()], [])
+    assert any(r["extra"].get("event") == "edge_decided" for r in records)
