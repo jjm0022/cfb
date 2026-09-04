@@ -638,6 +638,15 @@ class PickemBot(commands.Bot):
             try:
                 results = await self._refresh_scopes(season, week)
             except Exception as error:
+                logger.bind(
+                    event="refresh_failed",
+                    phase="command",
+                    command="refresh",
+                    error_type=type(error).__name__,
+                    error_detail=_scheduled_error_detail(self.settings, error),
+                ).opt(
+                    exception=(type(error), error, error.__traceback__),
+                ).error(_scheduled_error_message(self.settings, error))
                 embed = _format_refresh_results((), error=error)
             else:
                 embed = _format_refresh_results(results)

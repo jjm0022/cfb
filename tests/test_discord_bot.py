@@ -771,6 +771,41 @@ async def test_refresh_command_logs_invocation_and_run_facts(settings, records):
 
 
 @pytest.mark.asyncio
+async def test_refresh_command_logs_unexpected_failure_once_with_traceback(
+    settings, records, monkeypatch
+):
+    error = RuntimeError("refresh orchestration exploded")
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    async def raise_refresh(_season, _week):
+        raise error
+
+    monkeypatch.setattr(bot, "_refresh_scopes", raise_refresh)
+
+    await bot.refresh(interaction, season=2026, week=1)
+
+    failures = [r for r in records if r["extra"].get("event") == "refresh_failed"]
+    assert len(failures) == 1
+    failure = failures[0]
+    assert failure["level"].name == "ERROR"
+    assert failure["extra"]["phase"] == "command"
+    assert failure["extra"]["command"] == "refresh"
+    assert failure["extra"]["entry"] == "discord:/refresh"
+    assert failure["extra"]["season"] == 2026
+    assert failure["extra"]["week"] == 1
+    assert failure["extra"]["db"] == str(settings.db)
+    assert failure["extra"]["error_type"] == "RuntimeError"
+    assert failure["extra"]["error_detail"] == "refresh orchestration exploded"
+    assert failure["exception"] is not None
+    exception_type, exception, traceback = failure["exception"]
+    assert exception_type is RuntimeError
+    assert exception is error
+    assert traceback is error.__traceback__
+    assert interaction.events == ["defer", "followup"]
+
+
+@pytest.mark.asyncio
 async def test_status_command_logs_invocation_and_run_facts(settings, records):
     bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
     interaction = FakeInteraction(user_id=settings.owner_id)
