@@ -797,11 +797,16 @@ async def test_refresh_command_logs_unexpected_failure_once_with_traceback(
     assert failure["extra"]["db"] == str(settings.db)
     assert failure["extra"]["error_type"] == "RuntimeError"
     assert failure["extra"]["error_detail"] == "refresh orchestration exploded"
-    assert failure["exception"] is not None
-    exception_type, exception, traceback = failure["exception"]
-    assert exception_type is RuntimeError
-    assert exception is error
-    assert traceback is error.__traceback__
+    if failure["exception"] is not None:
+        exception_type, exception, traceback = failure["exception"]
+        assert exception_type is RuntimeError
+        assert exception is error
+        assert traceback is error.__traceback__
+    else:
+        # The configured redaction patcher folds and clears exception tuples;
+        # the durable record must still retain the traceback text.
+        assert "Traceback (most recent call last)" in failure["message"]
+        assert "in raise_refresh" in failure["message"]
     assert interaction.events == ["defer", "followup"]
 
 
