@@ -10,10 +10,11 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 
+from loguru import logger
 from pydantic import BaseModel
 
 from pickem.backtest.stats import Result, grade_pick, wilson_interval
-from pickem.edge.divergence import Thresholds, consensus_spread
+from pickem.edge.divergence import Thresholds, consensus_spread, suppress_decision_logging
 from pickem.edge.elo import EloConfig
 from pickem.edge.pipeline import decide_edges
 from pickem.models import (
@@ -112,6 +113,41 @@ def split_proxies(
 
 
 def run_backtest(
+    games: Sequence[Game],
+    frozen: Sequence[MarketLine],
+    submission: Sequence[MarketLine],
+    thresholds: Thresholds | None = None,
+    elo_config: EloConfig | None = None,
+) -> BacktestReport:
+    """Replay a sweep while recording only its boundary and aggregate totals."""
+    sports = sorted({game.sport.value for game in games})
+    seasons = sorted({game.season for game in games})
+    logger.bind(
+        event="backtest_started",
+        sport=sports[0] if len(sports) == 1 else None,
+        sports=sports,
+        seasons=seasons,
+        games=len(games),
+        frozen_lines=len(frozen),
+        submission_lines=len(submission),
+    ).info("backtest started")
+
+    with suppress_decision_logging():
+        result = _run_backtest(games, frozen, submission, thresholds, elo_config)
+
+    overall = result.overall
+    logger.bind(
+        event="backtest_finished",
+        graded=overall.wins + overall.losses + overall.pushes,
+        wins=overall.wins,
+        losses=overall.losses,
+        pushes=overall.pushes,
+        skipped=len(result.skipped),
+    ).info(f"backtest graded {overall.wins + overall.losses + overall.pushes} games")
+    return result
+
+
+def _run_backtest(
     games: Sequence[Game],
     frozen: Sequence[MarketLine],
     submission: Sequence[MarketLine],

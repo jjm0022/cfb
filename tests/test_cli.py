@@ -1,5 +1,6 @@
 import hashlib
 import json
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 from typer.testing import CliRunner
@@ -8,6 +9,134 @@ from pickem.backtest.archive import ArchiveRunInterrupted
 from pickem.cli import app
 
 runner = CliRunner()
+
+
+def test_remaining_commands_bind_exact_run_context_entries(tmp_path, monkeypatch):
+    """Every command added after Task 2 has one identifiable run boundary."""
+    calls = []
+
+    @contextmanager
+    def capture_context(entry, **facts):
+        calls.append((entry, facts))
+        yield "test-run"
+
+    monkeypatch.setattr("pickem.cli.run_context", capture_context)
+    monkeypatch.setattr("pickem.cli.load_nfl_games", lambda seasons, resolver: [])
+    monkeypatch.setattr(
+        "pickem.cli.load_nfl_closing_lines",
+        lambda seasons, resolver: type("ClosingLines", (), {"lines": [], "skipped": []})(),
+    )
+    monkeypatch.setattr("pickem.cli.CfbdConfig.from_env", lambda: object())
+    monkeypatch.setattr("pickem.cli.default_games_fetcher", lambda config: object())
+    monkeypatch.setattr(
+        "pickem.cli.load_cfb_games",
+        lambda season, week, resolver, fetcher: [],
+    )
+
+    db = tmp_path / "contexts.duckdb"
+    empty_paste = tmp_path / "empty.txt"
+    empty_paste.write_text("")
+    commands = [
+        (
+            "cli:ingest-cbs",
+            [
+                "ingest-cbs",
+                "--file",
+                str(empty_paste),
+                "--sport",
+                "nfl",
+                "--season",
+                "2025",
+                "--week",
+                "3",
+                "--db",
+                str(db),
+            ],
+        ),
+        (
+            "cli:preflight",
+            [
+                "preflight",
+                "--sport",
+                "nfl",
+                "--season",
+                "2025",
+                "--week",
+                "3",
+                "--expected-games",
+                "1",
+                "--db",
+                str(tmp_path / "missing.duckdb"),
+            ],
+        ),
+        (
+            "cli:sync-results",
+            [
+                "sync-results",
+                "--sport",
+                "cfb",
+                "--season",
+                "2025",
+                "--db",
+                str(db),
+            ],
+        ),
+        ("cli:backfill", ["backfill", "--from", "2025", "--to", "2025", "--db", str(db)]),
+        (
+            "cli:backfill-cfb",
+            [
+                "backfill-cfb",
+                "--from",
+                "2025",
+                "--to",
+                "2025",
+                "--weeks",
+                "1",
+                "--db",
+                str(db),
+            ],
+        ),
+        (
+            "cli:backfill-history",
+            [
+                "backfill-history",
+                "--sport",
+                "nfl",
+                "--from",
+                "2025",
+                "--to",
+                "2025",
+                "--db",
+                str(db),
+            ],
+        ),
+        (
+            "cli:backtest",
+            ["backtest", "--from", "2025", "--to", "2025", "--db", str(db)],
+        ),
+        (
+            "cli:calibrate",
+            [
+                "calibrate",
+                "--sport",
+                "nfl",
+                "--season",
+                "2025",
+                "--db",
+                str(db),
+            ],
+        ),
+    ]
+
+    for expected_entry, command in commands:
+        result = runner.invoke(app, command)
+        assert result.exit_code in {0, 1}, result.output
+        entry, facts = calls[-1]
+        assert entry == expected_entry
+        expected_db = db if expected_entry != "cli:preflight" else tmp_path / "missing.duckdb"
+        assert facts["db"] == str(expected_db)
+
+    assert [entry for entry, _ in calls] == [expected for expected, _ in commands]
 
 
 def _seed_coinflip_experiment(db):

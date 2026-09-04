@@ -15,10 +15,11 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import timedelta
 
+from loguru import logger
 from pydantic import BaseModel
 
-from pickem.edge.divergence import consensus_spread
-from pickem.models import LeagueLine, MarketLine
+from pickem.edge.divergence import consensus_spread, suppress_decision_logging
+from pickem.models import LeagueLine, MarketLine, Sport
 
 # `poll-odds` derives its slate from `league_lines`, so the market snapshot is
 # always captured after the paste it is compared against — never before. The
@@ -64,6 +65,43 @@ class CalibrationReport(BaseModel):
 
 
 def calibrate(
+    league_lines: Sequence[LeagueLine],
+    market_lines: Sequence[MarketLine],
+    source: str | None = None,
+    tolerance: timedelta = DEFAULT_TOLERANCE,
+) -> CalibrationReport:
+    """Run a calibration sweep with boundary and aggregate observability."""
+    sports = sorted(
+        {
+            game_id.split("-", 1)[0]
+            for game_id in {line.game_id for line in league_lines}
+            if game_id.split("-", 1)[0] in {sport.value for sport in Sport}
+        }
+    )
+    seasons = sorted({line.season for line in league_lines})
+    logger.bind(
+        event="calibration_started",
+        sport=sports[0] if len(sports) == 1 else None,
+        sports=sports,
+        seasons=seasons,
+        league_lines=len(league_lines),
+        market_lines=len(market_lines),
+        source=source,
+        tolerance_minutes=tolerance.total_seconds() / 60,
+    ).info("calibration started")
+
+    with suppress_decision_logging():
+        result = _calibrate(league_lines, market_lines, source, tolerance)
+
+    logger.bind(
+        event="calibration_finished",
+        compared=result.compared,
+        skipped=len(result.skipped),
+    ).info(f"calibration compared {result.compared} games")
+    return result
+
+
+def _calibrate(
     league_lines: Sequence[LeagueLine],
     market_lines: Sequence[MarketLine],
     source: str | None = None,

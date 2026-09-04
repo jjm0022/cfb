@@ -103,35 +103,38 @@ def ingest_cbs(
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
     """Parse the CBS pick sheet into frozen league lines."""
-    text = file.read_text() if file else sys.stdin.read()
-    resolver = TeamResolver.default()
-    now = datetime.now(tz=UTC)
-    parser = parse_cbs_html if html else parse_cbs_block
+    with run_context(
+        "cli:ingest-cbs", sport=sport.value, season=season, week=week, db=str(db)
+    ):
+        text = file.read_text() if file else sys.stdin.read()
+        resolver = TeamResolver.default()
+        now = datetime.now(tz=UTC)
+        parser = parse_cbs_html if html else parse_cbs_block
 
-    try:
-        parsed = parser(
-            text, resolver=resolver, sport=sport, season=season, week=week, posted_at=now
-        )
-    except UnknownTeamError as exc:
-        typer.secho(f"unresolved team: {exc}", fg="red", err=True)
-        raise typer.Exit(code=1) from exc
-    except CbsParseError as exc:
-        typer.secho(f"nothing parsed from the paste: {exc}", fg="red", err=True)
-        raise typer.Exit(code=1) from exc
+        try:
+            parsed = parser(
+                text, resolver=resolver, sport=sport, season=season, week=week, posted_at=now
+            )
+        except UnknownTeamError as exc:
+            typer.secho(f"unresolved team: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        except CbsParseError as exc:
+            typer.secho(f"nothing parsed from the paste: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
 
-    typer.echo(f"parsed {len(parsed.games)} games for {sport.value} {season} week {week}")
-    for skipped in parsed.skipped:
-        typer.secho(f"  skipped: {skipped!r}", fg="yellow")
-    if parsed.skipped:
-        raise typer.Exit(code=1)
+        typer.echo(f"parsed {len(parsed.games)} games for {sport.value} {season} week {week}")
+        for skipped in parsed.skipped:
+            typer.secho(f"  skipped: {skipped!r}", fg="yellow")
+        if parsed.skipped:
+            raise typer.Exit(code=1)
 
-    store = _store(db)
-    with store:
-        # Insert-only: the paste carries no scores, so it must never overwrite
-        # what sync-results already established.
-        store.insert_games_if_absent([parsed_game.game for parsed_game in parsed.games])
-        store.upsert_league_lines([parsed_game.league_line for parsed_game in parsed.games])
-        typer.echo(f"ingested {len(parsed.games)} games for {sport.value} {season} week {week}")
+        store = _store(db)
+        with store:
+            # Insert-only: the paste carries no scores, so it must never overwrite
+            # what sync-results already established.
+            store.insert_games_if_absent([parsed_game.game for parsed_game in parsed.games])
+            store.upsert_league_lines([parsed_game.league_line for parsed_game in parsed.games])
+            typer.echo(f"ingested {len(parsed.games)} games for {sport.value} {season} week {week}")
 
 
 @app.command("poll-odds")
@@ -202,30 +205,31 @@ def preflight(
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
     """Check that the live weekly slate is ready for one final report."""
-    if not db.exists():
-        typer.secho(f"no database at {db}; run ingest-cbs first", fg="red", err=True)
-        raise typer.Exit(code=1)
+    with run_context("cli:preflight", sport=sport.value, season=season, week=week, db=str(db)):
+        if not db.exists():
+            typer.secho(f"no database at {db}; run ingest-cbs first", fg="red", err=True)
+            raise typer.Exit(code=1)
 
-    try:
-        with Store(db, read_only=True) as store:
-            dataset = store.load_week(sport, season, week)
-            history = store.games_before(sport, season, week)
-    except duckdb.Error as exc:
-        typer.secho(f"could not read database {db}: {exc}", fg="red", err=True)
-        raise typer.Exit(code=1) from exc
+        try:
+            with Store(db, read_only=True) as store:
+                dataset = store.load_week(sport, season, week)
+                history = store.games_before(sport, season, week)
+        except duckdb.Error as exc:
+            typer.secho(f"could not read database {db}: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
 
-    result = evaluate_preflight(
-        dataset,
-        history,
-        sport=sport,
-        now=datetime.now(tz=UTC),
-        expected_games=expected_games,
-        max_age_minutes=max_age_minutes,
-        min_books=min_books,
-    )
-    typer.echo(render_preflight(result))
-    if not result.ready:
-        raise typer.Exit(code=1)
+        result = evaluate_preflight(
+            dataset,
+            history,
+            sport=sport,
+            now=datetime.now(tz=UTC),
+            expected_games=expected_games,
+            max_age_minutes=max_age_minutes,
+            min_books=min_books,
+        )
+        typer.echo(render_preflight(result))
+        if not result.ready:
+            raise typer.Exit(code=1)
 
 
 @app.command("report")
@@ -297,23 +301,26 @@ def sync_results(
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
     """Pull final scores into the store."""
-    resolver = TeamResolver.default()
-    with _store(db) as store:
-        if sport is Sport.NFL:
-            games = load_nfl_games([season], resolver=resolver)
-        else:
-            if week is None:
-                typer.secho("--week is required for CFB results", fg="red", err=True)
-                raise typer.Exit(code=1)
-            cfbd_config = CfbdConfig.from_env()
-            games = load_cfb_games(
-                season,
-                week,
-                resolver=resolver,
-                fetcher=default_games_fetcher(cfbd_config),
-            )
-        store.upsert_games(games)
-        typer.echo(f"synced {len(games)} {sport.value} games for {season}")
+    with run_context(
+        "cli:sync-results", sport=sport.value, season=season, week=week, db=str(db)
+    ):
+        resolver = TeamResolver.default()
+        with _store(db) as store:
+            if sport is Sport.NFL:
+                games = load_nfl_games([season], resolver=resolver)
+            else:
+                if week is None:
+                    typer.secho("--week is required for CFB results", fg="red", err=True)
+                    raise typer.Exit(code=1)
+                cfbd_config = CfbdConfig.from_env()
+                games = load_cfb_games(
+                    season,
+                    week,
+                    resolver=resolver,
+                    fetcher=default_games_fetcher(cfbd_config),
+                )
+            store.upsert_games(games)
+            typer.echo(f"synced {len(games)} {sport.value} games for {season}")
 
 
 @app.command("backfill")
@@ -323,19 +330,23 @@ def backfill(
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
     """One-time historical load for the backtest."""
-    resolver = TeamResolver.default()
-    seasons = list(range(start, end + 1))
-    with _store(db) as store:
-        games = load_nfl_games(seasons, resolver=resolver)
-        closers = load_nfl_closing_lines(seasons, resolver=resolver)
-        store.upsert_games(games)
-        store.append_market_lines(closers.lines)
-        typer.echo(f"backfilled {len(games)} games and {len(closers.lines)} closing lines")
-        _warn_skipped("rows with no spread", closers.skipped)
-        typer.secho(
-            "openers are still missing; run the Odds API historical backfill to complete the pair",
-            fg="yellow",
-        )
+    with run_context(
+        "cli:backfill", sport=Sport.NFL.value, seasons=f"{start}-{end}", db=str(db)
+    ):
+        resolver = TeamResolver.default()
+        seasons = list(range(start, end + 1))
+        with _store(db) as store:
+            games = load_nfl_games(seasons, resolver=resolver)
+            closers = load_nfl_closing_lines(seasons, resolver=resolver)
+            store.upsert_games(games)
+            store.append_market_lines(closers.lines)
+            typer.echo(f"backfilled {len(games)} games and {len(closers.lines)} closing lines")
+            _warn_skipped("rows with no spread", closers.skipped)
+            typer.secho(
+                "openers are still missing; run the Odds API historical backfill "
+                "to complete the pair",
+                fg="yellow",
+            )
 
 
 @app.command("backfill-cfb")
@@ -350,35 +361,38 @@ def backfill_cfb(
     Scores only — this touches no paid quota. CFBD is free, and the odds
     archive backfill is a separate, paid decision.
     """
-    resolver = TeamResolver.default()
-    fetcher = default_games_fetcher(CfbdConfig.from_env())
+    with run_context(
+        "cli:backfill-cfb", sport=Sport.CFB.value, seasons=f"{start}-{end}", db=str(db)
+    ):
+        resolver = TeamResolver.default()
+        fetcher = default_games_fetcher(CfbdConfig.from_env())
 
-    total = 0
-    with_scores = 0
-    with _store(db) as store:
-        for season in range(start, end + 1):
-            season_games: list[Game] = []
-            for week in range(1, weeks + 1):
-                # An unknown school RAISES here, as everywhere CFBD is read: this
-                # is a curated FBS-vs-FBS feed, not the odds firehose, so a name
-                # we cannot place means the alias table is wrong.
-                season_games.extend(
-                    load_cfb_games(season, week, resolver=resolver, fetcher=fetcher)
-                )
-            store.upsert_games(season_games)
-            scored = sum(1 for g in season_games if g.home_score is not None)
-            total += len(season_games)
-            with_scores += scored
-            typer.echo(f"  {season}: {len(season_games)} games, {scored} with final scores")
+        total = 0
+        with_scores = 0
+        with _store(db) as store:
+            for season in range(start, end + 1):
+                season_games: list[Game] = []
+                for week in range(1, weeks + 1):
+                    # An unknown school RAISES here, as everywhere CFBD is read: this
+                    # is a curated FBS-vs-FBS feed, not the odds firehose, so a name
+                    # we cannot place means the alias table is wrong.
+                    season_games.extend(
+                        load_cfb_games(season, week, resolver=resolver, fetcher=fetcher)
+                    )
+                store.upsert_games(season_games)
+                scored = sum(1 for g in season_games if g.home_score is not None)
+                total += len(season_games)
+                with_scores += scored
+                typer.echo(f"  {season}: {len(season_games)} games, {scored} with final scores")
 
-    # Counted separately: a cancelled game is still a real fixture and is
-    # stored, but it contributes nothing to the rating.
-    typer.echo(f"loaded {total} games, {with_scores} with final scores")
-    if total and not with_scores:
-        typer.secho(
-            "no final scores loaded, so the tiebreak rating is still untrained",
-            fg="yellow",
-        )
+        # Counted separately: a cancelled game is still a real fixture and is
+        # stored, but it contributes nothing to the rating.
+        typer.echo(f"loaded {total} games, {with_scores} with final scores")
+        if total and not with_scores:
+            typer.secho(
+                "no final scores loaded, so the tiebreak rating is still untrained",
+                fg="yellow",
+            )
 
 
 @app.command("backfill-history")
@@ -413,62 +427,70 @@ def backfill_history(
     can be taken back: the `lines` table is append-only, so wrong game ids stay
     forever, and credits are not refundable.
     """
-    snapshot_age_minutes = max_snapshot_age_minutes
-    if snapshot_age_minutes is None:
-        snapshot_age_minutes = 90 if sport is Sport.CFB else 15
-    if execute and sport is Sport.CFB and snapshot_age_minutes != 90:
-        typer.secho(
-            "CFB paid archive backfills require --max-snapshot-age-minutes 90",
-            fg="red",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    if execute and expected_credits is None:
-        typer.secho("--execute requires --expected-credits N", fg="red", err=True)
-        raise typer.Exit(code=1)
-
-    with _store(db) as store:
-        dataset = store.load_seasons(sport, start, end)
-
-        def client_factory() -> OddsClient:
-            return OddsClient(config.odds_api_key())
-
-        archive = ArchiveBackfill(store, TeamResolver.default(), client_factory)
-        try:
-            report = archive.run(
-                dataset.games,
-                max_credits=max_credits,
-                execute=execute,
-                on_progress=_archive_progress,
-                max_submission_age=timedelta(minutes=snapshot_age_minutes),
-                expected_credits=expected_credits,
-                max_new_requests=max_new_requests,
-            )
-        except NoHistoricalGames as exc:
-            typer.secho(f"{exc}; load {sport.value} games first", fg="red", err=True)
-            raise typer.Exit(code=1) from exc
-        except (CreditLimitExceeded, InsufficientCredits, MixedSports, PlannedCostChanged) as exc:
-            typer.secho(str(exc), fg="red", err=True)
-            raise typer.Exit(code=1) from exc
-        except ArchiveRunInterrupted as exc:
-            typer.secho(str(exc), fg="red", err=True)
-            raise typer.Exit(code=1) from exc
-        except (OddsApiError, ValueError) as exc:
-            typer.secho(str(exc), fg="red", err=True)
-            raise typer.Exit(code=1) from exc
-
-        typer.echo(
-            f"{report.planned_snapshots} planned, {report.completed_snapshots} complete, "
-            f"{report.pending_snapshots} pending = {report.pending_credits} credits"
-        )
-        if execute and report.remaining_credits is not None:
-            typer.echo(f"balance: {report.remaining_credits} credits")
-        if not execute:
+    with run_context(
+        "cli:backfill-history", sport=sport.value, seasons=f"{start}-{end}", db=str(db)
+    ):
+        snapshot_age_minutes = max_snapshot_age_minutes
+        if snapshot_age_minutes is None:
+            snapshot_age_minutes = 90 if sport is Sport.CFB else 15
+        if execute and sport is Sport.CFB and snapshot_age_minutes != 90:
             typer.secho(
-                f"dry run — pass --execute --expected-credits {report.pending_credits} "
-                "to purchase pending requests",
-                fg="yellow",
+                "CFB paid archive backfills require --max-snapshot-age-minutes 90",
+                fg="red",
+                err=True,
             )
+            raise typer.Exit(code=1)
+        if execute and expected_credits is None:
+            typer.secho("--execute requires --expected-credits N", fg="red", err=True)
+            raise typer.Exit(code=1)
+
+        with _store(db) as store:
+            dataset = store.load_seasons(sport, start, end)
+
+            def client_factory() -> OddsClient:
+                return OddsClient(config.odds_api_key())
+
+            archive = ArchiveBackfill(store, TeamResolver.default(), client_factory)
+            try:
+                report = archive.run(
+                    dataset.games,
+                    max_credits=max_credits,
+                    execute=execute,
+                    on_progress=_archive_progress,
+                    max_submission_age=timedelta(minutes=snapshot_age_minutes),
+                    expected_credits=expected_credits,
+                    max_new_requests=max_new_requests,
+                )
+            except NoHistoricalGames as exc:
+                typer.secho(f"{exc}; load {sport.value} games first", fg="red", err=True)
+                raise typer.Exit(code=1) from exc
+            except (
+                CreditLimitExceeded,
+                InsufficientCredits,
+                MixedSports,
+                PlannedCostChanged,
+            ) as exc:
+                typer.secho(str(exc), fg="red", err=True)
+                raise typer.Exit(code=1) from exc
+            except ArchiveRunInterrupted as exc:
+                typer.secho(str(exc), fg="red", err=True)
+                raise typer.Exit(code=1) from exc
+            except (OddsApiError, ValueError) as exc:
+                typer.secho(str(exc), fg="red", err=True)
+                raise typer.Exit(code=1) from exc
+
+            typer.echo(
+                f"{report.planned_snapshots} planned, {report.completed_snapshots} complete, "
+                f"{report.pending_snapshots} pending = {report.pending_credits} credits"
+            )
+            if execute and report.remaining_credits is not None:
+                typer.echo(f"balance: {report.remaining_credits} credits")
+            if not execute:
+                typer.secho(
+                    f"dry run — pass --execute --expected-credits {report.pending_credits} "
+                    "to purchase pending requests",
+                    fg="yellow",
+                )
 
 
 @app.command("backtest")
@@ -478,27 +500,30 @@ def backtest(
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
     """Replay history through the live edge code."""
-    with _store(db) as store:
-        dataset = store.load_seasons(Sport.NFL, start, end)
-        games = dataset.games
-        frozen, submission, unclassified = split_proxies(dataset.market_lines)
-        result = run_backtest(games, frozen, submission)
-        typer.echo(
-            f"overall: {result.overall.wins}-{result.overall.losses}-{result.overall.pushes} "
-            f"({result.overall.hit_rate:.1%}, 95% CI "
-            f"{result.overall.ci_low:.1%}–{result.overall.ci_high:.1%})"
-        )
-        for record in result.by_tier:
+    with run_context(
+        "cli:backtest", sport=Sport.NFL.value, seasons=f"{start}-{end}", db=str(db)
+    ):
+        with _store(db) as store:
+            dataset = store.load_seasons(Sport.NFL, start, end)
+            games = dataset.games
+            frozen, submission, unclassified = split_proxies(dataset.market_lines)
+            result = run_backtest(games, frozen, submission)
             typer.echo(
-                f"  {record.tier.value:<10} {record.wins}-{record.losses}-{record.pushes} "
-                f"({record.hit_rate:.1%}, CI {record.ci_low:.1%}–{record.ci_high:.1%})"
+                f"overall: {result.overall.wins}-{result.overall.losses}-{result.overall.pushes} "
+                f"({result.overall.hit_rate:.1%}, 95% CI "
+                f"{result.overall.ci_low:.1%}–{result.overall.ci_high:.1%})"
             )
-        typer.echo("\nAssumptions:")
-        for assumption in result.assumptions:
-            typer.echo(f"  - {assumption}")
-        # A backtest that hides its exclusions reports 0-0-0 without saying why.
-        _warn_skipped("games not graded", result.skipped)
-        _warn_skipped("stored lines that are neither proxy", unclassified)
+            for record in result.by_tier:
+                typer.echo(
+                    f"  {record.tier.value:<10} {record.wins}-{record.losses}-{record.pushes} "
+                    f"({record.hit_rate:.1%}, CI {record.ci_low:.1%}–{record.ci_high:.1%})"
+                )
+            typer.echo("\nAssumptions:")
+            for assumption in result.assumptions:
+                typer.echo(f"  - {assumption}")
+            # A backtest that hides its exclusions reports 0-0-0 without saying why.
+            _warn_skipped("games not graded", result.skipped)
+            _warn_skipped("stored lines that are neither proxy", unclassified)
 
 
 @app.command("calibrate")
@@ -520,51 +545,60 @@ def calibrate_cmd(
     The backtest substitutes an early-week market snapshot for the CBS number.
     This is the check on that substitution.
     """
-    with _store(db) as store:
-        dataset = store.load_weeks(sport, season, from_week, to_week)
-        result = calibrate(
-            dataset.league_lines,
-            dataset.market_lines,
-            source=source,
-            tolerance=timedelta(minutes=tolerance_minutes),
-        )
-
-    if result.compared == 0:
-        # A zero here is the expected state until a real paste is ingested, and
-        # saying so beats printing a bias of 0.0 that reads as perfect agreement.
-        typer.secho(
-            "no CBS line could be compared — ingest a paste with `ingest-cbs`, then "
-            "run `poll-odds` in the same sitting",
-            fg="yellow",
-        )
-        _warn_skipped("league lines not calibrated", result.skipped)
-        raise typer.Exit(0)
-
-    noun = "line" if result.compared == 1 else "lines"
-    typer.echo(f"calibrated {result.compared} CBS {noun} against the market consensus behind them")
-    typer.echo(f"  bias (mean residual):         {result.mean_residual:+.2f} pts")
-    typer.echo(f"  dispersion (mean |residual|):  {result.mean_abs_residual:.2f} pts")
-    typer.echo(
-        f"  agreement: {result.share_exact:.1%} exact, "
-        f"{result.share_within_half:.1%} within 0.5, "
-        f"{result.share_within_one:.1%} within 1.0"
-    )
-    typer.echo("\n  positive bias = the league line sits above the market, which tilts")
-    typer.echo("  picks toward the home side.")
-
-    worst = sorted(result.residuals, key=lambda r: abs(r.residual), reverse=True)[:5]
-    if worst:
-        typer.echo("\nLargest residuals:")
-        for r in worst:
-            typer.echo(
-                f"  {r.game_id}: CBS {r.league_spread:+.1f} vs market "
-                f"{r.market_spread:+.1f} ({r.residual:+.1f})"
+    with run_context(
+        "cli:calibrate",
+        sport=sport.value,
+        season=season,
+        weeks=f"{from_week}-{to_week}",
+        db=str(db),
+    ):
+        with _store(db) as store:
+            dataset = store.load_weeks(sport, season, from_week, to_week)
+            result = calibrate(
+                dataset.league_lines,
+                dataset.market_lines,
+                source=source,
+                tolerance=timedelta(minutes=tolerance_minutes),
             )
 
-    typer.echo("\nAssumptions:")
-    for assumption in result.assumptions:
-        typer.echo(f"  - {assumption}")
-    _warn_skipped("league lines not calibrated", result.skipped)
+        if result.compared == 0:
+            # A zero here is the expected state until a real paste is ingested, and
+            # saying so beats printing a bias of 0.0 that reads as perfect agreement.
+            typer.secho(
+                "no CBS line could be compared — ingest a paste with `ingest-cbs`, then "
+                "run `poll-odds` in the same sitting",
+                fg="yellow",
+            )
+            _warn_skipped("league lines not calibrated", result.skipped)
+            raise typer.Exit(0)
+
+        noun = "line" if result.compared == 1 else "lines"
+        typer.echo(
+            f"calibrated {result.compared} CBS {noun} against the market consensus behind them"
+        )
+        typer.echo(f"  bias (mean residual):         {result.mean_residual:+.2f} pts")
+        typer.echo(f"  dispersion (mean |residual|):  {result.mean_abs_residual:.2f} pts")
+        typer.echo(
+            f"  agreement: {result.share_exact:.1%} exact, "
+            f"{result.share_within_half:.1%} within 0.5, "
+            f"{result.share_within_one:.1%} within 1.0"
+        )
+        typer.echo("\n  positive bias = the league line sits above the market, which tilts")
+        typer.echo("  picks toward the home side.")
+
+        worst = sorted(result.residuals, key=lambda r: abs(r.residual), reverse=True)[:5]
+        if worst:
+            typer.echo("\nLargest residuals:")
+            for r in worst:
+                typer.echo(
+                    f"  {r.game_id}: CBS {r.league_spread:+.1f} vs market "
+                    f"{r.market_spread:+.1f} ({r.residual:+.1f})"
+                )
+
+        typer.echo("\nAssumptions:")
+        for assumption in result.assumptions:
+            typer.echo(f"  - {assumption}")
+        _warn_skipped("league lines not calibrated", result.skipped)
 
 
 @app.command("evaluate-coinflip")

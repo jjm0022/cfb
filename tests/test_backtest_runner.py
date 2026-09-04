@@ -224,6 +224,31 @@ def test_backtest_is_deterministic():
     assert run_backtest(**args) == run_backtest(**args)
 
 
+def test_backtest_logs_summary_totals_and_suppresses_decision_details(records):
+    """A replay has one low-volume boundary pair, not one row per game."""
+    gid = "nfl-2025-03-BUF-at-MIA"
+    result = run_backtest(
+        games=[game(gid, home_score=27, away_score=17)],
+        frozen=[line(gid, -3.0, "open", T_OPEN)],
+        submission=[line(gid, -6.0, "close", T_CLOSE)],
+    )
+
+    started = next(r for r in records if r["extra"]["event"] == "backtest_started")
+    finished = next(r for r in records if r["extra"]["event"] == "backtest_finished")
+    assert started["extra"]["sport"] == "nfl"
+    assert started["extra"]["seasons"] == [2025]
+    assert started["extra"]["games"] == 1
+    assert finished["extra"]["graded"] == (
+        result.overall.wins + result.overall.losses + result.overall.pushes
+    )
+    assert finished["extra"]["skipped"] == len(result.skipped)
+    assert not any(
+        record["extra"].get("event")
+        in {"consensus_computed", "edge_measured", "tiebreak_applied", "edge_decided"}
+        for record in records
+    )
+
+
 # --- proxy classification and consensus --------------------------------------
 
 

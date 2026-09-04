@@ -175,6 +175,22 @@ def test_the_report_states_that_posted_at_is_our_ingest_time():
     assert any("ingest" in a for a in report.assumptions)
 
 
+def test_calibration_logs_summary_totals_and_suppresses_consensus_details(records):
+    """A calibration sweep emits boundaries, not one consensus row per game."""
+    result = calibrate(league_lines=[league(-2.0)], market_lines=[line(-3.0)])
+
+    started = next(r for r in records if r["extra"]["event"] == "calibration_started")
+    finished = next(r for r in records if r["extra"]["event"] == "calibration_finished")
+    assert started["extra"]["seasons"] == [2025]
+    assert started["extra"]["league_lines"] == 1
+    assert started["extra"]["market_lines"] == 1
+    assert finished["extra"]["compared"] == result.compared
+    assert finished["extra"]["skipped"] == len(result.skipped)
+    assert not any(
+        record["extra"].get("event") == "consensus_computed" for record in records
+    )
+
+
 def test_the_cli_reports_the_bias_against_stored_lines(tmp_path):
     """Catches wiring that never joins league_lines to the stored market rows.
 
