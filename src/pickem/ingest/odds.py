@@ -33,11 +33,13 @@ report will ever join on.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 
 import httpx
+from loguru import logger
 
 from pickem.models import (
     FROZEN_SOURCE,
@@ -82,6 +84,68 @@ def _commence_time(value: object) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
+def _skip(skipped: list[str], *, guard: str, message: str, **fields: object) -> None:
+    """Record a dropped row in one place: the result list and the log agree."""
+    skipped.append(message)
+    logger.bind(event="odds_row_skipped", guard=guard, **fields).warning(message)
+
+
+def _request_fields(path: str, params: dict[str, str]) -> dict[str, object]:
+    """Return the safe request facts that are useful while debugging a poll.
+
+    Query parameters are deliberately selected one at a time. In particular,
+    the API key must never be copied into a log record, even if this helper is
+    later reused for another Odds API endpoint.
+    """
+    safe_path = path.split("?", 1)[0]
+    parts = safe_path.strip("/").split("/")
+    try:
+        sport_index = parts.index("sports")
+    except ValueError:
+        sport_key = None
+    else:
+        sport_key = parts[sport_index + 1] if sport_index + 1 < len(parts) else None
+
+    fields: dict[str, object] = {"path": safe_path, "sport_key": sport_key}
+    if "commenceTimeFrom" in params:
+        fields["window_from"] = params["commenceTimeFrom"]
+    if "commenceTimeTo" in params:
+        fields["window_to"] = params["commenceTimeTo"]
+    if "date" in params:
+        fields["date"] = params["date"]
+    return fields
+
+
+def _log_quota(response: httpx.Response) -> None:
+    logger.bind(
+        event="odds_quota",
+        remaining=response.headers.get("x-requests-remaining"),
+        used=response.headers.get("x-requests-used"),
+    ).info("odds api quota")
+
+
+def _log_poll(result: MarketLinesResult, *, sport: Sport, season: int, week: int) -> None:
+    logger.bind(
+        event="odds_polled",
+        sport=sport.value,
+        season=season,
+        week=week,
+        lines=len(result.lines),
+        books=len({line.book for line in result.lines}),
+        games=len({line.game_id for line in result.lines}),
+        skipped=len(result.skipped),
+    ).info(f"polled {len(result.lines)} market lines")
+
+
+def _safe_error_detail(error: BaseException, api_key: str) -> str:
+    """Keep retry diagnostics useful without copying credentials or URLs."""
+    detail = str(error)
+    if api_key:
+        detail = detail.replace(api_key, "***REDACTED***")
+    detail = re.sub(r"(?i)([?&]apiKey=)[^&#\s\"']+", r"\1***REDACTED***", detail)
+    return re.sub(r"(?i)(https?://[^\s?\"']+)\?[^\s\"']+", r"\1", detail)
+
+
 def _parse_events(
     events: list[dict],
     *,
@@ -114,15 +178,25 @@ def _parse_events(
         # resolving first would abort the poll on a school we never wanted.
         kickoff = _commence_time(event.get("commence_time"))
         if kickoff is None:
-            skipped.append(
-                f"{away_name} at {home_name}: unreadable commence_time "
-                f"{event.get('commence_time')!r} — not stored"
+            _skip(
+                skipped,
+                guard="commence_time",
+                raw=event.get("commence_time"),
+                message=(
+                    f"{away_name} at {home_name}: unreadable commence_time "
+                    f"{event.get('commence_time')!r} — not stored"
+                ),
             )
             continue
         if not window_start <= kickoff <= window_end:
-            skipped.append(
-                f"{away_name} at {home_name}: kickoff {kickoff.isoformat()} is outside "
-                f"the {sport.value} {season} week {week} window — not stored"
+            _skip(
+                skipped,
+                guard="kickoff_window",
+                kickoff=kickoff.isoformat(),
+                message=(
+                    f"{away_name} at {home_name}: kickoff {kickoff.isoformat()} is outside "
+                    f"the {sport.value} {season} week {week} window — not stored"
+                ),
             )
             continue
 
@@ -144,14 +218,25 @@ def _parse_events(
                 home_name=home_name,
             )
         except UnknownTeamError as exc:
-            skipped.append(f"{away_name} at {home_name}: not a team we track ({exc}) — not stored")
+            _skip(
+                skipped,
+                guard="unknown_team",
+                away=away_name,
+                home=home_name,
+                message=f"{away_name} at {home_name}: not a team we track ({exc}) — not stored",
+            )
             continue
         game_id = matchup.game_id
 
         if game_id not in wanted:
-            skipped.append(
-                f"{game_id}: not in the {sport.value} {season} week {week} slate "
-                f"(kickoff {kickoff.isoformat()}) — not stored"
+            _skip(
+                skipped,
+                guard="slate",
+                game_id=game_id,
+                message=(
+                    f"{game_id}: not in the {sport.value} {season} week {week} slate "
+                    f"(kickoff {kickoff.isoformat()}) — not stored"
+                ),
             )
             continue
 
@@ -162,7 +247,13 @@ def _parse_events(
                 None,
             )
             if spreads is None:
-                skipped.append(f"{game_id}: {book_key} — no spreads market")
+                _skip(
+                    skipped,
+                    guard="no_spreads_market",
+                    game_id=game_id,
+                    book=book_key,
+                    message=f"{game_id}: {book_key} — no spreads market",
+                )
                 continue
             outcome = next(
                 (
@@ -173,7 +264,13 @@ def _parse_events(
                 None,
             )
             if outcome is None or outcome.get("point") is None:
-                skipped.append(f"{game_id}: {book_key} — no spread")
+                _skip(
+                    skipped,
+                    guard="no_spread_point",
+                    game_id=game_id,
+                    book=book_key,
+                    message=f"{game_id}: {book_key} — no spread",
+                )
                 continue
             lines.append(
                 MarketLine(
@@ -226,6 +323,14 @@ class OddsClient:
         """
         last_error: Exception | None = None
         for attempt in range(MAX_ATTEMPTS):
+            request_fields = _request_fields(path, params)
+            logger.bind(
+                event="odds_request",
+                attempt=attempt + 1,
+                max_attempts=MAX_ATTEMPTS,
+                **request_fields,
+            ).debug(f"GET {request_fields['path']}")
+            retry_status: int | None = None
             try:
                 response = self._client.get(path, params=params)
             except httpx.TransportError as exc:
@@ -233,11 +338,23 @@ class OddsClient:
             else:
                 if response.status_code < 500:
                     return response
+                retry_status = response.status_code
                 last_error = OddsApiError(
                     f"odds api returned {response.status_code}: {response.text}"
                 )
             if attempt < MAX_ATTEMPTS - 1:
-                self._sleep(BACKOFF_SECONDS * (2**attempt))
+                backoff_seconds = BACKOFF_SECONDS * (2**attempt)
+                logger.bind(
+                    event="odds_retry",
+                    attempt=attempt + 1,
+                    max_attempts=MAX_ATTEMPTS,
+                    **request_fields,
+                    status=retry_status,
+                    error_type=type(last_error).__name__,
+                    error_detail=_safe_error_detail(last_error, self._api_key),
+                    backoff_seconds=backoff_seconds,
+                ).warning(f"{request_fields['path']} failed; retrying")
+                self._sleep(backoff_seconds)
         raise OddsApiError(f"odds api unreachable after {MAX_ATTEMPTS} attempts: {last_error}")
 
     def remaining_credits(self) -> int:
@@ -247,6 +364,7 @@ class OddsClient:
             raise QuotaExhausted(f"odds api returned {response.status_code}: {response.text}")
         if response.status_code >= 400:
             raise OddsApiError(f"odds api returned {response.status_code}: {response.text}")
+        _log_quota(response)
         raw = response.headers.get("x-requests-remaining")
         try:
             return int(raw)
@@ -290,8 +408,9 @@ class OddsClient:
             raise QuotaExhausted(f"odds api returned {response.status_code}: {response.text}")
         if response.status_code >= 400:
             raise OddsApiError(f"odds api returned {response.status_code}: {response.text}")
+        _log_quota(response)
 
-        return _parse_events(
+        result = _parse_events(
             response.json(),
             resolver=resolver,
             sport=sport,
@@ -302,6 +421,8 @@ class OddsClient:
             captured_at=now,
             source=LIVE_SOURCE,
         )
+        _log_poll(result, sport=sport, season=season, week=week)
+        return result
 
     def fetch_historical_spreads(
         self,
@@ -339,6 +460,7 @@ class OddsClient:
             raise QuotaExhausted(f"odds api returned {response.status_code}: {response.text}")
         if response.status_code >= 400:
             raise OddsApiError(f"odds api returned {response.status_code}: {response.text}")
+        _log_quota(response)
 
         envelope = response.json()
         # The snapshot's own timestamp, never `at`: the archive answers with the
@@ -351,7 +473,7 @@ class OddsClient:
                 f"unreadable snapshot timestamp {envelope.get('timestamp')!r} — nothing stored"
             )
 
-        return _parse_events(
+        result = _parse_events(
             envelope.get("data") or [],
             resolver=resolver,
             sport=sport,
@@ -363,3 +485,5 @@ class OddsClient:
             source=source,
             snapshot_at=captured_at,
         )
+        _log_poll(result, sport=sport, season=season, week=week)
+        return result

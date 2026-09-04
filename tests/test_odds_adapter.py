@@ -5,7 +5,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from pickem.ingest.odds import NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
+from pickem.ingest.odds import (
+    LIVE_SOURCE,
+    NFL_KEY,
+    OddsApiError,
+    OddsClient,
+    QuotaExhausted,
+    _parse_events,
+)
 from pickem.models import FROZEN_SOURCE, SUBMISSION_SOURCE, Sport
 from pickem.resolve.resolver import TeamResolver
 
@@ -51,9 +58,9 @@ SLATE = {"nfl-2025-03-BUF-at-MIA"}
 WINDOW = (NOW - timedelta(hours=12), NOW + timedelta(days=7))
 
 
-def client_returning(payload, status=200):
+def client_returning(payload, status=200, headers=None):
     def handler(request):
-        return httpx.Response(status, json=payload)
+        return httpx.Response(status, headers=headers, json=payload)
 
     return OddsClient("key", transport=httpx.MockTransport(handler), sleep=lambda _: None)
 
@@ -300,6 +307,163 @@ def test_a_team_we_do_not_track_is_reported_not_raised():
     assert {line.game_id for line in result.lines} == {"nfl-2025-03-BUF-at-MIA"}
     assert any("not a team we track" in row for row in result.skipped)
     assert any("Towson" in row for row in result.skipped)
+
+
+def test_events_outside_the_window_are_logged_with_the_guard_that_dropped_them(records):
+    result = _parse_events(
+        [
+            {
+                "home_team": "Auburn",
+                "away_team": "Baylor",
+                "commence_time": "2026-12-25T00:00:00Z",
+                "bookmakers": [],
+            }
+        ],
+        resolver=TeamResolver.default(),
+        sport=Sport.CFB,
+        season=2026,
+        week=1,
+        slate=set(),
+        window=(datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 9, 8, tzinfo=UTC)),
+        captured_at=datetime(2026, 9, 4, tzinfo=UTC),
+        source=LIVE_SOURCE,
+    )
+
+    assert len(result.skipped) == 1
+    filtered = [r for r in records if r["extra"]["event"] == "odds_row_skipped"]
+    assert len(filtered) == 1
+    assert filtered[0]["level"].name == "WARNING"
+    assert filtered[0]["extra"]["guard"] == "kickoff_window"
+
+
+def test_unmapped_team_is_logged_once_not_twice(records):
+    result = _parse_events(
+        [
+            {
+                "home_team": "Nowhere State",
+                "away_team": "Baylor",
+                "commence_time": "2026-09-04T00:00:00Z",
+                "bookmakers": [],
+            }
+        ],
+        resolver=TeamResolver.default(),
+        sport=Sport.CFB,
+        season=2026,
+        week=1,
+        slate=set(),
+        window=(datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 9, 8, tzinfo=UTC)),
+        captured_at=datetime(2026, 9, 4, tzinfo=UTC),
+        source=LIVE_SOURCE,
+    )
+
+    assert len(result.skipped) == 1
+    emitted = [r for r in records if r["extra"]["event"] == "odds_row_skipped"]
+    assert len(emitted) == 1
+    assert emitted[0]["extra"]["guard"] == "unknown_team"
+
+
+def test_request_records_include_safe_endpoint_and_window_facts(records):
+    fetch(client_returning(PAYLOAD))
+
+    request_records = [r for r in records if r["extra"].get("event") == "odds_request"]
+    assert len(request_records) == 1
+    extra = request_records[0]["extra"]
+    assert extra["path"] == "/sports/americanfootball_nfl/odds"
+    assert extra["sport_key"] == NFL_KEY
+    assert extra["window_from"] == "2025-09-21T00:00:00Z"
+    assert extra["window_to"] == "2025-09-28T12:00:00Z"
+    assert extra["attempt"] == 1
+    assert extra["max_attempts"] == 3
+    assert "params" not in extra
+    assert "apiKey" not in repr(extra)
+    assert "apiKey" not in request_records[0]["message"]
+
+
+def test_retry_records_include_status_error_and_backoff_without_credentials(records):
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(
+            503,
+            text="upstream unavailable at https://api.example.test/odds?apiKey=secret-api-key",
+        )
+
+    client = OddsClient(
+        "secret-api-key", transport=httpx.MockTransport(handler), sleep=lambda _: None
+    )
+    with pytest.raises(OddsApiError):
+        fetch(client)
+
+    retries = [r for r in records if r["extra"].get("event") == "odds_retry"]
+    assert len(attempts) == 3
+    assert len(retries) == 2
+    assert [r["extra"]["status"] for r in retries] == [503, 503]
+    assert [r["extra"]["backoff_seconds"] for r in retries] == [0.5, 1.0]
+    assert all(r["extra"]["error_type"] == "OddsApiError" for r in retries)
+    assert all("upstream unavailable" in r["extra"]["error_detail"] for r in retries)
+    assert all(r["extra"]["sport_key"] == NFL_KEY for r in retries)
+    assert all(r["extra"]["window_from"] == "2025-09-21T00:00:00Z" for r in retries)
+    assert all(r["extra"]["window_to"] == "2025-09-28T12:00:00Z" for r in retries)
+    assert all("secret-api-key" not in repr(r) for r in retries)
+    assert all("apiKey" not in repr(r) for r in retries)
+
+
+def test_transport_retry_records_have_null_status(records):
+    def handler(request):
+        raise httpx.ConnectError("network unavailable")
+
+    client = OddsClient(
+        "secret-api-key", transport=httpx.MockTransport(handler), sleep=lambda _: None
+    )
+    with pytest.raises(OddsApiError):
+        fetch(client)
+
+    retries = [r for r in records if r["extra"].get("event") == "odds_retry"]
+    assert [r["extra"]["status"] for r in retries] == [None, None]
+    assert all(r["extra"]["error_type"] == "ConnectError" for r in retries)
+    assert all(r["extra"]["error_detail"] == "network unavailable" for r in retries)
+
+
+def test_live_poll_logs_quota_and_counts(records):
+    result = fetch(
+        client_returning(
+            PAYLOAD,
+            headers={"x-requests-remaining": "100", "x-requests-used": "12"},
+        )
+    )
+
+    quota = [r for r in records if r["extra"].get("event") == "odds_quota"]
+    polled = [r for r in records if r["extra"].get("event") == "odds_polled"]
+    assert len(quota) == 1
+    assert quota[0]["level"].name == "INFO"
+    assert quota[0]["extra"]["remaining"] == "100"
+    assert quota[0]["extra"]["used"] == "12"
+    assert len(polled) == 1
+    assert polled[0]["extra"]["lines"] == len(result.lines) == 2
+    assert polled[0]["extra"]["books"] == 2
+    assert polled[0]["extra"]["games"] == 1
+    assert polled[0]["extra"]["skipped"] == 0
+
+
+def test_historical_poll_logs_the_same_quota_and_count_contract(records):
+    result = historical(
+        client_returning(
+            ENVELOPE,
+            headers={"x-requests-remaining": "90", "x-requests-used": "20"},
+        )
+    )
+
+    quota = [r for r in records if r["extra"].get("event") == "odds_quota"]
+    polled = [r for r in records if r["extra"].get("event") == "odds_polled"]
+    assert len(quota) == 1
+    assert quota[0]["extra"]["remaining"] == "90"
+    assert quota[0]["extra"]["used"] == "20"
+    assert len(polled) == 1
+    assert polled[0]["extra"]["lines"] == len(result.lines) == 2
+    assert polled[0]["extra"]["books"] == 2
+    assert polled[0]["extra"]["games"] == 1
+    assert polled[0]["extra"]["skipped"] == 0
 
 
 # --- historical archive ------------------------------------------------------
