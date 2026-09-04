@@ -113,3 +113,30 @@ def test_a_block_with_no_games_at_all_raises():
             week=3,
             posted_at=POSTED,
         )
+
+
+def test_skipped_text_rows_emit_one_warning_with_reason_and_guard(records, resolver):
+    text = "\n".join(
+        [
+            "Buffalo Bills at Miami Dolphins -3.0",
+            "Bye: Cleveland Browns",
+            "Green Bay Packers at Chicago Bears",
+            "Kansas City Chiefs -6.5 at New York Jets 45.5",
+        ]
+    )
+
+    result = parse(text, resolver)
+
+    warnings = [r for r in records if r["extra"].get("event") == "ingest_row_skipped"]
+    assert len(warnings) == len(result.skipped)
+    assert all(r["level"].name == "WARNING" for r in warnings)
+    assert all(r["extra"].get("guard") for r in warnings)
+    assert [r["extra"]["reason"] for r in warnings] == result.skipped
+
+    [summary] = [r for r in records if r["extra"].get("event") == "ingest_parsed"]
+    assert summary["level"].name == "INFO"
+    assert summary["extra"]["sport"] == Sport.NFL.value
+    assert summary["extra"]["season"] == 2025
+    assert summary["extra"]["week"] == 3
+    assert summary["extra"]["games"] == len(result.games)
+    assert summary["extra"]["skipped"] == len(result.skipped)

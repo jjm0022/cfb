@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+from loguru import logger
 from pydantic import BaseModel
 
 from pickem.models import Game, LeagueLine, Sport
@@ -36,6 +37,37 @@ class ParsedCbsGame(BaseModel):
 class ParseResult(BaseModel):
     games: list[ParsedCbsGame]
     skipped: list[str]
+
+
+def _skip_row(skipped: list[str], row: str, *, guard: str, source: str) -> None:
+    """Keep the returned skip list and its warning records in lockstep."""
+    skipped.append(row)
+    logger.bind(
+        event="ingest_row_skipped",
+        source=source,
+        guard=guard,
+        reason=row,
+    ).warning("CBS row skipped")
+
+
+def _log_parse_summary(
+    *,
+    source: str,
+    sport: Sport,
+    season: int,
+    week: int,
+    games: int,
+    skipped: int,
+) -> None:
+    logger.bind(
+        event="ingest_parsed",
+        source=source,
+        sport=sport.value,
+        season=season,
+        week=week,
+        games=games,
+        skipped=skipped,
+    ).info(f"parsed {games} games")
 
 
 def _parsed_game(
@@ -90,17 +122,17 @@ def parse_cbs_block(
             continue
         match = _GAME_RE.match(raw)
         if match is None:
-            skipped.append(raw)
+            _skip_row(skipped, raw, guard="line_format", source="cbs_text")
             continue
 
         away_num = _to_spread(match.group("away_num"))
         home_num = _to_spread(match.group("home_num"))
         if away_num is None and home_num is None:
-            skipped.append(raw)
+            _skip_row(skipped, raw, guard="missing_spread", source="cbs_text")
             continue
 
         if away_num is not None and home_num is not None:
-            skipped.append(raw)  # ambiguous: numbers on both sides
+            _skip_row(skipped, raw, guard="ambiguous_spread", source="cbs_text")
             continue
 
         # Exactly one side carries the number. If the away team does, flip its
@@ -127,4 +159,12 @@ def parse_cbs_block(
     if not games:
         raise CbsParseError("no games parsed from the pasted block")
 
+    _log_parse_summary(
+        source="cbs_text",
+        sport=sport,
+        season=season,
+        week=week,
+        games=len(games),
+        skipped=len(skipped),
+    )
     return ParseResult(games=games, skipped=skipped)

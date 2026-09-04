@@ -18,7 +18,14 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from pickem.ingest.cbs import CbsParseError, ParsedCbsGame, ParseResult, _parsed_game
+from pickem.ingest.cbs import (
+    CbsParseError,
+    ParsedCbsGame,
+    ParseResult,
+    _log_parse_summary,
+    _parsed_game,
+    _skip_row,
+)
 from pickem.models import Sport
 from pickem.resolve.matchup import resolve_matchup
 from pickem.resolve.resolver import TeamResolver
@@ -150,14 +157,24 @@ def parse_cbs_html(
         away_name = _team_name(event.get("awayTeam"))
         home_name = _team_name(event.get("homeTeam"))
         if away_name is None or home_name is None:
-            skipped.append(f"{event_id}: event carries no usable team names")
+            _skip_row(
+                skipped,
+                f"{event_id}: event carries no usable team names",
+                guard="team_names",
+                source="cbs_html",
+            )
             continue
 
         spread = event.get("homeTeamSpread")
         if not isinstance(spread, int | float) or isinstance(spread, bool):
             # Never fabricated. A game CBS has not priced is reported, and the
             # caller decides whether a week missing a line can be submitted.
-            skipped.append(f"{away_name} at {home_name}: no spread posted")
+            _skip_row(
+                skipped,
+                f"{away_name} at {home_name}: no spread posted",
+                guard="missing_spread",
+                source="cbs_html",
+            )
             continue
 
         # `homeTeamSpread` is already home-perspective favourite-negative,
@@ -187,4 +204,12 @@ def parse_cbs_html(
     if not games:
         raise CbsParseError("the CBS payload was found but carried no priced games")
 
+    _log_parse_summary(
+        source="cbs_html",
+        sport=sport,
+        season=season,
+        week=week,
+        games=len(games),
+        skipped=len(skipped),
+    )
     return ParseResult(games=games, skipped=skipped)

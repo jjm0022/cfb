@@ -372,6 +372,66 @@ def test_store_closes_its_handle_when_the_body_raises(tmp_path):
         store.load_week(Sport.NFL, 2025, 3)
 
 
+def test_store_logs_open_and_schema_events_after_each_operation(records):
+    with Store(":memory:") as store:
+        store.init_schema()
+
+    opened = [r for r in records if r["extra"].get("event") == "db_opened"]
+    schemas = [r for r in records if r["extra"].get("event") == "schema_initialized"]
+    assert len(opened) == 1
+    assert len(schemas) == 1
+    assert opened[0]["level"].name == "DEBUG"
+    assert schemas[0]["level"].name == "DEBUG"
+    assert opened[0]["extra"]["db"] == ":memory:"
+    assert schemas[0]["extra"]["db"] == ":memory:"
+    assert records.index(opened[0]) < records.index(schemas[0])
+
+
+def test_store_logs_typed_write_counts_for_nonempty_and_empty_batches(records):
+    with Store(":memory:") as store:
+        store.init_schema()
+        store.upsert_games([game()])
+        store.upsert_games([])
+        store.record_picks(season=2025, week=3, edges=[], generated_at=KICK)
+
+    writes = [r for r in records if r["extra"].get("event") == "rows_written"]
+    assert len(writes) == 3
+    assert all(r["level"].name == "DEBUG" for r in writes)
+    assert {r["extra"]["table"] for r in writes} == {"games", "picks"}
+    assert {r["extra"]["rows"] for r in writes} == {0, 1}
+    assert all(r["extra"].get("statement") for r in writes)
+
+
+def test_store_logs_automation_state_write_and_load(records):
+    checked_at = datetime(2026, 9, 2, tzinfo=UTC)
+    with Store(":memory:") as store:
+        store.init_schema()
+        store.save_automation_state(Sport.NFL, 2026, 1, "game-a:home", checked_at, None)
+        state = store.automation_state(Sport.NFL, 2026, 1)
+
+    [write] = [
+        r
+        for r in records
+        if r["extra"].get("event") == "rows_written"
+        and r["extra"].get("table") == "automation_state"
+    ]
+    assert write["level"].name == "DEBUG"
+    assert write["extra"]["rows"] == 1
+    assert write["extra"]["sport"] == Sport.NFL.value
+    assert write["extra"]["week"] == 1
+    assert write["extra"].get("statement")
+
+    [loaded] = [r for r in records if r["extra"].get("event") == "state_loaded"]
+    assert loaded["level"].name == "DEBUG"
+    assert loaded["extra"]["db"] == ":memory:"
+    assert loaded["extra"]["table"] == "automation_state"
+    assert loaded["extra"]["sport"] == Sport.NFL.value
+    assert loaded["extra"]["season"] == 2026
+    assert loaded["extra"]["week"] == 1
+    assert loaded["extra"]["found"] is True
+    assert state.signature == "game-a:home"
+
+
 def test_every_writer_accepts_an_empty_sequence(tmp_path):
     """A snapshot where every row was skipped is normal, not an error.
 

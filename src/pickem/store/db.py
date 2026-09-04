@@ -6,12 +6,14 @@ here issues UPDATE or DELETE against it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 
 import duckdb
+from loguru import logger
 from pydantic import BaseModel
 
 from pickem.models import Edge, Game, LeagueLine, MarketLine, Sport
@@ -27,6 +29,17 @@ class AutomationState(BaseModel):
     signature: str | None = None
     checked_at: datetime | None = None
     error_fingerprint: str | None = None
+
+
+def _statement_head(sql: str) -> str:
+    """Return a compact identifier for a SQL statement in a log record."""
+    return " ".join(sql.split())[:80]
+
+
+def _statement_table(sql: str) -> str | None:
+    """Return the first table named by a DML statement, when available."""
+    match = re.search(r"\b(?:into|update|from)\s+([A-Za-z_]\w*)", sql, re.IGNORECASE)
+    return match.group(1) if match else None
 
 
 def _game_from_row(row: tuple) -> Game:
@@ -62,14 +75,17 @@ def _market_line_from_row(row: tuple) -> MarketLine:
 
 class Store:
     def __init__(self, path: Path | str, *, read_only: bool = False) -> None:
+        self._path = str(path)
         self._con = duckdb.connect(str(path), read_only=read_only)
         # Fixes the session timezone so TIMESTAMPTZ round-trips are
         # deterministic regardless of the host machine's local timezone.
         self._con.execute("SET TimeZone='UTC'")
+        logger.bind(event="db_opened", db=self._path).debug("database opened")
 
     def init_schema(self) -> None:
         ddl = resources.files("pickem.store").joinpath("schema.sql").read_text()
         self._con.execute(ddl)
+        logger.bind(event="schema_initialized", db=self._path).debug("schema ready")
 
     def close(self) -> None:
         self._con.close()
@@ -89,9 +105,17 @@ class Store:
         was skipped is an ordinary outcome, not a failure, and must not abort a
         backfill after the credits for it are already spent.
         """
+        fields = {
+            "statement": _statement_head(sql),
+            "table": _statement_table(sql),
+        }
         if not rows:
+            logger.bind(event="rows_written", rows=0, **fields).debug("nothing to write")
             return
         self._con.executemany(sql, rows)
+        logger.bind(event="rows_written", rows=len(rows), **fields).debug(
+            f"wrote {len(rows)} rows"
+        )
 
     def upsert_games(self, games: Sequence[Game]) -> None:
         rows = [
@@ -382,6 +406,15 @@ class Store:
             """,
             [sport.value, season, week],
         ).fetchone()
+        logger.bind(
+            event="state_loaded",
+            db=self._path,
+            table="automation_state",
+            sport=sport.value,
+            season=season,
+            week=week,
+            found=row is not None,
+        ).debug("automation state loaded")
         if row is None:
             return AutomationState()
         return AutomationState(signature=row[0], checked_at=row[1], error_fingerprint=row[2])
@@ -395,8 +428,7 @@ class Store:
         checked_at: datetime | None,
         error_fingerprint: str | None,
     ) -> None:
-        self._con.execute(
-            """
+        sql = """
             INSERT INTO automation_state
                 (sport, season, week, recommendation_signature, checked_at, error_fingerprint)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -404,6 +436,18 @@ class Store:
                 recommendation_signature = excluded.recommendation_signature,
                 checked_at = excluded.checked_at,
                 error_fingerprint = excluded.error_fingerprint
-            """,
+            """
+        self._con.execute(
+            sql,
             [sport.value, season, week, signature, checked_at, error_fingerprint],
         )
+        logger.bind(
+            event="rows_written",
+            db=self._path,
+            table="automation_state",
+            statement=_statement_head(sql),
+            rows=1,
+            sport=sport.value,
+            season=season,
+            week=week,
+        ).debug("automation state written")

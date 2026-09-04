@@ -151,3 +151,23 @@ def test_the_cli_stores_the_page_with_its_real_kickoffs(tmp_path):
 
     assert len(lines) == 3
     assert stored["cfb-2026-01-ECU-at-BAMA"].kickoff_utc == datetime(2026, 9, 5, 16, 0, tzinfo=UTC)
+
+
+def test_skipped_html_rows_emit_one_warning_with_reason_and_guard(records, resolver):
+    broken = PAGE.replace('"homeTeamSpread": -28.5', '"homeTeamSpread": null')
+
+    result = parse(broken, resolver=resolver)
+
+    warnings = [r for r in records if r["extra"].get("event") == "ingest_row_skipped"]
+    assert len(warnings) == len(result.skipped)
+    assert all(r["level"].name == "WARNING" for r in warnings)
+    assert all(r["extra"].get("guard") for r in warnings)
+    assert [r["extra"]["reason"] for r in warnings] == result.skipped
+
+    [summary] = [r for r in records if r["extra"].get("event") == "ingest_parsed"]
+    assert summary["level"].name == "INFO"
+    assert summary["extra"]["sport"] == Sport.CFB.value
+    assert summary["extra"]["season"] == 2026
+    assert summary["extra"]["week"] == 1
+    assert summary["extra"]["games"] == len(result.games)
+    assert summary["extra"]["skipped"] == len(result.skipped)
