@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from loguru import logger
 
 from pickem.automation.monitor import MonitorScope, RefreshResult
 from pickem.discord_bot import (
@@ -46,9 +47,13 @@ class FakeJob:
 class FakeScheduler:
     def __init__(self):
         self.jobs: list[FakeJob] = []
+        self.running = False
 
     def add_job(self, func, trigger, **kwargs):
         self.jobs.append(FakeJob(func, trigger, kwargs))
+
+    def start(self):
+        self.running = True
 
 
 class FakeMonitor:
@@ -62,6 +67,11 @@ class FakeMonitor:
             self.events.append("monitor")
         self.calls += 1
         return self.result
+
+
+class RaisingMonitor:
+    async def refresh(self):
+        raise RuntimeError("monitor exploded")
 
 
 class FakeFollowup:
@@ -338,6 +348,38 @@ def test_scope_resolution_discovers_only_the_active_sports_with_picks(settings):
     )
 
 
+def test_bot_scope_resolution_logs_active_schedule_reason(settings, records):
+    add_pick_scope(settings, Sport.CFB)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+
+    scopes = bot._resolve_scopes()
+
+    resolved = next(r for r in records if r["extra"].get("event") == "scope_resolved")
+    assert resolved["extra"]["count"] == 1
+    assert resolved["extra"]["scopes"] == ["cfb/2026/wk1"]
+    assert resolved["extra"]["explicit"] is False
+    assert resolved["extra"]["resolution_reason"] == "active_schedule"
+    assert scopes == (MonitorScope(Sport.CFB, 2026, 1),)
+
+
+def test_bot_scope_resolution_logs_explicit_override_reason(settings, records):
+    add_pick_scope(settings, Sport.CFB)
+    add_pick_scope(settings, Sport.NFL)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+
+    scopes = bot._resolve_scopes(2026, 1)
+
+    resolved = next(r for r in records if r["extra"].get("event") == "scope_resolved")
+    assert resolved["extra"]["count"] == 2
+    assert resolved["extra"]["scopes"] == ["cfb/2026/wk1", "nfl/2026/wk1"]
+    assert resolved["extra"]["explicit"] is True
+    assert resolved["extra"]["resolution_reason"] == "explicit_override"
+    assert scopes == (
+        MonitorScope(Sport.CFB, 2026, 1),
+        MonitorScope(Sport.NFL, 2026, 1),
+    )
+
+
 @pytest.mark.asyncio
 async def test_status_uses_the_discovered_cfb_scope(settings, monkeypatch):
     game = Game(
@@ -467,29 +509,47 @@ def test_build_schedule_adds_tuesday_reminder_and_weekday_refreshes(settings):
 
 
 @pytest.mark.asyncio
-async def test_scheduled_refresh_logs_a_result_error(settings, records):
-    monitor = FakeMonitor(RefreshResult(changed=False, error=RuntimeError("quota exhausted")))
+async def test_scheduled_refresh_does_not_repeat_a_returned_result_error(settings, records):
+    error = RuntimeError("quota exhausted")
+
+    async def refresh():
+        logger.bind(
+            event="refresh_failed",
+            phase="refresh",
+            error_type=type(error).__name__,
+            error_detail=str(error),
+        ).error(f"refresh failed: {error}")
+        return RefreshResult(changed=False, error=error)
+
     scheduler = FakeScheduler()
-    build_schedule(settings, monitor, lambda _message: None, scheduler)
+    build_schedule(settings, refresh, lambda _message: None, scheduler)
 
     await scheduler.jobs[1].func()
 
     failures = [record for record in records if record["extra"].get("event") == "refresh_failed"]
     assert len(failures) == 1
-    assert failures[0]["extra"]["event"] == "refresh_failed"
-    assert "scope" not in failures[0]["extra"]
     assert failures[0]["extra"]["error_type"] == "RuntimeError"
     assert failures[0]["extra"]["error_detail"] == "quota exhausted"
-    assert failures[0]["message"] == "RuntimeError: quota exhausted"
+    assert failures[0]["message"] == "refresh failed: quota exhausted"
 
 
 @pytest.mark.asyncio
-async def test_scheduled_refresh_logs_scoped_error_fields(settings, records):
+async def test_scheduled_refresh_does_not_repeat_tuple_result_errors(settings, records):
+    scope = MonitorScope(Sport.CFB, 2026, 2)
+    error = ValueError("missing slate")
+
     async def refresh():
+        logger.bind(
+            event="refresh_failed",
+            phase="refresh",
+            scope=f"{scope.sport.value}/{scope.season}/wk{scope.week}",
+            error_type=type(error).__name__,
+            error_detail=str(error),
+        ).error(f"refresh failed: {error}")
         return (
             (
-                MonitorScope(Sport.CFB, 2026, 2),
-                RefreshResult(changed=False, error=ValueError("missing slate")),
+                scope,
+                RefreshResult(changed=False, error=error),
             ),
         )
 
@@ -503,7 +563,70 @@ async def test_scheduled_refresh_logs_scoped_error_fields(settings, records):
     assert failures[0]["extra"]["scope"] == "cfb/2026/wk2"
     assert failures[0]["extra"]["error_type"] == "ValueError"
     assert failures[0]["extra"]["error_detail"] == "missing slate"
-    assert failures[0]["message"] == "ValueError: missing slate"
+    assert failures[0]["message"] == "refresh failed: missing slate"
+
+
+def test_schedule_emits_one_observable_event_per_registered_job(settings, records):
+    scheduler = FakeScheduler()
+    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler)
+
+    scheduled = [r for r in records if r["extra"].get("event") == "job_scheduled"]
+    assert len(scheduled) == 2
+    assert [r["extra"]["job"] for r in scheduled] == [
+        "pick-reminder",
+        "recommendation-refresh",
+    ]
+    assert scheduled[0]["extra"]["days"] == "tue"
+    assert scheduled[0]["extra"]["at"] == "10:00"
+    assert scheduled[0]["extra"]["timezone"] == "America/New_York"
+    assert scheduled[1]["extra"]["days"] == "wed,thu,fri,sat,sun,mon"
+    assert scheduled[1]["extra"]["at"] == "10:00"
+    assert scheduled[1]["extra"]["timezone"] == "America/New_York"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_runs_inside_a_context_with_database_fact(settings, records):
+    scheduler = FakeScheduler()
+    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler)
+
+    await scheduler.jobs[1].func()
+
+    started = next(r for r in records if r["extra"].get("event") == "run_started")
+    assert started["extra"]["entry"] == "sched:refresh"
+    assert started["extra"]["db"] == str(settings.db)
+    finished = [r for r in records if r["extra"].get("event") == "run_finished"]
+    assert len(finished) == 1
+    assert not any(r["extra"].get("event") == "job_fired" for r in records)
+
+
+@pytest.mark.asyncio
+async def test_monitor_exception_is_logged_once_with_scope_and_traceback(settings, records):
+    add_pick_scope(settings, Sport.CFB)
+    scope = MonitorScope(Sport.CFB, 2026, 1)
+    bot = PickemBot(settings, RaisingMonitor(), scheduler=FakeScheduler())
+
+    results = await bot._refresh_scopes()
+
+    assert results[0][0] == scope
+    assert isinstance(results[0][1].error, RuntimeError)
+    failures = [r for r in records if r["extra"].get("event") == "refresh_failed"]
+    assert len(failures) == 1
+    failure = failures[0]
+    assert failure["level"].name == "ERROR"
+    assert failure["extra"]["phase"] == "refresh"
+    assert failure["extra"]["scope"] == "cfb/2026/wk1"
+    assert failure["extra"]["error_type"] == "RuntimeError"
+    assert failure["extra"]["error_detail"] == "monitor exploded"
+    if failure["exception"] is not None:
+        exception_type, exception, traceback = failure["exception"]
+        assert exception_type is RuntimeError
+        assert isinstance(exception, RuntimeError)
+        assert traceback is not None
+    else:
+        # The configured redaction patcher folds and clears exception tuples;
+        # the durable record must still retain the traceback text.
+        assert "Traceback (most recent call last)" in failure["message"]
+        assert "in _refresh_scopes" in failure["message"]
 
 
 @pytest.mark.asyncio
@@ -570,6 +693,23 @@ def test_bot_uses_no_privileged_intents_and_registers_dm_commands(settings):
 
 
 @pytest.mark.asyncio
+async def test_setup_hook_logs_bot_ready_after_scheduler_start(settings, records, monkeypatch):
+    scheduler = FakeScheduler()
+    bot = PickemBot(settings, FakeMonitor(), scheduler=scheduler)
+
+    async def sync():
+        return ()
+
+    monkeypatch.setattr(bot.tree, "sync", sync)
+    await bot.setup_hook()
+
+    assert scheduler.running is True
+    ready = [r for r in records if r["extra"].get("event") == "bot_ready"]
+    assert len(ready) == 1
+    assert ready[0]["extra"]["owner_id"] == settings.owner_id
+
+
+@pytest.mark.asyncio
 async def test_status_rejects_non_owner_before_reading_state(settings):
     monitor = FakeMonitor()
     bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
@@ -591,6 +731,66 @@ async def test_refresh_rejects_non_owner_before_refreshing(settings):
 
     assert interaction.response.messages == [("This bot is private.", True)]
     assert monitor.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_rejected_command_logs_warning_without_opening_a_run(settings, records):
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=999)
+
+    await bot.refresh(interaction)
+
+    rejected = [r for r in records if r["extra"].get("event") == "command_rejected"]
+    assert len(rejected) == 1
+    assert rejected[0]["level"].name == "WARNING"
+    assert rejected[0]["extra"]["user_id"] == 999
+    assert not any(r["extra"].get("event") == "run_started" for r in records)
+
+
+@pytest.mark.asyncio
+async def test_refresh_command_logs_invocation_and_run_facts(settings, records):
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    await bot.refresh(interaction, season=2026, week=1)
+
+    started = next(r for r in records if r["extra"].get("event") == "run_started")
+    invoked = next(r for r in records if r["extra"].get("event") == "command_invoked")
+    finished = next(r for r in records if r["extra"].get("event") == "run_finished")
+    assert started["extra"]["entry"] == "discord:/refresh"
+    assert started["extra"]["season"] == 2026
+    assert started["extra"]["week"] == 1
+    assert started["extra"]["db"] == str(settings.db)
+    assert invoked["extra"]["command"] == "refresh"
+    assert (
+        invoked["extra"]["run_id"]
+        == started["extra"]["run_id"]
+        == finished["extra"]["run_id"]
+    )
+    assert not any(r["extra"].get("event") == "command_completed" for r in records)
+
+
+@pytest.mark.asyncio
+async def test_status_command_logs_invocation_and_run_facts(settings, records):
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    await bot.status(interaction)
+
+    started = next(r for r in records if r["extra"].get("event") == "run_started")
+    invoked = next(r for r in records if r["extra"].get("event") == "command_invoked")
+    finished = next(r for r in records if r["extra"].get("event") == "run_finished")
+    assert started["extra"]["entry"] == "discord:/status"
+    assert started["extra"]["season"] is None
+    assert started["extra"]["week"] is None
+    assert started["extra"]["db"] == str(settings.db)
+    assert invoked["extra"]["command"] == "status"
+    assert (
+        invoked["extra"]["run_id"]
+        == started["extra"]["run_id"]
+        == finished["extra"]["run_id"]
+    )
+    assert not any(r["extra"].get("event") == "command_completed" for r in records)
 
 
 @pytest.mark.asyncio

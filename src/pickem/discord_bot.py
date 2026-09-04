@@ -22,7 +22,7 @@ from loguru import logger
 from pickem import config
 from pickem.automation.monitor import MonitorScope, RecommendationMonitor, RefreshResult
 from pickem.models import Game, Side, Sport, Tier
-from pickem.obs.log import configure_logging
+from pickem.obs.log import configure_logging, run_context
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
 from pickem.resolve.resolver import TeamResolver
 from pickem.store.db import AutomationState, Store
@@ -117,25 +117,9 @@ def build_schedule(
         await _invoke(send_dm, REMINDER_MESSAGE)
 
     async def refresh_job() -> None:
-        callback = getattr(refresh, "refresh", refresh)
-        result = await _invoke(callback)
-        if isinstance(result, RefreshResult) and result.error is not None:
-            error = result.error
-            logger.bind(
-                event="refresh_failed",
-                error_type=type(error).__name__,
-                error_detail=_scheduled_error_detail(settings, error),
-            ).error(_scheduled_error_message(settings, error))
-        elif isinstance(result, tuple):
-            for scope, scope_result in result:
-                if scope_result.error is not None:
-                    error = scope_result.error
-                    logger.bind(
-                        event="refresh_failed",
-                        scope=f"{scope.sport.value}/{scope.season}/wk{scope.week}",
-                        error_type=type(error).__name__,
-                        error_detail=_scheduled_error_detail(settings, error),
-                    ).error(_scheduled_error_message(settings, error))
+        with run_context("sched:refresh", db=str(settings.db)):
+            callback = getattr(refresh, "refresh", refresh)
+            await _invoke(callback)
 
     scheduler.add_job(
         reminder_job,
@@ -148,6 +132,13 @@ def build_schedule(
         id="pick-reminder",
         replace_existing=True,
     )
+    logger.bind(
+        event="job_scheduled",
+        job="pick-reminder",
+        days=settings.reminder_day,
+        at=f"{settings.reminder_hour:02d}:{settings.reminder_minute:02d}",
+        timezone=str(settings.timezone),
+    ).info("reminder job scheduled")
     scheduler.add_job(
         refresh_job,
         CronTrigger(
@@ -159,6 +150,13 @@ def build_schedule(
         id="recommendation-refresh",
         replace_existing=True,
     )
+    logger.bind(
+        event="job_scheduled",
+        job="recommendation-refresh",
+        days=settings.refresh_days,
+        at=f"{settings.refresh_hour:02d}:{settings.refresh_minute:02d}",
+        timezone=str(settings.timezone),
+    ).info("refresh job scheduled")
 
 
 async def send_dm(
@@ -467,6 +465,7 @@ class PickemBot(commands.Bot):
         start = getattr(self.scheduler, "start", None)
         if start is not None and not getattr(self.scheduler, "running", False):
             start()
+        logger.bind(event="bot_ready", owner_id=self.settings.owner_id).info("bot ready")
 
     def _is_owner(self, interaction: discord.Interaction) -> bool:
         user = getattr(interaction, "user", None)
@@ -480,17 +479,31 @@ class PickemBot(commands.Bot):
         if self._is_owner(interaction):
             return False
         await interaction.response.send_message(PRIVATE_MESSAGE, ephemeral=True)
+        logger.bind(
+            event="command_rejected",
+            user_id=getattr(getattr(interaction, "user", None), "id", None),
+        ).warning("non-owner command rejected")
         return True
 
     def _resolve_scopes(
         self, season: int | None = None, week: int | None = None
     ) -> tuple[MonitorScope, ...]:
-        return tuple(
+        scopes = tuple(
             MonitorScope(sport, scope_season, scope_week)
             for sport, scope_season, scope_week in resolve_pickem_scopes(
                 self.settings.db, datetime.now(UTC), season=season, week=week
             )
         )
+        logger.bind(
+            event="scope_resolved",
+            count=len(scopes),
+            scopes=[f"{s.sport.value}/{s.season}/wk{s.week}" for s in scopes],
+            explicit=season is not None,
+            resolution_reason=(
+                "explicit_override" if season is not None else "active_schedule"
+            ),
+        ).info(f"resolved {len(scopes)} active scopes")
+        return scopes
 
     def _monitor_for(self, scope: MonitorScope) -> RecommendationMonitor | Any:
         if self._injected_monitor is not None:
@@ -540,6 +553,15 @@ class PickemBot(commands.Bot):
                 try:
                     result = await self._monitor_for(scope).refresh()
                 except Exception as error:
+                    logger.bind(
+                        event="refresh_failed",
+                        phase="refresh",
+                        scope=f"{scope.sport.value}/{scope.season}/wk{scope.week}",
+                        error_type=type(error).__name__,
+                        error_detail=_scheduled_error_detail(self.settings, error),
+                    ).opt(
+                        exception=(type(error), error, error.__traceback__),
+                    ).error(_scheduled_error_message(self.settings, error))
                     result = RefreshResult(changed=False, error=error)
                 results.append((scope, result))
             return tuple(results)
@@ -556,34 +578,43 @@ class PickemBot(commands.Bot):
         """Show current recommendations computed from stored market data."""
         if await self._reject_private(interaction):
             return
-        try:
-            # These reads are local DuckDB operations. Keep them on the
-            # interaction's loop so the connection is opened and closed on
-            # one thread; live refreshes are the intentionally offloaded
-            # operation in the monitor composition below.
-            statuses: list[ScopeStatus] = []
-            for scope in self._resolve_scopes(season, week):
-                games, market_timestamp = _stored_week_details(self.settings, scope)
-                statuses.append(
-                    ScopeStatus(
-                        scope=scope,
-                        state=self._load_state(scope),
-                        snapshot=generate_recommendations(
-                            self.settings.db,
-                            scope.sport,
-                            scope.season,
-                            scope.week,
-                            datetime.now(UTC),
-                        ),
-                        games=games,
-                        market_timestamp=market_timestamp,
+        with run_context(
+            "discord:/status",
+            season=season,
+            week=week,
+            db=str(self.settings.db),
+        ):
+            logger.bind(event="command_invoked", command="status").info(
+                "/status invoked"
+            )
+            try:
+                # These reads are local DuckDB operations. Keep them on the
+                # interaction's loop so the connection is opened and closed on
+                # one thread; live refreshes are the intentionally offloaded
+                # operation in the monitor composition below.
+                statuses: list[ScopeStatus] = []
+                for scope in self._resolve_scopes(season, week):
+                    games, market_timestamp = _stored_week_details(self.settings, scope)
+                    statuses.append(
+                        ScopeStatus(
+                            scope=scope,
+                            state=self._load_state(scope),
+                            snapshot=generate_recommendations(
+                                self.settings.db,
+                                scope.sport,
+                                scope.season,
+                                scope.week,
+                                datetime.now(UTC),
+                            ),
+                            games=games,
+                            market_timestamp=market_timestamp,
+                        )
                     )
-                )
-            embed = _format_status(tuple(statuses), self.scheduler)
-        except Exception as error:
-            await interaction.response.send_message(f"Status unavailable: {error}")
-            return
-        await interaction.response.send_message(embed=embed)
+                embed = _format_status(tuple(statuses), self.scheduler)
+            except Exception as error:
+                await interaction.response.send_message(f"Status unavailable: {error}")
+                return
+            await interaction.response.send_message(embed=embed)
 
     async def refresh(
         self,
@@ -594,14 +625,23 @@ class PickemBot(commands.Bot):
         """Run one serialized recommendation refresh and report its outcome."""
         if await self._reject_private(interaction):
             return
-        await interaction.response.defer()
-        try:
-            results = await self._refresh_scopes(season, week)
-        except Exception as error:
-            embed = _format_refresh_results((), error=error)
-        else:
-            embed = _format_refresh_results(results)
-        await interaction.followup.send(embed=embed)
+        with run_context(
+            "discord:/refresh",
+            season=season,
+            week=week,
+            db=str(self.settings.db),
+        ):
+            logger.bind(event="command_invoked", command="refresh").info(
+                "/refresh invoked"
+            )
+            await interaction.response.defer()
+            try:
+                results = await self._refresh_scopes(season, week)
+            except Exception as error:
+                embed = _format_refresh_results((), error=error)
+            else:
+                embed = _format_refresh_results(results)
+            await interaction.followup.send(embed=embed)
 
 
 def create_bot(
