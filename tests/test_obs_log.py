@@ -51,9 +51,11 @@ def log_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("PICKEM_LOG_CONSOLE", "off")
     directory = tmp_path / "logs"
     configure_logging("pickem", log_dir=directory)
-    yield directory
-    logger.complete()
-    logger.remove()
+    try:
+        yield directory
+    finally:
+        logger.complete()
+        logger.remove()
 
 
 def _rows(log_dir):
@@ -341,27 +343,32 @@ def test_a_refresh_leaves_a_complete_audit_trail(tmp_path, monkeypatch, seeded_d
     configure_logging("pickem", log_dir=log_dir)
     now = datetime(2026, 9, 2, 12, tzinfo=UTC)
 
-    with run_context("test:refresh", sport="cfb", season=2026, week=1):
-        snapshot = generate_recommendations(seeded_db, Sport.CFB, 2026, 1, now)
+    try:
+        with run_context("test:refresh", sport="cfb", season=2026, week=1) as run_id:
+            snapshot = generate_recommendations(seeded_db, Sport.CFB, 2026, 1, now)
 
-    logger.complete()
-    rows = [
-        json.loads(line)
-        for line in (log_dir / "pickem.jsonl").read_text().splitlines()
-        if line.strip()
-    ]
+        logger.complete()
+        rows = [
+            json.loads(line)
+            for line in (log_dir / "pickem.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
 
-    assert len({row["run_id"] for row in rows}) == 1
-    decided = [row for row in rows if row["event"] == "edge_decided"]
-    assert len(decided) == len(snapshot.edges)
-    assert Counter(row["game_id"] for row in decided) == Counter(
-        edge.game_id for edge in snapshot.edges
-    )
-    for row, edge in zip(
-        sorted(decided, key=lambda row: row["game_id"]),
-        sorted(snapshot.edges, key=lambda edge: edge.game_id),
-        strict=True,
-    ):
-        assert row["message"] == edge.rationale
-        assert row["side"] == edge.side.value
-    logger.remove()
+        assert snapshot.edges
+        assert run_id != "-"
+        assert {row["run_id"] for row in rows} == {run_id}
+        decided = [row for row in rows if row["event"] == "edge_decided"]
+        assert len(decided) == len(snapshot.edges)
+        assert Counter(row["game_id"] for row in decided) == Counter(
+            edge.game_id for edge in snapshot.edges
+        )
+        for row, edge in zip(
+            sorted(decided, key=lambda row: row["game_id"]),
+            sorted(snapshot.edges, key=lambda edge: edge.game_id),
+            strict=True,
+        ):
+            assert row["message"] == edge.rationale
+            assert row["side"] == edge.side.value
+    finally:
+        logger.complete()
+        logger.remove()

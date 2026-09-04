@@ -37,8 +37,9 @@ The exact supported predicate is
 jq -r 'select(.entry=="sched:refresh" and .event=="run_started")' "$L"
 ```
 
-Each matching row includes the `run_id`, scope facts, and timestamp. To count
-fires by day:
+Each matching row includes the `run_id`, configured database path, and
+timestamp. Resolved sports and weeks are emitted later as `scope_resolved`
+within that run, not on `run_started`. To count fires by day:
 
 ```bash
 jq -r 'select(.entry=="sched:refresh" and .event=="run_started") | .ts[0:10]' "$L" \
@@ -54,11 +55,13 @@ jq -r --arg day "$DAY" \
   'select(.entry=="sched:refresh" and .event=="run_started" and .ts[0:10]==$day)' "$L"
 ```
 
-The scheduler's own intercepted record is also evidence that APScheduler
-started the job. Inspect it with:
+The scheduler's own intercepted pre-call record is independent evidence that
+APScheduler started the job. It is emitted before the refresh callback opens
+its `run_context`, so it may have the sentinel `run_id` and is not part of the
+scheduled run's replay or join. Inspect it with:
 
 ```bash
-jq -r 'select(.message | contains("Running job")) | "\(.ts)  \(.message)"' "$L"
+jq -r 'select(.event=="apscheduler_log" and (.message | contains("Running job"))) | "\(.ts)  \(.message)"' "$L"
 ```
 
 ### Why was this pick made?
@@ -127,8 +130,10 @@ jq -r --arg r "$RUN_ID" \
 
 The replay should normally begin with `run_started` and end with
 `run_finished`; a failed run ends with one `run_failed` ERROR instead. The
-`run_id` is the join key for all intermediate decision, ingest, store, and
-scheduler records.
+`run_id` is the join key for records emitted after the application opens the
+run context, including intermediate decision, ingest, store, and
+`scope_resolved` records. The scheduler's pre-call `apscheduler_log` record is
+independent firing evidence and is intentionally outside that join.
 
 Rotated JSONL archives can be replayed by decompressing them first:
 
@@ -194,7 +199,7 @@ reports variable names and file paths, never values. It checks active and
 rotated (ZIP) sink files without writing to the log directory.
 
 ```bash
-python - <<'PY'
+uv run python - <<'PY'
 from pathlib import Path
 import os
 import zipfile
