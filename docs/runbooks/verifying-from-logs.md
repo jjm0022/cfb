@@ -119,8 +119,7 @@ List run starts to discover the short eight-character identifier:
 jq -r 'select(.event=="run_started") | "\(.ts)  \(.run_id)  \(.entry)"' "$L"
 ```
 
-Replay every record in order across modules, the scheduler, and worker
-threads:
+Replay every application record in order across modules and worker threads:
 
 ```bash
 RUN_ID="a3f1b2c9"
