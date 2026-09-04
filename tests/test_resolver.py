@@ -13,6 +13,11 @@ def test_resolves_canonical_name(resolver):
     assert resolver.resolve("Miami Dolphins", Sport.NFL) == "MIA"
 
 
+def test_displays_the_primary_friendly_team_name(resolver):
+    assert resolver.display_name("MIA", Sport.NFL) == "Miami Dolphins"
+    assert resolver.display_name("MISSING", Sport.NFL) == "MISSING"
+
+
 def test_resolves_across_source_naming_conventions(resolver):
     # Different feeds spell the same franchise differently.
     for name in ["LA Rams", "Los Angeles Rams", "LAR", "Rams"]:

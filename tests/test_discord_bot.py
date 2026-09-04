@@ -8,17 +8,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from pickem.automation.monitor import RefreshResult
+from pickem.automation.monitor import MonitorScope, RefreshResult
 from pickem.discord_bot import (
     DiscordSettings,
     PickemBot,
+    ScopeStatus,
+    _format_recommendations,
+    _format_status,
     build_schedule,
     resolve_pickem_scopes,
     send_dm,
 )
 from pickem.models import Edge, Game, LeagueLine, Side, Sport, Tier
 from pickem.operations.recommendations import RecommendationSnapshot
-from pickem.store.db import Store
+from pickem.store.db import AutomationState, Store
 
 
 @dataclass
@@ -158,6 +161,153 @@ def add_pick_scope(settings, sport: Sport = Sport.NFL) -> Game:
     return game
 
 
+@pytest.mark.parametrize(
+    ("side", "tier", "tier_badge", "expected_matchup"),
+    [
+        (Side.HOME, Tier.STRONG, "🔥 Strong", "~~Buffalo Bills~~ at **Miami Dolphins**"),
+        (Side.AWAY, Tier.LEAN, "✅ Lean", "**Buffalo Bills** at ~~Miami Dolphins~~"),
+        (Side.HOME, Tier.COINFLIP, "🪙 Coinflip", "~~Buffalo Bills~~ at **Miami Dolphins**"),
+        (Side.AWAY, Tier.NO_MARKET, "⚠️ No market", "**Buffalo Bills** at ~~Miami Dolphins~~"),
+    ],
+)
+def test_status_pick_format_highlights_the_selected_team_and_explains_why(
+    side, tier, tier_badge, expected_matchup
+):
+    game = Game(
+        game_id="nfl-2026-01-BUF-at-MIA",
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        kickoff_utc=datetime(2026, 9, 10, tzinfo=UTC),
+        home_team_id="MIA",
+        away_team_id="BUF",
+    )
+    snapshot = RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 9, 1, tzinfo=UTC),
+        edges=(
+            Edge(
+                game_id=game.game_id,
+                side=side,
+                delta=3.0,
+                tier=tier,
+                league_spread=-3.0,
+                market_spread=-6.0,
+                rationale="league -3.0 vs market -6.0: 3.0 pts toward home",
+            ),
+        ),
+    )
+
+    rendered = _format_recommendations(snapshot, (game,))
+
+    assert expected_matchup in rendered
+    assert tier_badge in rendered
+    assert "Why: league -3.0 vs market -6.0: 3.0 pts toward home" in rendered
+
+
+@pytest.mark.asyncio
+async def test_status_uses_stored_teams_to_render_readable_picks(settings, monkeypatch):
+    game = Game(
+        game_id="nfl-2026-01-BUF-at-MIA",
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        kickoff_utc=datetime(2026, 9, 10, tzinfo=UTC),
+        home_team_id="MIA",
+        away_team_id="BUF",
+    )
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.upsert_games([game])
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id=game.game_id,
+                    season=game.season,
+                    week=game.week,
+                    spread_home=-3.0,
+                    posted_at=game.kickoff_utc,
+                )
+            ]
+        )
+    snapshot = RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 9, 1, tzinfo=UTC),
+        edges=(
+            Edge(
+                game_id=game.game_id,
+                side=Side.HOME,
+                delta=3.0,
+                tier=Tier.STRONG,
+                league_spread=-3.0,
+                market_spread=-6.0,
+                rationale="because the market moved",
+            ),
+        ),
+    )
+    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    await bot.status(interaction)
+
+    assert "🔥 Strong — ~~Buffalo Bills~~ at **Miami Dolphins**" in (
+        interaction.response.embeds[0].fields[0].value
+    )
+
+
+def test_status_splits_long_pick_lists_within_discord_field_limits():
+    games = tuple(
+        Game(
+            game_id=f"nfl-2026-01-AWAY{index}-at-HOME{index}",
+            sport=Sport.NFL,
+            season=2026,
+            week=1,
+            kickoff_utc=datetime(2026, 9, 10, tzinfo=UTC),
+            home_team_id=f"HOME{index}",
+            away_team_id=f"AWAY{index}",
+        )
+        for index in range(12)
+    )
+    snapshot = RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 9, 1, tzinfo=UTC),
+        edges=tuple(
+            Edge(
+                game_id=game.game_id,
+                side=Side.HOME,
+                delta=3.0,
+                tier=Tier.STRONG,
+                league_spread=-3.0,
+                market_spread=-6.0,
+                rationale=f"rationale {index}: " + "market evidence " * 24,
+            )
+            for index, game in enumerate(games)
+        ),
+    )
+    status = ScopeStatus(
+        scope=MonitorScope(Sport.NFL, 2026, 1),
+        state=AutomationState(),
+        snapshot=snapshot,
+        games=games,
+        market_timestamp=None,
+    )
+
+    embed = _format_status((status,), FakeScheduler())
+    rendered = "\n".join(field.value for field in embed.fields)
+
+    assert len(embed.fields) > 2
+    assert all(len(field.value) <= 1024 for field in embed.fields)
+    assert "rationale 0:" in rendered
+    assert "rationale 11:" in rendered
+
+
 def test_scope_resolution_discovers_only_the_active_sports_with_picks(settings):
     with Store(settings.db) as store:
         store.init_schema()
@@ -229,7 +379,7 @@ async def test_status_uses_the_discovered_cfb_scope(settings, monkeypatch):
     embed = interaction.response.embeds[0]
     assert embed.title == "🏈 Pick'em Status"
     assert embed.description == "Current active pick'em scopes."
-    assert embed.fields[0].name == "CFB • 2026 — Week 1"
+    assert embed.fields[0].name == "CFB • 2026 — Week 1 — Picks"
 
 
 @pytest.mark.asyncio
@@ -249,9 +399,9 @@ async def test_status_accepts_an_explicit_season_and_week_for_every_sport(settin
     await bot.status(interaction, season=2026, week=1)
 
     embed = interaction.response.embeds[0]
-    assert [field.name for field in embed.fields[:2]] == [
-        "CFB • 2026 — Week 1",
-        "NFL • 2026 — Week 1",
+    assert [field.name for field in embed.fields if field.name.endswith("— Picks")] == [
+        "CFB • 2026 — Week 1 — Picks",
+        "NFL • 2026 — Week 1 — Picks",
     ]
     assert generated_for == [Sport.CFB, Sport.NFL]
 
@@ -325,6 +475,62 @@ async def test_scheduled_refresh_logs_a_result_error(settings, caplog):
     await scheduler.jobs[1].func()
 
     assert "quota exhausted" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_monitor_change_notification_uses_status_pick_format(settings, monkeypatch):
+    game = Game(
+        game_id="nfl-2026-01-BUF-at-MIA",
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        kickoff_utc=datetime(2026, 9, 10, tzinfo=UTC),
+        home_team_id="MIA",
+        away_team_id="BUF",
+    )
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.upsert_games([game])
+    snapshot = RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 9, 2, tzinfo=UTC),
+        edges=(
+            Edge(
+                game_id=game.game_id,
+                side=Side.HOME,
+                delta=3.0,
+                tier=Tier.STRONG,
+                league_spread=-3.0,
+                market_spread=-6.0,
+                rationale="league -3.0 vs market -6.0: 3.0 pts toward home",
+            ),
+        ),
+    )
+    monkeypatch.setattr("pickem.discord_bot.refresh_recommendations", lambda *_args: snapshot)
+    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    bot = PickemBot(settings, scheduler=FakeScheduler())
+    bot._load_state = lambda _scope: AutomationState(signature=f"{game.game_id}:away")
+    bot._save_state = lambda _scope, _state: None
+    sent: list[tuple[str | None, object | None]] = []
+
+    async def capture_dm(message: str | None = None, *, embed=None):
+        sent.append((message, embed))
+
+    bot._send_owner_dm = capture_dm
+
+    result = await bot._monitor_for(MonitorScope(Sport.NFL, 2026, 1)).refresh()
+
+    assert result.changed is True
+    assert sent[0][0] is None
+    embed = sent[0][1]
+    assert embed.title == "🏈 Recommendations Updated"
+    assert embed.fields[0].name == "NFL • 2026 — Week 1 — Picks"
+    assert embed.fields[0].value == (
+        "• 🔥 Strong — ~~Buffalo Bills~~ at **Miami Dolphins**\n"
+        "> Why: league -3.0 vs market -6.0: 3.0 pts toward home"
+    )
 
 
 def test_bot_uses_no_privileged_intents_and_registers_dm_commands(settings):
@@ -507,6 +713,25 @@ async def test_send_dm_fetches_only_configured_owner(settings):
 
     assert bot.fetched == [settings.owner_id]
     assert sent == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_send_dm_delivers_an_embed_without_plain_text(settings):
+    sent: list[tuple[str | None, object | None]] = []
+
+    class FakeUser:
+        async def send(self, message=None, *, embed=None):
+            sent.append((message, embed))
+
+    class FakeBot:
+        async def fetch_user(self, _user_id):
+            return FakeUser()
+
+    embed = object()
+
+    await send_dm(FakeBot(), settings, embed=embed)
+
+    assert sent == [(None, embed)]
 
 
 def test_config_required_still_has_no_secret_logging(monkeypatch, caplog):
