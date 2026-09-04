@@ -12,6 +12,7 @@ dependencies = [
     "discord.py>=2.6,<3",
     "duckdb>=1.5.5",
     "httpx>=0.28.1",
+    "loguru>=0.7.3,<0.8",
     "nflreadpy>=0.1.5",
     "polars[rtcompat]>=1.43.2",
     "pydantic>=2.13.4",
