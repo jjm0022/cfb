@@ -478,7 +478,32 @@ async def test_scheduled_refresh_logs_a_result_error(settings, records):
     assert len(failures) == 1
     assert failures[0]["extra"]["event"] == "refresh_failed"
     assert "scope" not in failures[0]["extra"]
+    assert failures[0]["extra"]["error_type"] == "RuntimeError"
+    assert failures[0]["extra"]["error_detail"] == "quota exhausted"
     assert failures[0]["message"] == "RuntimeError: quota exhausted"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_logs_scoped_error_fields(settings, records):
+    async def refresh():
+        return (
+            (
+                MonitorScope(Sport.CFB, 2026, 2),
+                RefreshResult(changed=False, error=ValueError("missing slate")),
+            ),
+        )
+
+    scheduler = FakeScheduler()
+    build_schedule(settings, refresh, lambda _message: None, scheduler)
+
+    await scheduler.jobs[1].func()
+
+    failures = [record for record in records if record["extra"].get("event") == "refresh_failed"]
+    assert len(failures) == 1
+    assert failures[0]["extra"]["scope"] == "cfb/2026/wk2"
+    assert failures[0]["extra"]["error_type"] == "ValueError"
+    assert failures[0]["extra"]["error_detail"] == "missing slate"
+    assert failures[0]["message"] == "ValueError: missing slate"
 
 
 @pytest.mark.asyncio

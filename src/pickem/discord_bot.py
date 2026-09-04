@@ -91,13 +91,18 @@ async def _invoke(callback: Callable[..., Any], *args: Any) -> Any:
     return result
 
 
-def _scheduled_error_message(settings: DiscordSettings, error: BaseException) -> str:
-    """Format a refresh failure without exposing environment configuration."""
+def _scheduled_error_detail(settings: DiscordSettings, error: BaseException) -> str:
+    """Return refresh error text with environment configuration redacted."""
     detail = str(error)
     for value in (settings.token, str(settings.owner_id), str(settings.db)):
         if value:
             detail = detail.replace(value, "[redacted]")
-    return f"{type(error).__name__}: {detail}"
+    return detail
+
+
+def _scheduled_error_message(settings: DiscordSettings, error: BaseException) -> str:
+    """Format a refresh failure without exposing environment configuration."""
+    return f"{type(error).__name__}: {_scheduled_error_detail(settings, error)}"
 
 
 def build_schedule(
@@ -115,16 +120,22 @@ def build_schedule(
         callback = getattr(refresh, "refresh", refresh)
         result = await _invoke(callback)
         if isinstance(result, RefreshResult) and result.error is not None:
-            logger.bind(event="refresh_failed").error(
-                _scheduled_error_message(settings, result.error)
-            )
+            error = result.error
+            logger.bind(
+                event="refresh_failed",
+                error_type=type(error).__name__,
+                error_detail=_scheduled_error_detail(settings, error),
+            ).error(_scheduled_error_message(settings, error))
         elif isinstance(result, tuple):
             for scope, scope_result in result:
                 if scope_result.error is not None:
+                    error = scope_result.error
                     logger.bind(
                         event="refresh_failed",
                         scope=f"{scope.sport.value}/{scope.season}/wk{scope.week}",
-                    ).error(_scheduled_error_message(settings, scope_result.error))
+                        error_type=type(error).__name__,
+                        error_detail=_scheduled_error_detail(settings, error),
+                    ).error(_scheduled_error_message(settings, error))
 
     scheduler.add_job(
         reminder_job,

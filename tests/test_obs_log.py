@@ -33,6 +33,7 @@ def test_cli_callback_configures_logging(tmp_path, monkeypatch):
             ],
         )
     finally:
+        logger.complete()
         logger.remove()
 
     assert result.exit_code == 1
@@ -46,6 +47,7 @@ def log_dir(tmp_path, monkeypatch):
     directory = tmp_path / "logs"
     configure_logging("pickem", log_dir=directory)
     yield directory
+    logger.complete()
     logger.remove()
 
 
