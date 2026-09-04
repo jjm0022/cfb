@@ -8,6 +8,9 @@ data/
 .worktrees/
 *.swp
 
+# Symlink to the gitignored AGENTS.md; tracking it would commit a dangling link.
+CLAUDE.md
+
 # codex-workflow-managed-start
 agent_docs/
 .codex_workflow_hidden_resources/
