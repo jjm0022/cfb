@@ -424,7 +424,7 @@ def test_refresh_serializes_overlapping_calls():
     assert maximum == 1
 
 
-def test_refresh_rethrows_cancellation():
+def test_refresh_rethrows_cancellation(records):
     fake = FakeMonitor([])
 
     async def cancelled(_scope):
@@ -434,6 +434,10 @@ def test_refresh_rethrows_cancellation():
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(fake.monitor().refresh())
+
+    assert not any(
+        record["extra"].get("event") == "refresh_failed" for record in records
+    )
 
 
 def _events(records, event: str):
@@ -661,6 +665,38 @@ def test_each_returned_error_phase_logs_once_with_its_traceback(
         error_detail=error_detail,
         scope=scope,
     )
+
+
+def test_load_notification_failure_logs_the_returned_error_once(records):
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+
+    def load_state(_scope):
+        raise OSError("state unavailable")
+
+    async def notify(_message: str):
+        raise ConnectionError("DM unavailable")
+
+    monitor = RecommendationMonitor(
+        refresh_week=lambda _scope: snapshot_with({"game-a": Side.HOME}),
+        load_state=load_state,
+        save_state=lambda _scope, _state: None,
+        notify=notify,
+        scope=scope,
+    )
+
+    result = asyncio.run(monitor.refresh())
+
+    assert isinstance(result.error, ConnectionError)
+    assert str(result.error) == "DM unavailable"
+    _assert_one_refresh_failure(
+        records,
+        phase="load_notification",
+        error_type="ConnectionError",
+        error_detail="DM unavailable",
+        scope=scope,
+    )
+    failure = _events(records, "refresh_failed")[0]
+    assert "DM unavailable" in failure["message"]
 
 
 def test_successful_state_save_clears_persistence_deduplication(records):
