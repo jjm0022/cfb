@@ -1,9 +1,14 @@
 import json
+from collections import Counter
+from datetime import UTC, datetime
 
 import pytest
 from loguru import logger
 
+from pickem.models import Game, LeagueLine, Sport
 from pickem.obs.log import configure_logging, run_context
+from pickem.operations.recommendations import generate_recommendations
+from pickem.store.db import Store
 
 SECRET = "sk-live-abcdef0123456789"
 
@@ -295,3 +300,68 @@ def test_each_secret_is_redacted_from_exception_tracebacks(log_dir, monkeypatch,
     logger.complete()
     for name in ("pickem.log", "pickem.jsonl", "errors.log"):
         assert secret not in (log_dir / name).read_text()
+
+
+@pytest.fixture
+def seeded_db(tmp_path):
+    db = tmp_path / "pickem.duckdb"
+    kickoff = datetime(2026, 9, 6, 17, tzinfo=UTC)
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games(
+            [
+                Game(
+                    game_id="cfb:away:home",
+                    sport=Sport.CFB,
+                    season=2026,
+                    week=1,
+                    kickoff_utc=kickoff,
+                    home_team_id="home",
+                    away_team_id="away",
+                )
+            ]
+        )
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id="cfb:away:home",
+                    season=2026,
+                    week=1,
+                    spread_home=-3.0,
+                    posted_at=kickoff,
+                )
+            ]
+        )
+    return db
+
+
+def test_a_refresh_leaves_a_complete_audit_trail(tmp_path, monkeypatch, seeded_db):
+    monkeypatch.setenv("PICKEM_LOG_CONSOLE", "off")
+    log_dir = tmp_path / "logs"
+    configure_logging("pickem", log_dir=log_dir)
+    now = datetime(2026, 9, 2, 12, tzinfo=UTC)
+
+    with run_context("test:refresh", sport="cfb", season=2026, week=1):
+        snapshot = generate_recommendations(seeded_db, Sport.CFB, 2026, 1, now)
+
+    logger.complete()
+    rows = [
+        json.loads(line)
+        for line in (log_dir / "pickem.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+
+    assert len({row["run_id"] for row in rows}) == 1
+    decided = [row for row in rows if row["event"] == "edge_decided"]
+    assert len(decided) == len(snapshot.edges)
+    assert Counter(row["game_id"] for row in decided) == Counter(
+        edge.game_id for edge in snapshot.edges
+    )
+    for row, edge in zip(
+        sorted(decided, key=lambda row: row["game_id"]),
+        sorted(snapshot.edges, key=lambda edge: edge.game_id),
+        strict=True,
+    ):
+        assert row["message"] == edge.rationale
+        assert row["side"] == edge.side.value
+    logger.remove()
