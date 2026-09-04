@@ -21,8 +21,9 @@ from discord.ext import commands
 
 from pickem import config
 from pickem.automation.monitor import MonitorScope, RecommendationMonitor, RefreshResult
-from pickem.models import Sport
+from pickem.models import Game, Side, Sport, Tier
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
+from pickem.resolve.resolver import TeamResolver
 from pickem.store.db import AutomationState, Store
 
 EASTERN = ZoneInfo("America/New_York")
@@ -150,10 +151,19 @@ def build_schedule(
     )
 
 
-async def send_dm(bot: Any, settings: DiscordSettings, message: str) -> None:
+async def send_dm(
+    bot: Any,
+    settings: DiscordSettings,
+    message: str | None = None,
+    *,
+    embed: discord.Embed | None = None,
+) -> None:
     """Fetch the configured owner and deliver one direct message."""
     user = await bot.fetch_user(settings.owner_id)
-    await user.send(message)
+    if embed is not None:
+        await user.send(embed=embed)
+    else:
+        await user.send(message)
 
 
 def _ensure_store_parent(db: Path) -> None:
@@ -203,12 +213,16 @@ def resolve_pickem_scopes(
     return tuple(scopes)
 
 
-def _latest_market_timestamp(settings: DiscordSettings, scope: MonitorScope) -> datetime | None:
+def _stored_week_details(
+    settings: DiscordSettings, scope: MonitorScope
+) -> tuple[tuple[Game, ...], datetime | None]:
+    """Load a scope's teams and latest market timestamp for Discord output."""
     _ensure_store_parent(settings.db)
     with Store(settings.db) as store:
         store.init_schema()
         dataset = store.load_week(scope.sport, scope.season, scope.week)
-    return max((line.captured_at for line in dataset.market_lines), default=None)
+    latest_market = max((line.captured_at for line in dataset.market_lines), default=None)
+    return tuple(dataset.games), latest_market
 
 
 def _format_timestamp(value: datetime | None) -> str:
@@ -232,13 +246,62 @@ def _scope_description(scope: MonitorScope) -> str:
     return f"{scope.sport.value.upper()} • {scope.season} — Week {scope.week}"
 
 
-def _format_recommendations(snapshot: Any | None) -> str:
+_TIER_BADGES = {
+    Tier.STRONG: "🔥 Strong",
+    Tier.LEAN: "✅ Lean",
+    Tier.COINFLIP: "🪙 Coinflip",
+    Tier.NO_MARKET: "⚠️ No market",
+}
+_DISCORD_FIELD_VALUE_LIMIT = 1024
+
+
+def _format_recommendations(snapshot: Any | None, games: tuple[Game, ...] = ()) -> str:
     if snapshot is None:
         return "Updated recommendations were not returned."
-    return (
-        "\n".join(f"• `{edge.game_id}` — **{edge.side.value}**" for edge in snapshot.edges)
-        or "No recommendations stored yet."
-    )
+    games_by_id = {game.game_id: game for game in games}
+    resolver = TeamResolver.default()
+    formatted: list[str] = []
+    for edge in snapshot.edges:
+        game = games_by_id.get(edge.game_id)
+        if game is None:
+            formatted.append(f"• `{edge.game_id}` — **{edge.side.value}**")
+            continue
+        away = resolver.display_name(game.away_team_id, game.sport)
+        home = resolver.display_name(game.home_team_id, game.sport)
+        matchup = (
+            f"**{away}** at ~~{home}~~"
+            if edge.side is Side.AWAY
+            else f"~~{away}~~ at **{home}**"
+        )
+        formatted.append(
+            f"• {_TIER_BADGES[edge.tier]} — {matchup}\n> Why: {edge.rationale}"
+        )
+    return "\n\n".join(formatted) or "No recommendations stored yet."
+
+
+def _field_value_chunks(value: str) -> tuple[str, ...]:
+    """Split formatted picks without exceeding Discord's field-value limit."""
+    chunks: list[str] = []
+    current = ""
+    for entry in value.split("\n\n"):
+        if len(entry) > _DISCORD_FIELD_VALUE_LIMIT:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(
+                entry[index : index + _DISCORD_FIELD_VALUE_LIMIT]
+                for index in range(0, len(entry), _DISCORD_FIELD_VALUE_LIMIT)
+            )
+            continue
+        candidate = entry if not current else f"{current}\n\n{entry}"
+        if len(candidate) > _DISCORD_FIELD_VALUE_LIMIT:
+            chunks.append(current)
+            current = entry
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return tuple(chunks) or ("No recommendations stored yet.",)
 
 
 @dataclass(frozen=True)
@@ -248,7 +311,30 @@ class ScopeStatus:
     scope: MonitorScope
     state: AutomationState
     snapshot: Any
+    games: tuple[Game, ...]
     market_timestamp: datetime | None
+
+
+def _add_recommendation_fields(
+    embed: discord.Embed,
+    scope: MonitorScope,
+    snapshot: Any | None,
+    games: tuple[Game, ...],
+) -> None:
+    scope_name = _scope_description(scope)
+    for index, picks in enumerate(
+        _field_value_chunks(_format_recommendations(snapshot, games)), start=1
+    ):
+        suffix = " Picks" if index == 1 else f" Picks (cont. {index})"
+        embed.add_field(name=f"{scope_name} —{suffix}", value=picks, inline=False)
+
+
+def _format_change_notification(
+    scope: MonitorScope, snapshot: Any | None, games: tuple[Game, ...]
+) -> discord.Embed:
+    embed = discord.Embed(title="🏈 Recommendations Updated", color=discord.Color.green())
+    _add_recommendation_fields(embed, scope, snapshot, games)
+    return embed
 
 
 def _format_status(statuses: tuple[ScopeStatus, ...], scheduler: Any) -> discord.Embed:
@@ -264,14 +350,15 @@ def _format_status(statuses: tuple[ScopeStatus, ...], scheduler: Any) -> discord
         color=discord.Color.blurple(),
     )
     for status in statuses:
+        scope_name = _scope_description(status.scope)
+        _add_recommendation_fields(embed, status.scope, status.snapshot, status.games)
         monitoring = "\n".join(
             [
-                _format_recommendations(status.snapshot),
                 f"Last successful check: {_format_timestamp(status.state.checked_at)}",
                 f"Stored market data: {_format_timestamp(status.market_timestamp)}",
             ]
         )
-        embed.add_field(name=_scope_description(status.scope), value=monitoring, inline=False)
+        embed.add_field(name=f"{scope_name} — Monitoring", value=monitoring, inline=False)
     return embed.add_field(
         name="Scheduling",
         value=f"Next scheduled event: {_next_scheduled_event(scheduler)}",
@@ -335,7 +422,9 @@ class PickemBot(commands.Bot):
         )
         self._load_state = lambda scope: _load_state(settings, scope)
         self._save_state = lambda scope, state: _save_state(settings, scope, state)
-        self._send_owner_dm = lambda message: send_dm(self, settings, message)
+        self._send_owner_dm = lambda message=None, *, embed=None: send_dm(
+            self, settings, message, embed=embed
+        )
         self._injected_monitor = monitor
         self._monitors: dict[MonitorScope, RecommendationMonitor] = {}
         self._refresh_lock = asyncio.Lock()
@@ -409,11 +498,27 @@ class PickemBot(commands.Bot):
                 ),
                 load_state=self._load_state,
                 save_state=self._save_state,
-                notify=self._send_owner_dm,
+                notify=lambda message: self._send_monitor_notification(scope, message),
                 scope=scope,
             )
             self._monitors[scope] = monitor
         return monitor
+
+    async def _send_monitor_notification(self, scope: MonitorScope, message: str) -> None:
+        if not message.startswith("Recommendations changed:"):
+            await self._send_owner_dm(message)
+            return
+        games, _ = _stored_week_details(self.settings, scope)
+        snapshot = generate_recommendations(
+            self.settings.db,
+            scope.sport,
+            scope.season,
+            scope.week,
+            datetime.now(UTC),
+        )
+        await self._send_owner_dm(
+            embed=_format_change_notification(scope, snapshot, games)
+        )
 
     async def _refresh_scopes(
         self, season: int | None = None, week: int | None = None
@@ -446,22 +551,25 @@ class PickemBot(commands.Bot):
             # interaction's loop so the connection is opened and closed on
             # one thread; live refreshes are the intentionally offloaded
             # operation in the monitor composition below.
-            statuses = tuple(
-                ScopeStatus(
-                    scope=scope,
-                    state=self._load_state(scope),
-                    snapshot=generate_recommendations(
-                        self.settings.db,
-                        scope.sport,
-                        scope.season,
-                        scope.week,
-                        datetime.now(UTC),
-                    ),
-                    market_timestamp=_latest_market_timestamp(self.settings, scope),
+            statuses: list[ScopeStatus] = []
+            for scope in self._resolve_scopes(season, week):
+                games, market_timestamp = _stored_week_details(self.settings, scope)
+                statuses.append(
+                    ScopeStatus(
+                        scope=scope,
+                        state=self._load_state(scope),
+                        snapshot=generate_recommendations(
+                            self.settings.db,
+                            scope.sport,
+                            scope.season,
+                            scope.week,
+                            datetime.now(UTC),
+                        ),
+                        games=games,
+                        market_timestamp=market_timestamp,
+                    )
                 )
-                for scope in self._resolve_scopes(season, week)
-            )
-            embed = _format_status(statuses, self.scheduler)
+            embed = _format_status(tuple(statuses), self.scheduler)
         except Exception as error:
             await interaction.response.send_message(f"Status unavailable: {error}")
             return

@@ -37,9 +37,14 @@ def _normalize(name: str) -> str:
 
 
 class TeamResolver:
-    def __init__(self, mapping: dict[Sport, dict[str, str]]) -> None:
+    def __init__(
+        self,
+        mapping: dict[Sport, dict[str, str]],
+        display_names: dict[Sport, dict[str, str]] | None = None,
+    ) -> None:
         # mapping: sport -> normalized alias -> team_id
         self._mapping = mapping
+        self._display_names = display_names or {}
 
     @classmethod
     def from_text(cls, text: str) -> TeamResolver:
@@ -57,10 +62,13 @@ class TeamResolver:
     @classmethod
     def _build(cls, raw: dict) -> TeamResolver:
         mapping: dict[Sport, dict[str, str]] = {}
+        display_names: dict[Sport, dict[str, str]] = {}
         for sport_key, teams in (raw or {}).items():
             sport = Sport(sport_key)
             table: dict[str, str] = {}
+            display_table: dict[str, str] = {}
             for team_id, aliases in teams.items():
+                display_table[team_id] = aliases[0] if aliases else team_id
                 for alias in [team_id, *aliases]:
                     key = _normalize(alias)
                     existing = table.get(key)
@@ -71,7 +79,8 @@ class TeamResolver:
                         )
                     table[key] = team_id
             mapping[sport] = table
-        return cls(mapping)
+            display_names[sport] = display_table
+        return cls(mapping, display_names)
 
     def resolve(self, name: str, sport: Sport) -> str:
         table = self._mapping.get(sport, {})
@@ -80,6 +89,10 @@ class TeamResolver:
         if team_id is not None:
             return team_id
         raise UnknownTeamError(self._error_message(name, sport, table))
+
+    def display_name(self, team_id: str, sport: Sport) -> str:
+        """Return a stable human-friendly name, falling back to the ID."""
+        return self._display_names.get(sport, {}).get(team_id, team_id)
 
     @staticmethod
     def _error_message(name: str, sport: Sport, table: dict[str, str]) -> str:
