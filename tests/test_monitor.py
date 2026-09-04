@@ -1,14 +1,16 @@
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
+from traceback import format_tb
 
 import pytest
 
 from pickem.automation.monitor import (
+    MonitorScope,
     RecommendationMonitor,
     recommendation_signature,
 )
-from pickem.models import Edge, Side, Tier
+from pickem.models import Edge, Side, Sport, Tier
 from pickem.operations.recommendations import RecommendationSnapshot
 from pickem.store.db import AutomationState
 
@@ -432,3 +434,249 @@ def test_refresh_rethrows_cancellation():
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(fake.monitor().refresh())
+
+
+def _events(records, event: str):
+    return [record for record in records if record["extra"].get("event") == event]
+
+
+def _assert_one_refresh_failure(
+    records,
+    *,
+    phase: str,
+    error_type: str,
+    error_detail: str,
+    scope: MonitorScope,
+):
+    failures = _events(records, "refresh_failed")
+    assert len(failures) == 1
+    failure = failures[0]
+    assert failure["level"].name == "ERROR"
+    assert failure["extra"]["phase"] == phase
+    assert failure["extra"]["error_type"] == error_type
+    assert failure["extra"]["error_detail"] == error_detail
+    assert failure["extra"]["sport"] == scope.sport.value
+    assert failure["extra"]["season"] == scope.season
+    assert failure["extra"]["week"] == scope.week
+    if failure["exception"] is not None:
+        exception_type, exception, traceback = failure["exception"]
+        assert exception_type is type(exception)
+        assert isinstance(exception, BaseException)
+        assert traceback is not None
+        assert format_tb(traceback)
+    else:
+        # A configured Loguru patcher folds and clears the tuple before the
+        # records fixture receives it; the rendered traceback remains durable.
+        assert "Traceback (most recent call last)" in failure["message"]
+
+
+def test_repeat_failure_logs_info_suppression_and_one_traceback_failure(records):
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+    state = AutomationState(error_fingerprint="RuntimeError: boom")
+
+    async def raising_refresh(_scope):
+        raise RuntimeError("boom")
+
+    def fail_if_called(_message):
+        raise AssertionError("duplicate notification should be suppressed")
+
+    monitor = RecommendationMonitor(
+        refresh_week=raising_refresh,
+        load_state=lambda _scope: state,
+        save_state=lambda _scope, _new_state: None,
+        notify=fail_if_called,
+        scope=scope,
+    )
+
+    result = asyncio.run(monitor.refresh())
+
+    assert isinstance(result.error, RuntimeError)
+    suppressed = _events(records, "notify_suppressed")
+    assert len(suppressed) == 1
+    assert suppressed[0]["level"].name == "INFO"
+    assert suppressed[0]["extra"]["fingerprint"] == "RuntimeError: boom"
+    assert suppressed[0]["extra"]["sport"] == "nfl"
+    assert suppressed[0]["extra"]["season"] == 2026
+    assert suppressed[0]["extra"]["week"] == 1
+    _assert_one_refresh_failure(
+        records,
+        phase="refresh",
+        error_type="RuntimeError",
+        error_detail="boom",
+        scope=scope,
+    )
+
+
+def test_successful_refresh_logs_change_notification_save_and_success(records):
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+    snapshot = snapshot_with({"game-a": Side.AWAY})
+    notifications: list[str] = []
+
+    async def notify(message: str):
+        notifications.append(message)
+
+    saved: list[AutomationState] = []
+    monitor = RecommendationMonitor(
+        refresh_week=lambda _scope: snapshot,
+        load_state=lambda _scope: AutomationState(signature="game-a:home"),
+        save_state=lambda _scope, state: saved.append(state),
+        notify=notify,
+        scope=scope,
+    )
+
+    result = asyncio.run(monitor.refresh())
+
+    assert result.changed is True
+    assert result.error is None
+    assert notifications == ["Recommendations changed: changed: game-a home → away"]
+    assert len(saved) == 1
+
+    started = _events(records, "refresh_started")
+    assert len(started) == 1
+    assert started[0]["level"].name == "INFO"
+    assert started[0]["extra"]["sport"] == "nfl"
+    assert started[0]["extra"]["season"] == 2026
+    assert started[0]["extra"]["week"] == 1
+
+    changed = _events(records, "recommendation_changed")
+    assert len(changed) == 1
+    assert changed[0]["level"].name == "INFO"
+    assert changed[0]["message"] == "Recommendations changed: changed: game-a home → away"
+
+    sent = _events(records, "notify_sent")
+    assert len(sent) == 1
+    assert sent[0]["level"].name == "INFO"
+    assert sent[0]["extra"]["notification_kind"] == "recommendation_change"
+
+    state_saved = _events(records, "state_saved")
+    assert len(state_saved) == 1
+    assert state_saved[0]["level"].name == "DEBUG"
+    assert state_saved[0]["extra"]["signature"] == "game-a:away"
+    assert state_saved[0]["extra"]["checked_at"] == GENERATED_AT
+
+    succeeded = _events(records, "refresh_succeeded")
+    assert len(succeeded) == 1
+    assert succeeded[0]["level"].name == "INFO"
+    assert succeeded[0]["extra"]["changed"] is True
+    assert succeeded[0]["extra"]["edges"] == 1
+
+    event_names = [record["extra"].get("event") for record in records]
+    assert event_names.index("refresh_started") < event_names.index("recommendation_changed")
+    assert event_names.index("recommendation_changed") < event_names.index("notify_sent")
+    assert event_names.index("notify_sent") < event_names.index("state_saved")
+    assert event_names.index("state_saved") < event_names.index("refresh_succeeded")
+
+
+@pytest.mark.parametrize(
+    ("scenario", "phase", "error_type", "error_detail"),
+    [
+        ("load", "load", "OSError", "state unavailable"),
+        ("refresh", "refresh", "RuntimeError", "refresh unavailable"),
+        (
+            "failure_notification",
+            "failure_notification",
+            "ConnectionError",
+            "DM unavailable",
+        ),
+        ("persistence", "persistence", "OSError", "checkpoint unavailable"),
+        (
+            "persistence_notification",
+            "persistence_notification",
+            "ConnectionError",
+            "persistence DM unavailable",
+        ),
+        (
+            "change_notification",
+            "change_notification",
+            "ConnectionError",
+            "change DM unavailable",
+        ),
+    ],
+)
+def test_each_returned_error_phase_logs_once_with_its_traceback(
+    records, scenario, phase, error_type, error_detail
+):
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+    snapshot = snapshot_with({"game-a": Side.AWAY})
+    state = AutomationState(signature="game-a:home")
+    notify_calls = 0
+
+    async def refresh_week(_scope):
+        failing_scenarios = {
+            "refresh",
+            "failure_notification",
+            "persistence",
+            "persistence_notification",
+        }
+        if scenario in failing_scenarios:
+            raise RuntimeError("refresh unavailable")
+        return snapshot
+
+    def load_state(_scope):
+        if scenario == "load":
+            raise OSError("state unavailable")
+        return state
+
+    def save_state(_scope, _new_state):
+        if scenario in {"persistence", "persistence_notification"}:
+            raise OSError("checkpoint unavailable")
+
+    async def notify(_message: str):
+        nonlocal notify_calls
+        notify_calls += 1
+        if scenario == "failure_notification":
+            raise ConnectionError("DM unavailable")
+        if scenario == "persistence_notification" and notify_calls == 2:
+            raise ConnectionError("persistence DM unavailable")
+        if scenario == "change_notification":
+            raise ConnectionError("change DM unavailable")
+
+    monitor = RecommendationMonitor(
+        refresh_week=refresh_week,
+        load_state=load_state,
+        save_state=save_state,
+        notify=notify,
+        scope=scope,
+    )
+
+    result = asyncio.run(monitor.refresh())
+
+    assert result.error is not None
+    if scenario == "failure_notification":
+        assert isinstance(result.error, ConnectionError)
+    elif scenario == "persistence_notification":
+        assert isinstance(result.error, ConnectionError)
+    elif scenario == "change_notification":
+        assert isinstance(result.error, ConnectionError)
+    elif scenario == "persistence":
+        assert isinstance(result.error, OSError)
+    elif scenario == "load":
+        assert isinstance(result.error, OSError)
+    else:
+        assert isinstance(result.error, RuntimeError)
+    _assert_one_refresh_failure(
+        records,
+        phase=phase,
+        error_type=error_type,
+        error_detail=error_detail,
+        scope=scope,
+    )
+
+
+def test_successful_state_save_clears_persistence_deduplication(records):
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+    snapshot = snapshot_with({"game-a": Side.HOME})
+    saved: list[AutomationState] = []
+    monitor = RecommendationMonitor(
+        refresh_week=lambda _scope: snapshot,
+        load_state=lambda _scope: AutomationState(),
+        save_state=lambda _scope, state: saved.append(state),
+        notify=lambda _message: None,
+        scope=scope,
+    )
+
+    result = asyncio.run(monitor.refresh())
+
+    assert result.error is None
+    assert len(_events(records, "state_saved")) == 1
+    assert saved[0].signature == "game-a:home"

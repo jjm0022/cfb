@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from loguru import logger
+
 from pickem.models import Sport
 from pickem.operations.recommendations import RecommendationSnapshot
 from pickem.store.db import AutomationState
@@ -91,6 +93,26 @@ def _failure_fingerprint(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
 
 
+def _scope_fields(scope: Any) -> dict[str, Any]:
+    """Return safe, queryable fields for a monitor scope when available."""
+    fields: dict[str, Any] = {}
+    for name in ("sport", "season", "week"):
+        try:
+            value = getattr(scope, name)
+        except AttributeError:
+            continue
+        except Exception:
+            # Logging must not turn an unusual adapter scope into a refresh error.
+            continue
+        if name == "sport":
+            try:
+                value = getattr(value, "value", value)
+            except Exception:
+                continue
+        fields[name] = value
+    return fields
+
+
 class RecommendationMonitor:
     """Run recommendation refreshes and notify only meaningful changes.
 
@@ -119,6 +141,10 @@ class RecommendationMonitor:
     async def refresh(self) -> RefreshResult:
         """Refresh the active week while serializing all state transitions."""
         async with self._lock:
+            logger.bind(
+                event="refresh_started",
+                **_scope_fields(self._scope),
+            ).info("refresh started")
             try:
                 loaded_state = await _invoke(self._load_state, self._scope)
             except asyncio.CancelledError:
@@ -143,11 +169,16 @@ class RecommendationMonitor:
         try:
             if self._load_error_fingerprint != fingerprint:
                 await _invoke(self._notify, f"Recommendation refresh failed: {error}")
+                self._log_notification("load_failure", fingerprint=fingerprint)
                 self._load_error_fingerprint = fingerprint
+            else:
+                self._log_notification_suppressed("load_failure", fingerprint)
         except asyncio.CancelledError:
             raise
         except Exception as notification_error:
+            self._log_refresh_failure(notification_error, phase="load_notification")
             return RefreshResult(False, error=notification_error)
+        self._log_refresh_failure(error, phase="load")
         return RefreshResult(False, error=error)
 
     async def _record_failure(self, state: AutomationState, error: Exception) -> RefreshResult:
@@ -155,21 +186,28 @@ class RecommendationMonitor:
         try:
             if state.error_fingerprint != fingerprint:
                 await _invoke(self._notify, f"Recommendation refresh failed: {error}")
+                self._log_notification("refresh_failure", fingerprint=fingerprint)
+            else:
+                self._log_notification_suppressed("refresh_failure", fingerprint)
         except asyncio.CancelledError:
             raise
         except Exception as notification_error:
+            self._log_refresh_failure(notification_error, phase="failure_notification")
             return RefreshResult(False, error=notification_error)
 
         try:
+            next_state = state.model_copy(update={"error_fingerprint": fingerprint})
             await _invoke(
                 self._save_state,
                 self._scope,
-                state.model_copy(update={"error_fingerprint": fingerprint}),
+                next_state,
             )
+            self._log_state_saved(next_state)
         except asyncio.CancelledError:
             raise
         except Exception as persistence_error:
             return await self._record_persistence_failure(persistence_error)
+        self._log_refresh_failure(error, phase="refresh")
         return RefreshResult(False, error=error)
 
     async def _record_persistence_failure(self, error: Exception) -> RefreshResult:
@@ -178,11 +216,16 @@ class RecommendationMonitor:
         try:
             if self._persistence_error_fingerprint != fingerprint:
                 await _invoke(self._notify, f"Recommendation refresh failed: {error}")
+                self._log_notification("persistence_failure", fingerprint=fingerprint)
                 self._persistence_error_fingerprint = fingerprint
+            else:
+                self._log_notification_suppressed("persistence_failure", fingerprint)
         except asyncio.CancelledError:
             raise
         except Exception as notification_error:
+            self._log_refresh_failure(notification_error, phase="persistence_notification")
             return RefreshResult(False, error=notification_error)
+        self._log_refresh_failure(error, phase="persistence")
         return RefreshResult(False, error=error)
 
     async def _record_success(
@@ -200,22 +243,74 @@ class RecommendationMonitor:
 
         try:
             if changed:
-                await _invoke(self._notify, _change_message(state.signature, snapshot))
+                message = _change_message(state.signature, snapshot)
+                logger.bind(
+                    event="recommendation_changed",
+                    **_scope_fields(self._scope),
+                ).info(message)
+                await _invoke(self._notify, message)
+                self._log_notification("recommendation_change")
         except asyncio.CancelledError:
             raise
         except Exception as notification_error:
+            self._log_refresh_failure(notification_error, phase="change_notification")
             return RefreshResult(changed, snapshot=snapshot, error=notification_error)
 
         try:
             await _invoke(self._save_state, self._scope, next_state)
             self._persistence_error_fingerprint = None
+            self._log_state_saved(next_state)
         except asyncio.CancelledError:
             raise
         except Exception as error:
             persistence_result = await self._record_persistence_failure(error)
             return RefreshResult(changed, snapshot=snapshot, error=persistence_result.error)
 
+        logger.bind(
+            event="refresh_succeeded",
+            **_scope_fields(self._scope),
+            changed=changed,
+            edges=len(snapshot.edges),
+        ).info("refresh succeeded" + ("; recommendations changed" if changed else ""))
         return RefreshResult(changed, snapshot=snapshot)
+
+    def _log_notification(self, kind: str, *, fingerprint: str | None = None) -> None:
+        fields: dict[str, Any] = {
+            "event": "notify_sent",
+            "notification_kind": kind,
+            **_scope_fields(self._scope),
+        }
+        if fingerprint is not None:
+            fields["fingerprint"] = fingerprint
+        logger.bind(**fields).info("notification sent")
+
+    def _log_notification_suppressed(self, kind: str, fingerprint: str) -> None:
+        logger.bind(
+            event="notify_suppressed",
+            notification_kind=kind,
+            fingerprint=fingerprint,
+            **_scope_fields(self._scope),
+        ).info("duplicate notification suppressed")
+
+    def _log_state_saved(self, state: AutomationState) -> None:
+        logger.bind(
+            event="state_saved",
+            signature=state.signature,
+            checked_at=state.checked_at,
+            error_fingerprint=state.error_fingerprint,
+            **_scope_fields(self._scope),
+        ).debug("automation state persisted")
+
+    def _log_refresh_failure(self, error: Exception, *, phase: str) -> None:
+        logger.bind(
+            event="refresh_failed",
+            phase=phase,
+            error_type=type(error).__name__,
+            error_detail=str(error),
+            **_scope_fields(self._scope),
+        ).opt(
+            exception=(type(error), error, error.__traceback__),
+        ).error(f"refresh failed: {error}")
 
 
 __all__ = [
