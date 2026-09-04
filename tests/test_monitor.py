@@ -669,12 +669,13 @@ def test_each_returned_error_phase_logs_once_with_its_traceback(
 
 def test_load_notification_failure_logs_the_returned_error_once(records):
     scope = MonitorScope(Sport.NFL, 2026, 1)
+    notification_error = ConnectionError("DM unavailable")
 
     def load_state(_scope):
         raise OSError("state unavailable")
 
     async def notify(_message: str):
-        raise ConnectionError("DM unavailable")
+        raise notification_error
 
     monitor = RecommendationMonitor(
         refresh_week=lambda _scope: snapshot_with({"game-a": Side.HOME}),
@@ -687,6 +688,7 @@ def test_load_notification_failure_logs_the_returned_error_once(records):
     result = asyncio.run(monitor.refresh())
 
     assert isinstance(result.error, ConnectionError)
+    assert result.error is notification_error
     assert str(result.error) == "DM unavailable"
     _assert_one_refresh_failure(
         records,
@@ -697,6 +699,15 @@ def test_load_notification_failure_logs_the_returned_error_once(records):
     )
     failure = _events(records, "refresh_failed")[0]
     assert "DM unavailable" in failure["message"]
+    if failure["exception"] is not None:
+        exception_type, exception, traceback = failure["exception"]
+        assert exception_type is type(result.error)
+        assert exception is result.error
+        assert traceback is result.error.__traceback__
+    else:
+        # The configured redaction patcher renders and clears exception tuples.
+        # The rendered traceback must still come from the notification callback.
+        assert "in notify" in failure["message"]
 
 
 def test_successful_state_save_clears_persistence_deduplication(records):
