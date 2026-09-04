@@ -108,7 +108,25 @@ def test_stdlib_records_are_intercepted(log_dir):
     import logging
 
     logging.getLogger("apscheduler.executors").info("Running job 'refresh'")
-    assert any("Running job" in r["message"] for r in _rows(log_dir))
+    rows = _rows(log_dir)
+    assert any("Running job" in r["message"] for r in rows)
+    assert next(r for r in rows if "Running job" in r["message"])["event"] == "apscheduler_log"
+
+
+def test_unbound_records_use_a_stable_default_event(log_dir):
+    # Catches the invalid '-' event default, which cannot be queried as snake_case.
+    logger.info("unlabeled record")
+    row = _rows(log_dir)[-1]
+    assert row["event"] == "unlabeled_log"
+
+
+def test_stdlib_logger_prefixes_are_normalized_to_snake_case(log_dir):
+    # Catches arbitrary punctuation/casing in intercepted logger event names.
+    import logging
+
+    logging.getLogger("Vendor-Client Weird.worker").info("vendor record")
+    row = next(r for r in _rows(log_dir) if r["message"] == "vendor record")
+    assert row["event"] == "vendor_client_weird_log"
 
 
 @pytest.mark.parametrize(
@@ -151,6 +169,27 @@ def test_nested_bound_values_are_redacted_recursively(log_dir):
     assert row["details"]["items"][1]["token"] == "***REDACTED***"
 
 
+def test_unknown_credentials_are_redacted_in_nested_bound_values(log_dir):
+    # Catches pattern redaction being applied only to top-level strings.
+    unknown_url_key = "nested-url-key-123456"
+    unknown_bearer = "nested-bearer-token-123456"
+    logger.bind(
+        event="nested_unknown_credentials",
+        details={
+            "request_url": f"https://api/x?apiKey={unknown_url_key}&page=1",
+            "headers": {"Authorization": f"Bearer {unknown_bearer}"},
+        },
+    ).error("nested request")
+    logger.complete()
+    for name in ("pickem.log", "pickem.jsonl", "errors.log"):
+        text = (log_dir / name).read_text()
+        assert unknown_url_key not in text
+        assert unknown_bearer not in text
+    row = next(r for r in _rows(log_dir) if r["event"] == "nested_unknown_credentials")
+    assert row["details"]["request_url"] == "https://api/x?apiKey=***REDACTED***&page=1"
+    assert row["details"]["headers"]["Authorization"] == "Bearer ***REDACTED***"
+
+
 def test_recognizable_url_and_authorization_values_are_redacted(log_dir):
     # Catches unbound credentials that are not equal to configured environment secrets.
     url_key = "inline-url-key-123456"
@@ -166,6 +205,42 @@ def test_recognizable_url_and_authorization_values_are_redacted(log_dir):
     message = next(r for r in _rows(log_dir) if r["event"] == "request_sent")["message"]
     assert "apiKey=***REDACTED***" in message
     assert "Authorization: Bearer ***REDACTED***" in message
+
+
+def test_unknown_credentials_are_redacted_in_exception_text(log_dir):
+    # Catches pattern redaction being skipped when a traceback is folded into a message.
+    unknown_url_key = "exception-url-key-123456"
+    unknown_bearer = "exception-bearer-token-123456"
+    try:
+        raise RuntimeError(
+            f"GET https://api/x?apiKey={unknown_url_key}&page=1 "
+            f"Authorization: Bearer {unknown_bearer}"
+        )
+    except RuntimeError as exc:
+        logger.bind(event="unknown_request_failed").opt(exception=True).error(str(exc))
+    logger.complete()
+    for name in ("pickem.log", "pickem.jsonl", "errors.log"):
+        text = (log_dir / name).read_text()
+        assert unknown_url_key not in text
+        assert unknown_bearer not in text
+    errors = (log_dir / "errors.log").read_text()
+    assert "apiKey=***REDACTED***" in errors
+    assert "Authorization: Bearer ***REDACTED***" in errors
+
+
+class _SecretStringObject:
+    def __str__(self) -> str:
+        return SECRET
+
+
+def test_non_string_bound_values_are_redacted_when_json_serialized(log_dir):
+    # Catches json.dumps(default=str) bypassing the patcher's redaction pass.
+    logger.bind(event="object_credentials", payload=_SecretStringObject()).error("object payload")
+    logger.complete()
+    for name in ("pickem.log", "pickem.jsonl", "errors.log"):
+        assert SECRET not in (log_dir / name).read_text()
+    row = next(r for r in _rows(log_dir) if r["event"] == "object_credentials")
+    assert row["payload"] == "***REDACTED***"
 
 
 @pytest.mark.parametrize(

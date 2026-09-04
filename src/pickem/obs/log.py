@@ -20,6 +20,7 @@ from loguru import logger
 _SECRET_ENV_VARS = ("ODDS_API_KEY", "CFBD_API_KEY", "DISCORD_BOT_TOKEN")
 _REDACTED = "***REDACTED***"
 _MIN_SECRET_LEN = 8  # never redact a short value; it would blank ordinary text
+_DEFAULT_EVENT = "unlabeled_log"
 
 _TEXT_FORMAT = (
     "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[run_id]} | "
@@ -68,6 +69,17 @@ def _redact_value(value: object, secrets: tuple[str, ...]) -> object:
     return value
 
 
+def _stdlib_event(logger_name: str) -> str:
+    prefix = logger_name.split(".", 1)[0]
+    normalized = re.sub(r"[^a-z0-9]+", "_", prefix.casefold())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        return _DEFAULT_EVENT
+    if not normalized[0].isalpha():
+        normalized = f"logger_{normalized}"
+    return f"{normalized}_log"
+
+
 def _flatten(record: dict) -> dict:
     payload = {
         "ts": record["time"].isoformat(),
@@ -99,7 +111,11 @@ def _make_patcher(secrets: tuple[str, ...]):
             if not key.startswith("_"):
                 record["extra"][key] = _redact_value(value, secrets)
 
-        record["extra"]["_json"] = json.dumps(_flatten(record), default=str)
+        serialized = json.dumps(
+            _flatten(record),
+            default=lambda value: _redact(str(value), secrets),
+        )
+        record["extra"]["_json"] = _redact(serialized, secrets)
 
     return patch
 
@@ -119,7 +135,7 @@ class _InterceptHandler(logging.Handler):
             depth += 1
 
         logger.opt(depth=depth, exception=record.exc_info).bind(
-            event=f"{record.name.split('.')[0]}_log"
+            event=_stdlib_event(record.name)
         ).log(level, record.getMessage())
 
 
@@ -148,7 +164,7 @@ def configure_logging(
 
     logger.remove()
     logger.configure(
-        extra={"run_id": "-", "event": "-"},
+        extra={"run_id": "-", "event": _DEFAULT_EVENT},
         patcher=_make_patcher(_secret_values()),
     )
 
