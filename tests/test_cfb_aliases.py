@@ -58,6 +58,9 @@ def test_no_id_or_alias_can_be_read_as_a_yaml_boolean():
         # Diacritics and punctuation as CFBD spells them.
         ("San José State", "SJSU"),
         ("Hawai'i", "HAW"),
+        # Schools CFBD classifies as FBS beginning with the 2026 feed.
+        ("North Dakota State", "NDSU"),
+        ("Sacramento State", "SAC"),
     ],
 )
 def test_known_schools_resolve(resolver, name, expected):

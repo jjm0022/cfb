@@ -24,6 +24,10 @@ def test_resolves_across_source_naming_conventions(resolver):
         assert resolver.resolve(name, Sport.NFL) == "LAR"
 
 
+def test_resolves_cbs_bare_las_vegas_name(resolver):
+    assert resolver.resolve("Las Vegas", Sport.NFL) == "LV"
+
+
 def test_resolution_is_case_and_whitespace_insensitive(resolver):
     assert resolver.resolve("  miami DOLPHINS ", Sport.NFL) == "MIA"
 

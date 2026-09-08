@@ -5,7 +5,7 @@ nfl:
   BUF: ["Buffalo Bills", "Buffalo", "BUF", "Bills"]
   LAR: ["Los Angeles Rams", "LA Rams", "LAR", "LA", "Rams", "St. Louis Rams", "STL"]
   LAC: ["Los Angeles Chargers", "LA Chargers", "LAC", "Chargers", "San Diego Chargers", "SD"]
-  LV:  ["Las Vegas Raiders", "Raiders", "LV", "LVR", "OAK", "Oakland Raiders"]
+  LV:  ["Las Vegas Raiders", "Las Vegas", "Raiders", "LV", "LVR", "OAK", "Oakland Raiders"]
   # The franchise was the Football Team for 2020-2021 and the Redskins before
   # that. The odds archive spans those years, so the old names are live data.
   WAS: ["Washington Commanders", "Washington Football Team", "Washington Redskins",
@@ -113,6 +113,7 @@ cfb:
   "NAVY":  ["Navy", "Navy Midshipmen", "NAVY"]
   "NCSU":  ["NC State", "NC State Wolfpack", "NCSU", "NC St."]
   "ND":    ["Notre Dame", "Notre Dame Fighting Irish", "ND"]
+  "NDSU":  ["North Dakota State"]
   "NEB":   ["Nebraska", "Nebraska Cornhuskers", "NEB"]
   "NEV":   ["Nevada", "Nevada Wolf Pack", "NEV"]
   "NIU":   ["Northern Illinois", "Northern Illinois Huskies", "NIU"]
@@ -130,6 +131,7 @@ cfb:
   "PUR":   ["Purdue", "Purdue Boilermakers", "PUR"]
   "RICE":  ["Rice", "Rice Owls", "RICE"]
   "RUTG":  ["Rutgers", "Rutgers Scarlet Knights", "RUTG"]
+  "SAC":   ["Sacramento State"]
   "SC":    ["South Carolina", "South Carolina Gamecocks", "SC"]
   "SDSU":  ["San Diego State", "San Diego State Aztecs", "SDSU", "San Diego St."]
   "SHSU":  ["Sam Houston", "Sam Houston Bearkats", "SHSU", "Sam Houston State", "Sam Houston State Bearkats", "Sam Houston St."]
