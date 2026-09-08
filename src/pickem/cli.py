@@ -675,12 +675,13 @@ def evaluate_coinflip_cmd(
 ) -> None:
     """Run the fixed 2021–2025 CFB Candidate 1 experiment once."""
     args = (sport, start, end, predictions, report, db)
-    if sport is not Sport.CFB or (start, end) != (2021, 2025):
-        return _evaluate_coinflip_command_body(*args)
     with run_context(
         "cli:evaluate-coinflip", sport=sport.value, seasons=f"{start}-{end}", db=str(db)
-    ), suppress_decision_logging():
-        _evaluate_coinflip_command_body(*args)
+    ):
+        if sport is not Sport.CFB or (start, end) != (2021, 2025):
+            return _evaluate_coinflip_command_body(*args)
+        with suppress_decision_logging():
+            _evaluate_coinflip_command_body(*args)
 
 
 def _evaluate_coinflip_residual_command_body(
@@ -742,15 +743,16 @@ def evaluate_coinflip_residual_cmd(
 ) -> None:
     """Run the fixed 2021–2025 CFB Candidate 2 experiment once."""
     args = (sport, start, end, predictions, report, db)
-    if sport is not Sport.CFB or (start, end) != (2021, 2025):
-        return _evaluate_coinflip_residual_command_body(*args)
     with run_context(
         "cli:evaluate-coinflip-residual",
         sport=sport.value,
         seasons=f"{start}-{end}",
         db=str(db),
-    ), suppress_decision_logging():
-        _evaluate_coinflip_residual_command_body(*args)
+    ):
+        if sport is not Sport.CFB or (start, end) != (2021, 2025):
+            return _evaluate_coinflip_residual_command_body(*args)
+        with suppress_decision_logging():
+            _evaluate_coinflip_residual_command_body(*args)
 
 
 if __name__ == "__main__":

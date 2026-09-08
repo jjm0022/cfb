@@ -3,6 +3,8 @@ import json
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from pickem.backtest.archive import ArchiveRunInterrupted
@@ -371,6 +373,85 @@ def test_evaluate_coinflip_residual_has_exact_context_and_suppresses_decision_lo
     }
     assert finished["extra"]["run_id"] == started["extra"]["run_id"]
     assert not any(r["extra"].get("event") == "edge_decided" for r in command_records)
+
+
+@pytest.mark.parametrize(
+    ("command_name", "entry", "sport", "start", "end", "message"),
+    [
+        (
+            "evaluate_coinflip_cmd",
+            "cli:evaluate-coinflip",
+            Sport.NFL,
+            2021,
+            2025,
+            "approved CFB-only",
+        ),
+        (
+            "evaluate_coinflip_cmd",
+            "cli:evaluate-coinflip",
+            Sport.CFB,
+            2020,
+            2025,
+            "only permits",
+        ),
+        (
+            "evaluate_coinflip_residual_cmd",
+            "cli:evaluate-coinflip-residual",
+            Sport.NFL,
+            2021,
+            2025,
+            "approved CFB-only",
+        ),
+        (
+            "evaluate_coinflip_residual_cmd",
+            "cli:evaluate-coinflip-residual",
+            Sport.CFB,
+            2020,
+            2025,
+            "only permits",
+        ),
+    ],
+)
+def test_rejected_coinflip_evaluations_have_correlated_failure_boundaries(
+    tmp_path,
+    records,
+    capsys,
+    command_name,
+    entry,
+    sport,
+    start,
+    end,
+    message,
+):
+    """Catches rejected evaluation commands bypassing their run context."""
+    import pickem.cli as cli
+
+    db = tmp_path / "rejected.duckdb"
+    command = getattr(cli, command_name)
+
+    with pytest.raises(typer.Exit) as raised:
+        command(
+            sport,
+            start,
+            end,
+            tmp_path / "predictions.jsonl",
+            tmp_path / "report.md",
+            db,
+        )
+
+    assert raised.value.exit_code == 1
+    assert message in capsys.readouterr().err
+    started = [r for r in records if r["extra"].get("event") == "run_started"]
+    failed = [r for r in records if r["extra"].get("event") == "run_failed"]
+    assert len(started) == len(failed) == 1
+    assert started[0]["extra"]["entry"] == entry
+    assert started[0]["extra"]["sport"] == sport.value
+    assert started[0]["extra"]["seasons"] == f"{start}-{end}"
+    assert started[0]["extra"]["db"] == str(db)
+    assert failed[0]["extra"]["run_id"] == started[0]["extra"]["run_id"]
+    assert failed[0]["extra"]["run_id"] != "-"
+    assert not any(r["extra"].get("event") == "run_finished" for r in records)
+    assert not any(r["extra"].get("run_id") == "-" for r in records)
 
 
 def test_evaluate_coinflip_residual_writes_byte_identical_audit_artifacts(tmp_path):

@@ -861,13 +861,41 @@ async def test_status_failure_is_owned_by_run_context_and_still_replies(
         exception_type, exception, traceback = failure["exception"]
         assert exception_type is RuntimeError
         assert exception is error
-        assert traceback is error.__traceback__
+        frame_names = []
+        while traceback is not None:
+            frame_names.append(traceback.tb_frame.f_code.co_name)
+            traceback = traceback.tb_next
+        assert "raise_status" in frame_names
     else:
         assert "Traceback (most recent call last)" in failure["message"]
         assert "in raise_status" in failure["message"]
     assert len([r for r in records if r["level"].name == "ERROR"]) == 1
     assert not any(r["extra"].get("event") == "run_finished" for r in records)
     assert interaction.response.messages == [("Status unavailable: status read exploded", False)]
+
+
+@pytest.mark.asyncio
+async def test_status_delivery_failure_propagates_without_retrying(settings, records, monkeypatch):
+    """Catches response delivery being retried as though status computation failed."""
+    error = RuntimeError("status delivery exploded")
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    attempts = 0
+
+    async def fail_delivery(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise error
+
+    monkeypatch.setattr(interaction.response, "send_message", fail_delivery)
+
+    with pytest.raises(RuntimeError, match="status delivery exploded") as raised:
+        await bot.status(interaction)
+
+    assert raised.value is error
+    assert attempts == 1
+    assert len([r for r in records if r["extra"].get("event") == "run_finished"]) == 1
+    assert not any(r["extra"].get("event") == "run_failed" for r in records)
 
 
 @pytest.mark.asyncio

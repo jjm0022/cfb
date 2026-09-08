@@ -611,9 +611,10 @@ class PickemBot(commands.Bot):
                         )
                     )
                 embed = _format_status(tuple(statuses), self.scheduler)
-                await interaction.response.send_message(embed=embed)
         except Exception as error:
             await interaction.response.send_message(f"Status unavailable: {error}")
+            return
+        await interaction.response.send_message(embed=embed)
 
     async def refresh(
         self,
