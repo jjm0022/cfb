@@ -40,6 +40,7 @@ from pickem.backtest.coinflip_residual import (
     residual_evaluations_are_byte_identical,
 )
 from pickem.backtest.runner import run_backtest, split_proxies
+from pickem.edge.divergence import suppress_decision_logging
 from pickem.edge.pipeline import MissingGameError
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
 from pickem.ingest.cbs_html import parse_cbs_html
@@ -601,8 +602,7 @@ def calibrate_cmd(
         _warn_skipped("league lines not calibrated", result.skipped)
 
 
-@app.command("evaluate-coinflip")
-def evaluate_coinflip_cmd(
+def _evaluate_coinflip_command_body(
     sport: Sport = typer.Option(...),
     start: int = typer.Option(2021, "--from"),
     end: int = typer.Option(2025, "--to"),
@@ -664,8 +664,26 @@ def evaluate_coinflip_cmd(
     typer.echo(f"Candidate 1: {decision}")
 
 
-@app.command("evaluate-coinflip-residual")
-def evaluate_coinflip_residual_cmd(
+@app.command("evaluate-coinflip")
+def evaluate_coinflip_cmd(
+    sport: Sport = typer.Option(...),
+    start: int = typer.Option(2021, "--from"),
+    end: int = typer.Option(2025, "--to"),
+    predictions: Path = typer.Option(..., help="Write deterministic prediction JSONL here"),
+    report: Path = typer.Option(..., help="Write the deterministic Markdown report here"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Run the fixed 2021–2025 CFB Candidate 1 experiment once."""
+    args = (sport, start, end, predictions, report, db)
+    if sport is not Sport.CFB or (start, end) != (2021, 2025):
+        return _evaluate_coinflip_command_body(*args)
+    with run_context(
+        "cli:evaluate-coinflip", sport=sport.value, seasons=f"{start}-{end}", db=str(db)
+    ), suppress_decision_logging():
+        _evaluate_coinflip_command_body(*args)
+
+
+def _evaluate_coinflip_residual_command_body(
     sport: Sport = typer.Option(...),
     start: int = typer.Option(2021, "--from"),
     end: int = typer.Option(2025, "--to"),
@@ -711,6 +729,28 @@ def evaluate_coinflip_residual_cmd(
     )
     typer.echo(f"Candidate 2: {'PASS' if passes_residual_gate(result) else 'NULL — retain Elo'}")
     _warn_skipped("stored lines outside residual proxy coverage", proxy_skipped)
+
+
+@app.command("evaluate-coinflip-residual")
+def evaluate_coinflip_residual_cmd(
+    sport: Sport = typer.Option(...),
+    start: int = typer.Option(2021, "--from"),
+    end: int = typer.Option(2025, "--to"),
+    predictions: Path = typer.Option(..., help="Write deterministic prediction JSONL here"),
+    report: Path = typer.Option(..., help="Write the deterministic Markdown report here"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Run the fixed 2021–2025 CFB Candidate 2 experiment once."""
+    args = (sport, start, end, predictions, report, db)
+    if sport is not Sport.CFB or (start, end) != (2021, 2025):
+        return _evaluate_coinflip_residual_command_body(*args)
+    with run_context(
+        "cli:evaluate-coinflip-residual",
+        sport=sport.value,
+        seasons=f"{start}-{end}",
+        db=str(db),
+    ), suppress_decision_logging():
+        _evaluate_coinflip_residual_command_body(*args)
 
 
 if __name__ == "__main__":

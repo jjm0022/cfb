@@ -251,6 +251,41 @@ def test_archive_commit_is_idempotent(tmp_path):
         assert store.load_week(Sport.NFL, 2025, 3).market_lines == [line]
 
 
+def test_archive_claim_and_duplicate_log_truthful_post_commit_write_counts(tmp_path, records):
+    """Catches archive ledger claims bypassing the typed Store write audit."""
+    line = market(-3.0, RETURNED)
+    with Store(tmp_path / "ledger-audit.duckdb") as store:
+        store.init_schema()
+        store.upsert_games([game()])
+        for candidate in (line, market(-4.0, RETURNED + timedelta(minutes=1))):
+            store.commit_archive_request(
+                "request-1",
+                Sport.NFL,
+                2025,
+                3,
+                "submission",
+                REQUESTED,
+                RETURNED,
+                [candidate],
+            )
+
+    writes = [
+        record
+        for record in records
+        if record["extra"].get("event") == "rows_written"
+        and record["extra"].get("table") == "archive_requests"
+    ]
+    assert [record["extra"]["rows"] for record in writes] == [1, 0]
+    assert all(record["level"].name == "DEBUG" for record in writes)
+    assert all(record["extra"]["db"].endswith("ledger-audit.duckdb") for record in writes)
+    assert all(record["extra"]["statement"] for record in writes)
+    assert all(record["extra"]["request_id"] == "request-1" for record in writes)
+    assert all(record["extra"]["sport"] == "nfl" for record in writes)
+    assert all(record["extra"]["season"] == 2025 for record in writes)
+    assert all(record["extra"]["week"] == 3 for record in writes)
+    assert all(record["extra"]["kind"] == "submission" for record in writes)
+
+
 def test_archive_commit_rolls_back_lines_when_ledger_insert_fails(tmp_path, monkeypatch):
     line = market(-3.0, RETURNED)
     with Store(tmp_path / "ledger.duckdb") as store:
@@ -276,6 +311,38 @@ def test_archive_commit_rolls_back_lines_when_ledger_insert_fails(tmp_path, monk
 
         assert store.completed_archive_request_ids(["request-1"]) == set()
         assert store.load_week(Sport.NFL, 2025, 3).market_lines == []
+
+
+def test_archive_rollback_does_not_log_a_ledger_write(tmp_path, records, monkeypatch):
+    """Catches a pre-commit archive audit claiming a write that was rolled back."""
+    with Store(tmp_path / "ledger-rollback.duckdb") as store:
+        store.init_schema()
+        store.upsert_games([game()])
+
+        def fail_after_claim(_lines):
+            raise RuntimeError("line insert failed")
+
+        monkeypatch.setattr(store, "append_market_lines", fail_after_claim)
+
+        with pytest.raises(RuntimeError, match="line insert failed"):
+            store.commit_archive_request(
+                "request-rollback",
+                Sport.NFL,
+                2025,
+                3,
+                "submission",
+                REQUESTED,
+                RETURNED,
+                [market(-3.0, RETURNED)],
+            )
+
+        assert store.completed_archive_request_ids(["request-rollback"]) == set()
+
+    assert not any(
+        record["extra"].get("event") == "rows_written"
+        and record["extra"].get("table") == "archive_requests"
+        for record in records
+    )
 
 
 def test_zero_line_archive_response_is_still_completed(tmp_path):

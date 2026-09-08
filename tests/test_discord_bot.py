@@ -834,6 +834,43 @@ async def test_status_command_logs_invocation_and_run_facts(settings, records):
 
 
 @pytest.mark.asyncio
+async def test_status_failure_is_owned_by_run_context_and_still_replies(
+    settings, records, monkeypatch
+):
+    """Catches /status swallowing a failure and recording the command as successful."""
+    error = RuntimeError("status read exploded")
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    interaction = FakeInteraction(user_id=settings.owner_id)
+
+    def raise_status(*_args):
+        raise error
+
+    monkeypatch.setattr(bot, "_resolve_scopes", raise_status)
+
+    await bot.status(interaction, season=2026, week=1)
+
+    failures = [r for r in records if r["extra"].get("event") == "run_failed"]
+    assert len(failures) == 1
+    failure = failures[0]
+    assert failure["level"].name == "ERROR"
+    assert failure["extra"]["entry"] == "discord:/status"
+    assert failure["extra"]["season"] == 2026
+    assert failure["extra"]["week"] == 1
+    assert failure["extra"]["db"] == str(settings.db)
+    if failure["exception"] is not None:
+        exception_type, exception, traceback = failure["exception"]
+        assert exception_type is RuntimeError
+        assert exception is error
+        assert traceback is error.__traceback__
+    else:
+        assert "Traceback (most recent call last)" in failure["message"]
+        assert "in raise_status" in failure["message"]
+    assert len([r for r in records if r["level"].name == "ERROR"]) == 1
+    assert not any(r["extra"].get("event") == "run_finished" for r in records)
+    assert interaction.response.messages == [("Status unavailable: status read exploded", False)]
+
+
+@pytest.mark.asyncio
 async def test_refresh_lists_updated_picks_in_changed_embed(settings):
     add_pick_scope(settings)
     snapshot = RecommendationSnapshot(

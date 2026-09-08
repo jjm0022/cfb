@@ -1,8 +1,12 @@
 import json
+import logging
+import threading
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from apscheduler.events import EVENT_JOB_ERROR
+from apscheduler.schedulers.background import BackgroundScheduler
 from loguru import logger
 
 from pickem.models import Game, LeagueLine, Sport
@@ -153,6 +157,42 @@ def test_stdlib_records_are_intercepted(log_dir):
     assert next(r for r in rows if "Running job" in r["message"])["event"] == "apscheduler_log"
 
 
+def test_scheduled_exception_keeps_failure_semantics_without_duplicate_error(log_dir):
+    """Catches APScheduler re-logging a failure already owned by run_context."""
+    completed = threading.Event()
+    observed = []
+
+    def record_failure(event):
+        observed.append(event)
+        completed.set()
+
+    def fail() -> None:
+        with run_context("sched:probe"):
+            raise RuntimeError("scheduled probe exploded")
+
+    scheduler = BackgroundScheduler()
+    scheduler.add_listener(record_failure, EVENT_JOB_ERROR)
+    scheduler.add_job(fail, "date", run_date=datetime.now(UTC) + timedelta(milliseconds=50))
+    scheduler.start()
+    try:
+        assert completed.wait(timeout=3)
+    finally:
+        scheduler.shutdown(wait=True)
+
+    rows = _rows(log_dir)
+    errors = [row for row in rows if row["level"] == "ERROR"]
+    assert len(observed) == 1
+    assert isinstance(observed[0].exception, RuntimeError)
+    assert [row["event"] for row in errors] == ["run_failed"]
+    assert errors[0]["run_id"] != "-"
+    assert errors[0]["entry"] == "sched:probe"
+    assert "Traceback (most recent call last)" in errors[0]["message"]
+    assert any(
+        row["event"] == "apscheduler_log" and "Running job" in row["message"]
+        for row in rows
+    )
+
+
 def test_unbound_records_use_a_stable_default_event(log_dir):
     # Catches the invalid '-' event default, which cannot be queried as snake_case.
     logger.info("unlabeled record")
@@ -167,6 +207,18 @@ def test_stdlib_logger_prefixes_are_normalized_to_snake_case(log_dir):
     logging.getLogger("Vendor-Client Weird.worker").info("vendor record")
     row = next(r for r in _rows(log_dir) if r["message"] == "vendor record")
     assert row["event"] == "vendor_client_weird_log"
+
+
+def test_stdlib_records_preserve_logger_level_and_caller_origin(log_dir):
+    """Catches intercepted records being attributed to logging.callHandlers."""
+    logging.getLogger("Vendor.Client").warning("nested vendor warning")
+
+    row = next(r for r in _rows(log_dir) if r["message"] == "nested vendor warning")
+    assert row["event"] == "vendor_log"
+    assert row["level"] == "WARNING"
+    assert row["logger_name"] == "Vendor.Client"
+    assert row["module"] == "test_obs_log"
+    assert row["function"] == "test_stdlib_records_preserve_logger_level_and_caller_origin"
 
 
 @pytest.mark.parametrize(

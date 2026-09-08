@@ -21,6 +21,7 @@ _SECRET_ENV_VARS = ("ODDS_API_KEY", "CFBD_API_KEY", "DISCORD_BOT_TOKEN")
 _REDACTED = "***REDACTED***"
 _MIN_SECRET_LEN = 8  # never redact a short value; it would blank ordinary text
 _DEFAULT_EVENT = "unlabeled_log"
+_RUN_FAILURE_LOGGED = "_pickem_run_failure_logged"
 
 _TEXT_FORMAT = (
     "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[run_id]} | "
@@ -124,18 +125,26 @@ class _InterceptHandler(logging.Handler):
     """Route standard-library records (discord.py, apscheduler, httpx) to loguru."""
 
     def emit(self, record: logging.LogRecord) -> None:
+        if (
+            record.levelno >= logging.ERROR
+            and record.exc_info is not None
+            and record.exc_info[1] is not None
+            and getattr(record.exc_info[1], _RUN_FAILURE_LOGGED, False)
+        ):
+            return
+
         try:
             level = logger.level(record.levelname).name
         except ValueError:
             level = record.levelno
 
-        frame, depth = logging.currentframe(), 2
-        while frame and frame.f_code.co_filename == logging.__file__:
+        frame, depth = logging.currentframe(), 0
+        while frame and (depth == 0 or frame.f_code.co_filename == logging.__file__):
             frame = frame.f_back
             depth += 1
 
         logger.opt(depth=depth, exception=record.exc_info).bind(
-            event=_stdlib_event(record.name)
+            event=_stdlib_event(record.name), logger_name=record.name
         ).log(level, record.getMessage())
 
 
@@ -218,6 +227,7 @@ def run_context(entry: str, **facts: object) -> Iterator[str]:
         try:
             yield run_id
         except Exception as exc:
+            setattr(exc, _RUN_FAILURE_LOGGED, True)
             logger.bind(
                 event="run_failed",
                 error=type(exc).__name__,

@@ -256,6 +256,20 @@ class Store:
             raise
         else:
             self._con.execute("COMMIT")
+            logger.bind(
+                event="rows_written",
+                db=self._path,
+                table="archive_requests",
+                statement=_statement_head("INSERT OR IGNORE INTO archive_requests"),
+                rows=int(claimed),
+                request_id=request_id,
+                sport=sport.value,
+                season=season,
+                week=week,
+                kind=kind,
+            ).debug(
+                "archive request claimed" if claimed else "archive request already completed"
+            )
 
     def games_before(self, sport: Sport, season: int, week: int) -> list[Game]:
         """Every game already played before this week, including prior seasons.

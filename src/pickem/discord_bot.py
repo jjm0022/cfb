@@ -578,16 +578,16 @@ class PickemBot(commands.Bot):
         """Show current recommendations computed from stored market data."""
         if await self._reject_private(interaction):
             return
-        with run_context(
-            "discord:/status",
-            season=season,
-            week=week,
-            db=str(self.settings.db),
-        ):
-            logger.bind(event="command_invoked", command="status").info(
-                "/status invoked"
-            )
-            try:
+        try:
+            with run_context(
+                "discord:/status",
+                season=season,
+                week=week,
+                db=str(self.settings.db),
+            ):
+                logger.bind(event="command_invoked", command="status").info(
+                    "/status invoked"
+                )
                 # These reads are local DuckDB operations. Keep them on the
                 # interaction's loop so the connection is opened and closed on
                 # one thread; live refreshes are the intentionally offloaded
@@ -611,10 +611,9 @@ class PickemBot(commands.Bot):
                         )
                     )
                 embed = _format_status(tuple(statuses), self.scheduler)
-            except Exception as error:
-                await interaction.response.send_message(f"Status unavailable: {error}")
-                return
-            await interaction.response.send_message(embed=embed)
+                await interaction.response.send_message(embed=embed)
+        except Exception as error:
+            await interaction.response.send_message(f"Status unavailable: {error}")
 
     async def refresh(
         self,

@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from pickem.backtest.archive import ArchiveRunInterrupted
 from pickem.cli import app
+from pickem.models import Sport
 
 runner = CliRunner()
 
@@ -286,6 +287,90 @@ def _residual_command(tmp_path, db):
         "--db",
         str(db),
     ]
+
+
+def test_evaluate_coinflip_has_exact_context_and_suppresses_decision_logs(
+    tmp_path, records, monkeypatch
+):
+    """Catches Candidate 1 running uncorrelated or leaking per-game decision records."""
+    import pickem.cli as cli
+
+    db = tmp_path / "coinflip-context.duckdb"
+    _seed_coinflip_experiment(db)
+    from pickem.edge.divergence import _emit_decision_event
+
+    real_evaluate = cli.evaluate_coinflip
+
+    def evaluate_under_suppression(*args, **kwargs):
+        _emit_decision_event("INFO", "probe", event="edge_decided", game_id="probe")
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "evaluate_coinflip", evaluate_under_suppression)
+    before = len(records)
+
+    cli.evaluate_coinflip_cmd(
+        Sport.CFB,
+        2021,
+        2025,
+        tmp_path / "candidate-1.jsonl",
+        tmp_path / "candidate-1.md",
+        db,
+    )
+
+    command_records = records[before:]
+    started = next(r for r in command_records if r["extra"].get("event") == "run_started")
+    finished = next(r for r in command_records if r["extra"].get("event") == "run_finished")
+    assert started["extra"]["entry"] == "cli:evaluate-coinflip"
+    assert started["extra"]["sport"] == "cfb"
+    assert started["extra"]["seasons"] == "2021-2025"
+    assert started["extra"]["db"] == str(db)
+    assert {r["extra"].get("run_id") for r in command_records} == {
+        started["extra"]["run_id"]
+    }
+    assert finished["extra"]["run_id"] == started["extra"]["run_id"]
+    assert not any(r["extra"].get("event") == "edge_decided" for r in command_records)
+
+
+def test_evaluate_coinflip_residual_has_exact_context_and_suppresses_decision_logs(
+    tmp_path, records, monkeypatch
+):
+    """Catches Candidate 2 running uncorrelated or leaking per-game decision records."""
+    import pickem.cli as cli
+
+    db = tmp_path / "residual-context.duckdb"
+    _seed_residual_experiment(db)
+    from pickem.edge.divergence import _emit_decision_event
+
+    real_evaluate = cli.evaluate_residual_candidate
+
+    def evaluate_under_suppression(*args, **kwargs):
+        _emit_decision_event("INFO", "probe", event="edge_decided", game_id="probe")
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "evaluate_residual_candidate", evaluate_under_suppression)
+    before = len(records)
+
+    cli.evaluate_coinflip_residual_cmd(
+        Sport.CFB,
+        2021,
+        2025,
+        tmp_path / "predictions.jsonl",
+        tmp_path / "report.md",
+        db,
+    )
+
+    command_records = records[before:]
+    started = next(r for r in command_records if r["extra"].get("event") == "run_started")
+    finished = next(r for r in command_records if r["extra"].get("event") == "run_finished")
+    assert started["extra"]["entry"] == "cli:evaluate-coinflip-residual"
+    assert started["extra"]["sport"] == "cfb"
+    assert started["extra"]["seasons"] == "2021-2025"
+    assert started["extra"]["db"] == str(db)
+    assert {r["extra"].get("run_id") for r in command_records} == {
+        started["extra"]["run_id"]
+    }
+    assert finished["extra"]["run_id"] == started["extra"]["run_id"]
+    assert not any(r["extra"].get("event") == "edge_decided" for r in command_records)
 
 
 def test_evaluate_coinflip_residual_writes_byte_identical_audit_artifacts(tmp_path):
