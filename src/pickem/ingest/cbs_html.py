@@ -35,6 +35,11 @@ _PUSH = ".push("
 # CBS emits the JavaScript literal `undefined`, which is not valid JSON.
 _UNDEFINED = "undefined"
 
+# CBS's own league tag on each event. Once both of the pool's boards are live,
+# one saved page carries both leagues, and the team tables do not overlap
+# safely: "Miami" and "Washington" name a team in either one.
+_SPORT_TYPES = {Sport.CFB: "NCAAF", Sport.NFL: "NFL"}
+
 
 def _scan_object(text: str, start: int) -> tuple[str, int]:
     """Extract the JSON object beginning at ``start``, ending at its own brace.
@@ -140,6 +145,16 @@ def parse_cbs_html(
             "no CBS event payload found — the page may have been saved before it "
             "finished loading, or CBS may have stopped server-rendering it"
         )
+
+    wanted = _SPORT_TYPES[sport]
+    in_league = [event for event in events if event.get("sportType") == wanted]
+    if not in_league:
+        present = sorted({str(event.get("sportType")) for event in events})
+        raise CbsParseError(
+            f"the CBS page carries no {wanted} games (it carries: {', '.join(present)}) "
+            f"— {sport.value} may not be posted yet, or the page is the wrong board"
+        )
+    events = in_league
 
     games: list[ParsedCbsGame] = []
     skipped: list[str] = []

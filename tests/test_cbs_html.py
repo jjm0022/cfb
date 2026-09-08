@@ -17,6 +17,7 @@ from pickem.models import Sport
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 PAGE = pathlib.Path("tests/fixtures/cbs_picks_page.html").read_text()
+MIXED_PAGE = pathlib.Path("tests/fixtures/cbs_picks_page_mixed.html").read_text()
 POSTED = datetime(2026, 8, 19, 23, 38, tzinfo=UTC)
 
 
@@ -87,6 +88,61 @@ def test_html_result_keeps_real_kickoff_with_its_game(resolver):
     parsed = by_id["cfb-2026-01-ECU-at-BAMA"]
     assert parsed.game.kickoff_utc == datetime(2026, 9, 5, 16, 0, tzinfo=UTC)
     assert parsed.league_line.game_id == parsed.game.game_id
+
+
+def test_a_two_league_page_yields_only_the_requested_league(resolver):
+    """Catches the parser reading another league's games as this one's.
+
+    Once the pool's CFB and NFL boards are both live, CBS renders them into one
+    payload. The walker collects every event-shaped node, so without a
+    `sportType` filter an NFL game is resolved against the CFB team table —
+    which either aborts the week on an unknown school or, worse, matches a
+    school that shares a city name and silently prices the wrong game.
+    """
+    result = parse(MIXED_PAGE, resolver=resolver, week=2)
+
+    assert [parsed.game.game_id for parsed in result.games] == [
+        "cfb-2026-02-OU-at-MICH",
+        "cfb-2026-02-OSU-at-TEX",
+    ]
+    assert result.skipped == []
+
+
+def test_the_same_two_league_page_yields_the_nfl_board_when_asked(resolver):
+    """Catches a filter hardcoded to one league rather than keyed on the request.
+
+    The same saved page is the NFL source too, so the filter has to select by
+    the caller's sport, not simply drop everything that is not college.
+    """
+    result = parse_cbs_html(
+        MIXED_PAGE,
+        resolver=resolver,
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        posted_at=POSTED,
+    )
+
+    assert [parsed.game.game_id for parsed in result.games] == [
+        "nfl-2026-01-NE-at-SEA",
+        "nfl-2026-01-SF-at-LAR",
+    ]
+    assert result.skipped == []
+
+
+def test_a_league_absent_from_the_page_raises_rather_than_reporting_an_empty_week(
+    resolver,
+):
+    """Catches the filter turning "this league has not posted yet" into silence.
+
+    Before CBS posts the CFB board, the saved page holds only NFL games. A
+    filtered-to-empty result must stop the operator the same way an unparsable
+    page does, rather than reporting a week with no games to pick.
+    """
+    nfl_only = MIXED_PAGE.replace('"sportType": "NCAAF"', '"sportType": "NFL"')
+
+    with pytest.raises(CbsParseError):
+        parse(nfl_only, resolver=resolver, week=2)
 
 
 def test_an_unknown_school_aborts_the_whole_page(resolver):
