@@ -182,11 +182,13 @@ GROUP BY day ORDER BY day;
 ```
 
 The quota and tiebreak queries from the standard are also useful during an
-investigation:
+investigation. Two rules emit `tiebreak_applied`, so `method` says which one
+decided: `frozen_line_favorite` for `COINFLIP`, `elo` for `NO_MARKET`. Only the
+Elo records carry `projected_margin`, hence the `// "-"` fallback:
 
 ```bash
 jq -r 'select(.event=="odds_quota") | "\(.ts[0:16])  \(.remaining)"' "$L"
-jq -r 'select(.event=="tiebreak_applied") | "\(.game_id)  \(.side)  \(.projected_margin)"' "$L"
+jq -r 'select(.event=="tiebreak_applied") | "\(.game_id)  \(.tier)  \(.method)  \(.side)  \(.projected_margin // "-")"' "$L"
 ```
 
 ## Check secret absence safely

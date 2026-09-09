@@ -114,7 +114,9 @@ Preflight is deliberately read-only: it opens the existing database without
 initializing a schema and never writes picks. It checks exact game and league
 line counts, future kickoffs, live `oddsapi` coverage, freshness, distinct
 book count at each game's latest snapshot, and completed prior history for the
-Elo tiebreak.
+Elo tiebreak. Elo now backs `NO_MARKET` only — `COINFLIP` takes the
+frozen-board favorite and needs no history — but preflight still gates on that
+history, so treat it as a hard requirement.
 
 ```bash
 uv run pickem preflight \
@@ -158,7 +160,8 @@ intentionally not written to the pick database.
 ## 6. Post-week sync
 
 Once final scores are available, pull them into the database so the next
-week's Elo history is trained and the completed week can be audited.
+week's Elo history is trained (it backs `NO_MARKET`, and preflight gates on it)
+and the completed week can be audited.
 
 ```bash
 uv run pickem sync-results \

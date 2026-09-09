@@ -1,6 +1,12 @@
 # Improving COINFLIP picks for a weekly win
 
 **Written:** 2026-08-28
+**Superseded in part (2026-09-09):** the recommendation to "keep Elo as the live
+tiebreak" was overtaken by this document's own comparison table, which already
+recorded the frozen-line favorite at 51.00% against Elo's 48.93%. `COINFLIP` now
+takes the frozen-board favorite (`edge/favorite.py`); `NO_MARKET` still uses
+Elo. The prospective paper test proposed here should baseline against the
+favorite rule, not Elo. Everything else stands.
 **Scope:** CFB/NFL CBS pick'em decision support, with the immediate evidence base
 coming from the CFB archive. The objective here is winning at least one weekly
 pool, not merely maximizing long-run ATS accuracy. No paid data was purchased,

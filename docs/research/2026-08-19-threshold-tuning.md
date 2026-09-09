@@ -1,6 +1,12 @@
 # Tuning the divergence tier thresholds — a null result
 
 **Written:** 2026-08-19
+**Superseded in part (2026-09-09):** where this document says the tiebreak is
+Elo, `COINFLIP` now takes the frozen-board favorite (`edge/favorite.py`);
+`NO_MARKET` still uses Elo. The measurements and the threshold conclusions are
+unaffected — the "A better tiebreak" recommendation was acted on by replacing
+the rule, not by improving Elo, and the replacement scored 51.00% against Elo's
+48.93%, still noise around 50%.
 **Data:** NFL 2020–2025, 1,663 graded games, from a read-only copy of
 `data/pickem.duckdb`. No production code was changed.
 **Why this exists:** `Thresholds.strong = 2.0` and `Thresholds.lean = 1.0` were

@@ -24,20 +24,24 @@ duplication and prize share matter.
 ## Start here
 
 You have a working system with a real result. The completed CFB COINFLIP and
-Week 1 preflight work is integrated in `master` at `6ed6ed7`. Orient yourself
-in about two minutes:
+Week 1 preflight work is integrated in `master` at `6ed6ed7`, which is now 48
+commits behind: `master` is at `3b184ff`, having since taken the Discord bot,
+the logging/observability deployment (`177900c`), and later CBS-parsing and
+pick-sheet fixes. The 2026-09-09 COINFLIP tiebreak change is **not** on
+`master` — it is on `feature/coinflip-favorite-tiebreak` at `01e6479`. Orient
+yourself in about two minutes:
 
 ```bash
 uv run pytest -q                              # verify current integrated suite
 uv run pickem backtest --from 2020 --to 2025  # expect the result below
-uv run pickem --help                          # the whole surface, 11 commands
+uv run pickem --help                          # the whole surface, 12 commands
 ```
 
-The authoritative checkout is `master` at `6ed6ed7`. The Week 1 readiness
-implementation is integrated there by fast-forward from
-`feature/week1-preflight`; it adds the `preflight` command and its tests, so
-the help surface has 11 commands. Review and verify the integrated change
-before live execution.
+The authoritative checkout is `master`, now at `3b184ff`. The Week 1 readiness
+implementation was integrated at `6ed6ed7` by fast-forward from
+`feature/week1-preflight`, adding the `preflight` command and its tests; the
+help surface has since grown to 12 commands (verified 2026-09-09). Review and
+verify the integrated change before live execution.
 
 Then read "The phase-exit result" at the bottom of this file — it is the
 finding everything else now serves — and "Remaining work" for what to do next.
@@ -70,13 +74,45 @@ wrong and are recorded there with their reasons.
 
 ## Current state
 
+### COINFLIP tiebreak changed from Elo to the frozen-board favorite (2026-09-09)
+
+**This supersedes every "Elo remains the live COINFLIP decider" statement in the
+dated sections below.** `COINFLIP` now resolves through `edge/favorite.py`:
+`Side.HOME` when the frozen spread is `<= 0`, so an exact pick'em resolves home.
+`NO_MARKET` still resolves through `edge/elo.py`.
+
+No new experiment was run. The evidence was a diagnostic already inside the
+Candidate 2 report — over the same 1,549 evaluated coinflips, Elo scored 48.93%,
+the frozen-board favorite 51.00%, and always-pick-home 50.94%. The incumbent was
+losing to two one-line heuristics. That 2.07-point gap is roughly one standard
+deviation on this sample, so **this bought simplicity and one less fitted
+component, not demonstrated accuracy**; do not cite 51% as skill.
+
+Behavioural consequence, and the reason it matters operationally: Elo chose
+ATS-relative and flipped to the underdog once the board outran its projected
+margin — the mechanism described in "Why the tiebreak cannot rescue coinflips"
+below, which put 11 of 15 week 1 coinflips on the dog. The favorite rule has no
+such crossover, so a -40 coinflip now returns home where Elo returned away.
+
+Both rules emit `tiebreak_applied` carrying a `method` field
+(`frozen_line_favorite` or `elo`) that distinguishes them in the JSONL.
+
+Scope limit: every evaluated game has a market line by definition, so the
+evaluation says nothing about `NO_MARKET`, which is why Elo was left in place
+there. Preflight still gates on completed Elo history.
+
+Committed on `feature/coinflip-favorite-tiebreak` at `01e6479`, branched from
+`master` at `3b184ff`. 526 tests pass, Ruff clean. Not yet integrated into
+`master`.
+
 ### Candidate 1 CFB COINFLIP result (frozen 2026-08-26)
 
 Candidate 1 is a **NULL** result. On its fixed 2022–2025 walk-forward
 evaluation, it improved paired accuracy by 1.74 percentage points and was
 positive in three seasons, but its Brier score was 0.2502 and therefore missed
-the predeclared `< 0.25` acceptance gate. Elo remains the live CFB `COINFLIP`
-method; Tasks 10–11 (artifact creation and live integration) are not
+the predeclared `< 0.25` acceptance gate. Elo remained the live CFB `COINFLIP`
+method at this freeze (superseded 2026-09-09 by the frozen-board favorite);
+Tasks 10–11 (artifact creation and live integration) are not
 authorized. The committed report is
 `docs/research/2026-08-25-cfb-coinflip-result.md`; its gitignored prediction
 artifact SHA-256 is
@@ -96,7 +132,7 @@ not delegate to Elo. Its retained, nonbinding prediction/report SHA-256 values
 are `9ea82a2157c15b284c505613ec3ec3f0be9884fea17b17a5f296b66556ede29b` and
 `de65aa2be13bcf92d152f0881e0da0d81df2bc5e1bbf9b9583b2de65adc401fb`.
 
-Candidate 2 is NULL. Elo remains the CFB COINFLIP decider. No Candidate 2 model artifact exists. The team-residual family is closed; Tasks 7–9 were not started.
+Candidate 2 is NULL. No Candidate 2 model artifact exists. The team-residual family is closed; Tasks 7–9 were not started. Elo remained the COINFLIP decider at this freeze; it was superseded on 2026-09-09 by the frozen-board favorite, on the favorite-versus-Elo diagnostic inside this very report.
 
 ### Weekly-win strategy research (2026-08-28)
 
@@ -158,7 +194,8 @@ the corrected committed report is
 
 #### Task 12 offline handoff verification (2026-08-26)
 
-Candidate 1 remains **NULL**: Elo is still the live CFB `COINFLIP` decider;
+Candidate 1 remains **NULL**: Elo was still the live CFB `COINFLIP` decider as
+of this verification (superseded 2026-09-09 by the frozen-board favorite);
 there is no accepted model artifact and reporting loads no model code. Do not
 begin Candidate 2 without a new design approval. The gitignored prediction
 stream has 1,577 rows, zero from season 2026, and SHA-256
@@ -219,7 +256,9 @@ batch; do not delete or revise it. The current operational database SHA-256 is
 The sheet now renders every `Edge.rationale` in a Rationale column. For the
 stored NULL-path week, the three divergence picks name their market movement
 and every COINFLIP rationale names the Elo rating tiebreak; no outcomes were
-graded. Do not invoke `sync-results`, a paid archive command, or any 2026
+graded. (That stored sheet predates the 2026-09-09 tiebreak change; a COINFLIP
+rationale rendered today reads "no divergence, so we take the frozen-board
+favorite".) Do not invoke `sync-results`, a paid archive command, or any 2026
 refit without separate authorization.
 
 #### Task 12 authorization completion (2026-08-26)
@@ -246,9 +285,11 @@ post-poll database and then that copy was removed. The rendered sheet had all
 15 sides, CBS-vs-market provenance, a 9,573-minute snapshot age, and 15
 unscored games. Its three `STRONG`/`LEAN` rows named divergence, and its 12
 `COINFLIP` rows explicitly named `Elo rating projects`; no results were
-synced or graded. Task 12 is terminal: Candidate 1 remains NULL, Elo remains
-live, no model artifact exists, and Candidate 2 remains blocked on new design
-approval.
+synced or graded. Task 12 is terminal: Candidate 1 remains NULL, Elo was live
+at that time, no model artifact exists, and Candidate 2 remains blocked on new
+design approval. Elo was replaced for `COINFLIP` on 2026-09-09; that change
+came from a baseline comparison, not from a Candidate 1 or 2 artifact, so it
+does not reopen either candidate.
 
 - **Branch:** the CFB COINFLIP work is integrated in `master` at `1620de3` by
   fast-forward from `feature/cfb-coinflip-model`. There is no remote configured,
@@ -385,10 +426,15 @@ src/pickem/ingest/cbs_html.py     parse_cbs_html — the saved CBS page. Reads t
 src/pickem/edge/divergence.py     Internal divergence measurement plus
                                   consensus and ranking helpers. Pure; no I/O.
 src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
-                                  tiebreak_side. Pure; no I/O.
+                                  tiebreak_side. Pure; no I/O. Decides
+                                  NO_MARKET only, since 2026-09-09.
+src/pickem/edge/favorite.py       favorite_side: the frozen-board favorite,
+                                  HOME when the spread is <= 0. Decides
+                                  COINFLIP. Pure; no I/O, no fitted state.
 src/pickem/edge/pipeline.py       `decide_edges`, the only public edge-decision
                                   interface; it returns final picks and resolves
-                                  only COINFLIP and NO_MARKET internally.
+                                  only COINFLIP and NO_MARKET internally,
+                                  routing the two tiers to the two rules above.
 src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
                                   `loader` is injected so tests stay offline.
                                   _kickoff combines gameday + gametime through
@@ -587,7 +633,8 @@ ledger's structure makes sense.
   edge produce the SAME pick. Moving the STRONG/LEAN boundary
   relabels games; it never changes one, and no backtest can tune it toward
   correct picks. Only `lean` moves games between the two deciders (divergence
-  vs the Elo tiebreak). Verified 2026-08-19 across a 56-cell sweep: every cell
+  vs the tiebreak — the frozen-board favorite since 2026-09-09, Elo before
+  that). Verified 2026-08-19 across a 56-cell sweep: every cell
   sharing a `lean` value had a byte-identical win/loss/push record.
 - **`calibrate`'s cutoff is a tolerance, not a strict at-or-before.**
   `poll-odds` derives its slate from `league_lines`, so the market snapshot is
@@ -595,8 +642,9 @@ ledger's structure makes sense.
   never before. The first live run missed a strict cutoff by 11 seconds. The
   window admits the same-sitting poll; widening it far enough to admit the next
   day's number would readmit exactly the line movement the strategy trades on.
-- **Elo never overrides a real divergence signal.** It may resolve only
-  `COINFLIP` and `NO_MARKET`; `STRONG` and `LEAN` edges pass through unchanged.
+- **A tiebreak never overrides a real divergence signal.** The two rules may
+  resolve only `COINFLIP` (frozen-board favorite) and `NO_MARKET` (Elo);
+  `STRONG` and `LEAN` edges pass through unchanged.
   An edge that needs a tiebreak but has no `Game` record raises
   `MissingGameError` — it is never passed through carrying internal
   measurement's placeholder `side=HOME`.
@@ -740,7 +788,9 @@ so the free tier would cover weekly use if the subscription is cancelled.
 - **CFB Elo is now trained (4,457 results, 2020-2025) and still takes the
   underdog on most big spreads.** This is not a bug and refitting will not fix
   it — see "Why the tiebreak cannot rescue coinflips" below. `report` no longer
-  warns, because there is real history; the picks are informed but weak.
+  warns, because there is real history; the picks are informed but weak. Since
+  2026-09-09 this reaches only `NO_MARKET`: `COINFLIP` takes the frozen-board
+  favorite, which has no underdog crossover.
 - **nflverse's null-spread branch is defensive only.** A real 1999-2025 sweep
   loaded 7,276 closing lines with ZERO null spreads and no `UnknownTeamError`,
   so only the injected-loader unit test covers it. Kept as a guard. Relevant
@@ -778,6 +828,16 @@ flip, this reproduces exactly the 49.5% COINFLIP rate the NFL backtest measured.
 better-fitted Elo.** Beating it needs a predictor strong enough that its
 conditional mean can cross a sharp line — which is the Phase B modelling
 question, not a parameter change.
+
+**Resolved 2026-09-09, and this analysis is why.** Two fitted candidates then
+confirmed the prediction by returning NULL. The response was not a stronger
+predictor but removing the mechanism: `COINFLIP` now takes the frozen-board
+favorite, which has no crossover and so cannot be dragged onto the dog by a
+shrunken projection meeting a sharp number. The "11 of 15 coinflips on the dog"
+pattern above was the symptom being treated. This does not beat the market — it
+scored 51.00% against Elo's 48.93%, both noise around 50% — it just stops
+paying a modelling cost for a rule that was losing to always-pick-home. Elo is
+untouched for `NO_MARKET`, where no sharp market number exists to sit inside.
 
 ## The calibration result (2026-08-20)
 

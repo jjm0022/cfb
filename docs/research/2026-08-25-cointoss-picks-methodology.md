@@ -1,6 +1,12 @@
 # Improving COINFLIP picks without building a forecasting lab
 
 **Written:** 2026-08-25  
+**Superseded in part (2026-09-09):** this document's "incumbent" is Elo. The
+incumbent for `COINFLIP` is now the frozen-board favorite
+(`edge/favorite.py`); `NO_MARKET` still uses Elo. Both candidates designed here
+returned NULL, and the tiebreak was then changed on a baseline comparison
+rather than a model — so any future candidate must clear the favorite rule
+(51.00% on the 1,549 evaluated coinflips), not Elo's 48.93%.  
 **Scope:** maximize correct ATS picks on a forced-pick sheet; no opponent-pick,
 contrarian, confidence-pool, or bankroll strategy.  
 **Repository baseline:** NFL 2020–2025, 1,663 graded games: 53.2% overall,
