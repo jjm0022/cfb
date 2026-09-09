@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -261,15 +262,41 @@ _TIER_BADGES = {
     Tier.NO_MARKET: "⚠️ No market",
 }
 _DISCORD_FIELD_VALUE_LIMIT = 1024
+_PICK_BREAK = re.compile(r"(\n+)(?=• )")
+_UNKNOWN_KICKOFF = datetime.max.replace(tzinfo=UTC)
 
 
-def _format_recommendations(snapshot: Any | None, games: tuple[Game, ...] = ()) -> str:
+def _kickoff_ordered(snapshot: Any, games_by_id: dict[str, Game]) -> list[Any]:
+    """Order picks by kickoff, keeping confidence order as the tiebreaker.
+
+    ``rank_edges`` orders the snapshot by confidence, which is what the CBS
+    submission consumes.  Display order is a separate concern: the picks read
+    more naturally in the order the games are played.  Edges whose game is not
+    stored have no kickoff to sort on, so they keep their rank order at the end.
+    """
+
+    def kickoff(edge: Any) -> datetime:
+        game = games_by_id.get(edge.game_id)
+        return game.kickoff_utc if game is not None else _UNKNOWN_KICKOFF
+
+    return sorted(snapshot.edges, key=kickoff)
+
+
+def _format_recommendations(
+    snapshot: Any | None, games: tuple[Game, ...] = (), *, details: bool = False
+) -> str:
+    """Render one scope's picks in kickoff order, one line each.
+
+    Reasoning is opt-in.  A compact slate fits a single Discord field, which
+    keeps the message whole; ``details`` adds the rationale line back and
+    accepts that a long slate will be split across continuation fields.
+    """
     if snapshot is None:
         return "Updated recommendations were not returned."
     games_by_id = {game.game_id: game for game in games}
     resolver = TeamResolver.default()
     formatted: list[str] = []
-    for edge in snapshot.edges:
+    for edge in _kickoff_ordered(snapshot, games_by_id):
         game = games_by_id.get(edge.game_id)
         if game is None:
             formatted.append(f"• `{edge.game_id}` — **{edge.side.value}**")
@@ -281,17 +308,25 @@ def _format_recommendations(snapshot: Any | None, games: tuple[Game, ...] = ()) 
             if edge.side is Side.AWAY
             else f"~~{away}~~ at **{home}**"
         )
-        formatted.append(
-            f"• {_TIER_BADGES[edge.tier]} — {matchup}\n> Why: {edge.rationale}"
-        )
-    return "\n\n".join(formatted) or "No recommendations stored yet."
+        pick = f"• {_TIER_BADGES[edge.tier]} — {matchup}"
+        formatted.append(f"{pick}\n> Why: {edge.rationale}" if details else pick)
+    separator = "\n\n" if details else "\n"
+    return separator.join(formatted) or "No recommendations stored yet."
 
 
 def _field_value_chunks(value: str) -> tuple[str, ...]:
-    """Split formatted picks without exceeding Discord's field-value limit."""
+    """Split formatted picks without exceeding Discord's field-value limit.
+
+    Picks are the split boundary, so a chunk never ends mid-pick.  Compact and
+    detailed output separate picks differently, so the separator each break
+    consumed is captured and restored rather than assumed.
+    """
+    parts = _PICK_BREAK.split(value)
+    entries = parts[0::2]
+    separators = [""] + parts[1::2]
     chunks: list[str] = []
     current = ""
-    for entry in value.split("\n\n"):
+    for entry, separator in zip(entries, separators, strict=True):
         if len(entry) > _DISCORD_FIELD_VALUE_LIMIT:
             if current:
                 chunks.append(current)
@@ -301,7 +336,7 @@ def _field_value_chunks(value: str) -> tuple[str, ...]:
                 for index in range(0, len(entry), _DISCORD_FIELD_VALUE_LIMIT)
             )
             continue
-        candidate = entry if not current else f"{current}\n\n{entry}"
+        candidate = entry if not current else f"{current}{separator}{entry}"
         if len(candidate) > _DISCORD_FIELD_VALUE_LIMIT:
             chunks.append(current)
             current = entry
@@ -328,10 +363,12 @@ def _add_recommendation_fields(
     scope: MonitorScope,
     snapshot: Any | None,
     games: tuple[Game, ...],
+    *,
+    details: bool = False,
 ) -> None:
     scope_name = _scope_description(scope)
     for index, picks in enumerate(
-        _field_value_chunks(_format_recommendations(snapshot, games)), start=1
+        _field_value_chunks(_format_recommendations(snapshot, games, details=details)), start=1
     ):
         suffix = " Picks" if index == 1 else f" Picks (cont. {index})"
         embed.add_field(name=f"{scope_name} —{suffix}", value=picks, inline=False)
@@ -345,7 +382,9 @@ def _format_change_notification(
     return embed
 
 
-def _format_status(statuses: tuple[ScopeStatus, ...], scheduler: Any) -> discord.Embed:
+def _format_status(
+    statuses: tuple[ScopeStatus, ...], scheduler: Any, *, details: bool = False
+) -> discord.Embed:
     if not statuses:
         return discord.Embed(
             title="🏈 Pick'em Status",
@@ -359,7 +398,9 @@ def _format_status(statuses: tuple[ScopeStatus, ...], scheduler: Any) -> discord
     )
     for status in statuses:
         scope_name = _scope_description(status.scope)
-        _add_recommendation_fields(embed, status.scope, status.snapshot, status.games)
+        _add_recommendation_fields(
+            embed, status.scope, status.snapshot, status.games, details=details
+        )
         monitoring = "\n".join(
             [
                 f"Last successful check: {_format_timestamp(status.state.checked_at)}",
@@ -377,6 +418,9 @@ def _format_status(statuses: tuple[ScopeStatus, ...], scheduler: Any) -> discord
 def _format_refresh_results(
     results: tuple[tuple[MonitorScope, RefreshResult], ...],
     error: BaseException | None = None,
+    *,
+    games_by_scope: dict[MonitorScope, tuple[Game, ...]] | None = None,
+    details: bool = False,
 ) -> discord.Embed:
     if error is not None:
         return discord.Embed(
@@ -403,7 +447,11 @@ def _format_refresh_results(
         value = (
             f"Refresh failed: {result.error}"
             if result.error is not None
-            else _format_recommendations(result.snapshot)
+            else _format_recommendations(
+                result.snapshot,
+                (games_by_scope or {}).get(scope, ()),
+                details=details,
+            )
             if result.changed
             else "The latest odds refresh completed with no recommendation changes."
         )
@@ -574,6 +622,7 @@ class PickemBot(commands.Bot):
         interaction: discord.Interaction,
         season: int | None = None,
         week: int | None = None,
+        details: bool = False,
     ) -> None:
         """Show current recommendations computed from stored market data."""
         if await self._reject_private(interaction):
@@ -610,7 +659,7 @@ class PickemBot(commands.Bot):
                             market_timestamp=market_timestamp,
                         )
                     )
-                embed = _format_status(tuple(statuses), self.scheduler)
+                embed = _format_status(tuple(statuses), self.scheduler, details=details)
         except Exception as error:
             await interaction.response.send_message(f"Status unavailable: {error}")
             return
@@ -621,6 +670,7 @@ class PickemBot(commands.Bot):
         interaction: discord.Interaction,
         season: int | None = None,
         week: int | None = None,
+        details: bool = False,
     ) -> None:
         """Run one serialized recommendation refresh and report its outcome."""
         if await self._reject_private(interaction):
@@ -649,7 +699,15 @@ class PickemBot(commands.Bot):
                 ).error(_scheduled_error_message(self.settings, error))
                 embed = _format_refresh_results((), error=error)
             else:
-                embed = _format_refresh_results(results)
+                embed = _format_refresh_results(
+                    results,
+                    games_by_scope={
+                        scope: _stored_week_details(self.settings, scope)[0]
+                        for scope, result in results
+                        if result.changed
+                    },
+                    details=details,
+                )
             await interaction.followup.send(embed=embed)
 
 

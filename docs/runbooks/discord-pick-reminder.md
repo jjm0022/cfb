@@ -74,6 +74,11 @@ games have final scores. No weekly configuration edit or restart is required.
 Supply both to view or refresh every sport with stored picks for that exact
 week; omit both for the automatically selected current scopes.
 
+Picks are listed in kickoff order, one line each, without the reasoning behind
+them. Pass `details: True` to either command to append each pick's rationale;
+the scheduled change notification is always compact, so use `/status
+details: True` when it prompts a closer look.
+
 The database defaults to `data/pickem.duckdb` under the project directory.
 Run the normal data-ingest and preflight workflow before asking the bot to
 refresh a week.

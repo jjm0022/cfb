@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import discord
 import pytest
 from loguru import logger
 
@@ -171,6 +172,91 @@ def add_pick_scope(settings, sport: Sport = Sport.NFL) -> Game:
     return game
 
 
+def _pick_lines(rendered: str) -> list[str]:
+    """The pick lines only, so ordering assertions ignore any reasoning lines."""
+    return [line for line in rendered.splitlines() if line.startswith("• ")]
+
+
+def _nfl_game(away: str, home: str, kickoff: datetime) -> Game:
+    return Game(
+        game_id=f"nfl-2026-01-{away}-at-{home}",
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        kickoff_utc=kickoff,
+        home_team_id=home,
+        away_team_id=away,
+    )
+
+
+def _snapshot_for(*edges: Edge) -> RecommendationSnapshot:
+    return RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 9, 1, tzinfo=UTC),
+        edges=edges,
+    )
+
+
+def _edge(game_id: str, *, rationale: str = "market moved", tier: Tier = Tier.STRONG) -> Edge:
+    return Edge(
+        game_id=game_id,
+        side=Side.HOME,
+        delta=3.0,
+        tier=tier,
+        league_spread=-3.0,
+        market_spread=-6.0,
+        rationale=rationale,
+    )
+
+
+def test_picks_are_rendered_in_kickoff_order_not_confidence_order():
+    sunday = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    thursday = _nfl_game("DAL", "PHI", datetime(2026, 9, 10, 0, tzinfo=UTC))
+    saturday = _nfl_game("GB", "CHI", datetime(2026, 9, 12, 20, tzinfo=UTC))
+    snapshot = _snapshot_for(
+        _edge(sunday.game_id, tier=Tier.STRONG),
+        _edge(saturday.game_id, tier=Tier.LEAN),
+        _edge(thursday.game_id, tier=Tier.COINFLIP),
+    )
+
+    rendered = _format_recommendations(snapshot, (sunday, thursday, saturday))
+
+    assert [line.split(" — ")[1] for line in _pick_lines(rendered)] == [
+        "~~Dallas Cowboys~~ at **Philadelphia Eagles**",
+        "~~Green Bay Packers~~ at **Chicago Bears**",
+        "~~Buffalo Bills~~ at **Miami Dolphins**",
+    ]
+
+
+def test_picks_without_a_stored_game_sort_last_in_confidence_order():
+    kicked = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    snapshot = _snapshot_for(
+        _edge("nfl-2026-01-UNKNOWN-A"),
+        _edge(kicked.game_id),
+        _edge("nfl-2026-01-UNKNOWN-B"),
+    )
+
+    lines = _pick_lines(_format_recommendations(snapshot, (kicked,)))
+
+    assert "Miami Dolphins" in lines[0]
+    assert "`nfl-2026-01-UNKNOWN-A`" in lines[1]
+    assert "`nfl-2026-01-UNKNOWN-B`" in lines[2]
+
+
+def test_picks_sharing_a_kickoff_keep_their_confidence_order():
+    kickoff = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    first = _nfl_game("BUF", "MIA", kickoff)
+    second = _nfl_game("DAL", "PHI", kickoff)
+    snapshot = _snapshot_for(_edge(second.game_id), _edge(first.game_id))
+
+    lines = _pick_lines(_format_recommendations(snapshot, (first, second)))
+
+    assert "Philadelphia Eagles" in lines[0]
+    assert "Miami Dolphins" in lines[1]
+
+
 @pytest.mark.parametrize(
     ("side", "tier", "tier_badge", "expected_matchup"),
     [
@@ -210,11 +296,73 @@ def test_status_pick_format_highlights_the_selected_team_and_explains_why(
         ),
     )
 
-    rendered = _format_recommendations(snapshot, (game,))
+    rendered = _format_recommendations(snapshot, (game,), details=True)
 
     assert expected_matchup in rendered
     assert tier_badge in rendered
     assert "Why: league -3.0 vs market -6.0: 3.0 pts toward home" in rendered
+
+
+def test_picks_omit_reasoning_unless_details_are_requested():
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    snapshot = _snapshot_for(_edge(game.game_id, rationale="the market moved three points"))
+
+    compact = _format_recommendations(snapshot, (game,))
+    verbose = _format_recommendations(snapshot, (game,), details=True)
+
+    assert compact == "• 🔥 Strong — ~~Buffalo Bills~~ at **Miami Dolphins**"
+    assert verbose == (
+        "• 🔥 Strong — ~~Buffalo Bills~~ at **Miami Dolphins**\n"
+        "> Why: the market moved three points"
+    )
+
+
+def test_compact_picks_too_long_for_one_field_split_on_whole_picks():
+    games = tuple(
+        _nfl_game(f"AWAY{index:02d}", f"HOME{index:02d}", datetime(2026, 9, 13, 17, tzinfo=UTC))
+        for index in range(40)
+    )
+    snapshot = _snapshot_for(*(_edge(game.game_id) for game in games))
+    status = ScopeStatus(
+        scope=MonitorScope(Sport.NFL, 2026, 1),
+        state=AutomationState(),
+        snapshot=snapshot,
+        games=games,
+        market_timestamp=None,
+    )
+
+    embed = _format_status((status,), FakeScheduler())
+
+    pick_fields = [field for field in embed.fields if "Picks" in field.name]
+    assert len(pick_fields) > 1
+    assert all(len(field.value) <= 1024 for field in pick_fields)
+    assert sum(len(_pick_lines(field.value)) for field in pick_fields) == 40
+    assert all(
+        line.startswith("• ") for field in pick_fields for line in field.value.splitlines()
+    )
+
+
+def test_status_renders_a_full_slate_as_one_unsplit_field():
+    games = tuple(
+        _nfl_game(f"AWAY{index:02d}", f"HOME{index:02d}", datetime(2026, 9, 13, 17, tzinfo=UTC))
+        for index in range(16)
+    )
+    snapshot = _snapshot_for(
+        *(_edge(game.game_id, rationale="market evidence " * 24) for game in games)
+    )
+    status = ScopeStatus(
+        scope=MonitorScope(Sport.NFL, 2026, 1),
+        state=AutomationState(),
+        snapshot=snapshot,
+        games=games,
+        market_timestamp=None,
+    )
+
+    embed = _format_status((status,), FakeScheduler())
+
+    pick_fields = [field for field in embed.fields if "Picks" in field.name]
+    assert [field.name for field in pick_fields] == ["NFL • 2026 — Week 1 — Picks"]
+    assert len(_pick_lines(pick_fields[0].value)) == 16
 
 
 @pytest.mark.asyncio
@@ -309,7 +457,7 @@ def test_status_splits_long_pick_lists_within_discord_field_limits():
         market_timestamp=None,
     )
 
-    embed = _format_status((status,), FakeScheduler())
+    embed = _format_status((status,), FakeScheduler(), details=True)
     rendered = "\n".join(field.value for field in embed.fields)
 
     assert len(embed.fields) > 2
@@ -679,10 +827,7 @@ async def test_monitor_change_notification_uses_status_pick_format(settings, mon
     embed = sent[0][1]
     assert embed.title == "🏈 Recommendations Updated"
     assert embed.fields[0].name == "NFL • 2026 — Week 1 — Picks"
-    assert embed.fields[0].value == (
-        "• 🔥 Strong — ~~Buffalo Bills~~ at **Miami Dolphins**\n"
-        "> Why: league -3.0 vs market -6.0: 3.0 pts toward home"
-    )
+    assert embed.fields[0].value == "• 🔥 Strong — ~~Buffalo Bills~~ at **Miami Dolphins**"
 
 
 def test_bot_uses_no_privileged_intents_and_registers_dm_commands(settings):
@@ -690,6 +835,15 @@ def test_bot_uses_no_privileged_intents_and_registers_dm_commands(settings):
 
     assert bot.intents.value == 0
     assert {command.name for command in bot.tree.get_commands()} == {"status", "refresh"}
+
+
+def test_both_commands_expose_an_optional_details_toggle(settings):
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+
+    for command in bot.tree.get_commands():
+        details = next(param for param in command.parameters if param.name == "details")
+        assert details.required is False
+        assert details.type is discord.AppCommandOptionType.boolean
 
 
 @pytest.mark.asyncio
@@ -932,6 +1086,81 @@ async def test_refresh_lists_updated_picks_in_changed_embed(settings):
     assert embed.title == "🏈 Recommendations Updated"
     assert embed.fields[0].name == "NFL • 2026 — Week 1"
     assert embed.fields[0].value == "• `game-a` — **away**"
+
+
+def _store_slate(settings, games: tuple[Game, ...]) -> None:
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.upsert_games(list(games))
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id=game.game_id,
+                    season=game.season,
+                    week=game.week,
+                    spread_home=-3.0,
+                    posted_at=game.kickoff_utc,
+                )
+                for game in games
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_refresh_names_teams_in_kickoff_order(settings):
+    sunday = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    thursday = _nfl_game("DAL", "PHI", datetime(2026, 9, 10, 0, tzinfo=UTC))
+    _store_slate(settings, (sunday, thursday))
+    snapshot = _snapshot_for(_edge(sunday.game_id), _edge(thursday.game_id))
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    bot = PickemBot(
+        settings,
+        FakeMonitor(RefreshResult(changed=True, snapshot=snapshot)),
+        scheduler=FakeScheduler(),
+    )
+
+    await bot.refresh(interaction)
+
+    assert interaction.followup.embeds[0].fields[0].value == (
+        "• 🔥 Strong — ~~Dallas Cowboys~~ at **Philadelphia Eagles**\n"
+        "• 🔥 Strong — ~~Buffalo Bills~~ at **Miami Dolphins**"
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_details_option_restores_reasoning(settings):
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    _store_slate(settings, (game,))
+    snapshot = _snapshot_for(_edge(game.game_id, rationale="the market moved three points"))
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    bot = PickemBot(
+        settings,
+        FakeMonitor(RefreshResult(changed=True, snapshot=snapshot)),
+        scheduler=FakeScheduler(),
+    )
+
+    await bot.refresh(interaction, details=True)
+
+    assert "> Why: the market moved three points" in (
+        interaction.followup.embeds[0].fields[0].value
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_details_option_restores_reasoning(settings, monkeypatch):
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    _store_slate(settings, (game,))
+    snapshot = _snapshot_for(_edge(game.game_id, rationale="the market moved three points"))
+    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    compact = FakeInteraction(user_id=settings.owner_id)
+    verbose = FakeInteraction(user_id=settings.owner_id)
+
+    await bot.status(compact)
+    await bot.status(verbose, details=True)
+
+    assert "Why:" not in compact.response.embeds[0].fields[0].value
+    assert "> Why: the market moved three points" in verbose.response.embeds[0].fields[0].value
 
 
 @pytest.mark.asyncio
