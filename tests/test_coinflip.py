@@ -14,6 +14,7 @@ from pickem.backtest.coinflip import (
     replay_elo_sides,
     summarize_coinflip_predictions,
 )
+from pickem.edge.elo import build_ratings, projected_margin, tiebreak_side
 from pickem.edge.pipeline import decide_edges
 from pickem.models import Game, LeagueLine, MarketLine, Side, Sport, Tier
 
@@ -489,8 +490,13 @@ def test_gate_rejects_an_evaluation_that_relies_on_certification_defaults():
     assert not passes_acceptance_gate(unverified)
 
 
-def test_replay_elo_sides_matches_live_coinflip_decisions_with_prior_week_history_only():
-    """Catches replaying a different tier or leaking a week's final into Elo."""
+def test_replay_elo_sides_reproduces_the_elo_rule_with_prior_week_history_only():
+    """Catches replaying a different tier or leaking a week's final into Elo.
+
+    Production decides coinflips with the frozen-board favorite now, so this
+    replay is deliberately no longer tied to the live side. It still replays
+    Elo, because it reproduces the incumbent the frozen evaluation measured.
+    """
     kickoff_2021 = datetime(2021, 9, 4, 17, tzinfo=UTC)
     kickoff_2022 = datetime(2022, 9, 3, 17, tzinfo=UTC)
     games = [
@@ -551,7 +557,7 @@ def test_replay_elo_sides_matches_live_coinflip_decisions_with_prior_week_histor
 
     feature_ids = {row.game_id for row in build_coinflip_rows(games, frozen, submission).rows}
     sides = replay_elo_sides(games, frozen, submission)
-    expected = decide_edges(
+    live = decide_edges(
         [
             LeagueLine(
                 game_id=games[1].game_id,
@@ -565,26 +571,18 @@ def test_replay_elo_sides_matches_live_coinflip_decisions_with_prior_week_histor
         [games[1]],
         [games[0]],
     )[0]
-    leaked = decide_edges(
-        [
-            LeagueLine(
-                game_id=games[1].game_id,
-                season=2022,
-                week=1,
-                spread_home=2.0,
-                posted_at=kickoff_2022 - timedelta(days=3),
-            )
-        ],
-        [submission[1]],
-        [games[1]],
-        games[:2],
-    )[0]
+
+    def elo_side(history):
+        return tiebreak_side(projected_margin(build_ratings(history), "A", "B"), 2.0)
 
     assert feature_ids == {games[0].game_id, games[1].game_id}
     assert set(sides) == feature_ids
-    assert expected.tier is Tier.COINFLIP
-    assert sides[games[1].game_id] is expected.side
-    assert sides[games[1].game_id] is not leaked.side
+    # The replay must classify the same tier production does.
+    assert live.tier is Tier.COINFLIP
+    # It reproduces the Elo incumbent off prior-week history only...
+    assert sides[games[1].game_id] is elo_side([games[0]])
+    # ...and leaking the week's own final moves Elo, so the guard has teeth.
+    assert sides[games[1].game_id] is not elo_side(games[:2])
 
     in_play = MarketLine(
         game_id=games[1].game_id,

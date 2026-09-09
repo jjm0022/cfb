@@ -1,9 +1,16 @@
 """Resolve the games divergence cannot answer.
 
-The rating is only ever allowed to decide COINFLIP and NO_MARKET games. A real
-divergence signal is never overridden by it — the rating is deliberately weaker
-than the market, and letting it outvote a moved line would throw away the edge
-this system exists to capture.
+Two deliberately weak rules split the work, and neither is ever allowed to
+decide a STRONG or LEAN game. A real divergence signal is never overridden —
+letting a rating outvote a moved line would throw away the edge this system
+exists to capture.
+
+COINFLIP takes the frozen board's favorite. The frozen line and the market
+agree there, so any pick is a bet against the market's own number; the cheapest
+rule that scored at the noise band wins. See `edge/favorite.py`.
+
+NO_MARKET still uses Elo, because there is no market line to compare against
+and the favorite rule has never been evaluated on those games.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ from pickem.edge.divergence import (
     _emit_decision_event,
 )
 from pickem.edge.elo import EloConfig, build_ratings, projected_margin, tiebreak_side
+from pickem.edge.favorite import favorite_side
 from pickem.models import Edge, Game, LeagueLine, MarketLine, Tier
 
 _TIEBREAK_TIERS = {Tier.COINFLIP, Tier.NO_MARKET}
@@ -87,34 +95,67 @@ def _apply_tiebreaks(
                 f"{edge.game_id} needs a {edge.tier.value} tiebreak but has no game record"
             )
 
-        margin = projected_margin(ratings, game.home_team_id, game.away_team_id, config)
-        side = tiebreak_side(margin, edge.league_spread)
-        _emit_decision_event(
-            "INFO",
-            f"Elo tiebreak projects home by {margin:+.1f}",
-            event="tiebreak_applied",
-            game_id=edge.game_id,
-            tier=edge.tier.value,
-            home_team_id=game.home_team_id,
-            away_team_id=game.away_team_id,
-            home_rating=ratings.get(game.home_team_id, config.initial),
-            away_rating=ratings.get(game.away_team_id, config.initial),
-            projected_margin=margin,
-            league_spread=edge.league_spread,
-            side=side.value,
-        )
-        resolved.append(
-            edge.model_copy(
-                update={
-                    "side": side,
-                    "rationale": (
-                        f"{edge.rationale}; Elo rating projects home by {margin:+.1f} "
-                        f"vs a board of {edge.league_spread:+.1f}"
-                    ),
-                }
-            )
-        )
+        if edge.tier is Tier.COINFLIP:
+            resolved.append(_decide_by_favorite(edge, game))
+        else:
+            resolved.append(_decide_by_elo(edge, game, ratings, config))
     return resolved
+
+
+def _decide_by_favorite(edge: Edge, game: Game) -> Edge:
+    """Take the frozen board's favorite; the market gave us nothing to trade."""
+    side = favorite_side(edge.league_spread)
+    _emit_decision_event(
+        "INFO",
+        f"Frozen-board favorite is {side.value} on a board of {edge.league_spread:+.1f}",
+        event="tiebreak_applied",
+        method="frozen_line_favorite",
+        game_id=edge.game_id,
+        tier=edge.tier.value,
+        home_team_id=game.home_team_id,
+        away_team_id=game.away_team_id,
+        league_spread=edge.league_spread,
+        side=side.value,
+    )
+    return edge.model_copy(
+        update={
+            "side": side,
+            "rationale": (
+                f"{edge.rationale}; no divergence, so we take the frozen-board "
+                f"favorite ({side.value}) on a board of {edge.league_spread:+.1f}"
+            ),
+        }
+    )
+
+
+def _decide_by_elo(edge: Edge, game: Game, ratings: dict[str, float], config: EloConfig) -> Edge:
+    """Rate the matchup ourselves; there is no market line to lean on."""
+    margin = projected_margin(ratings, game.home_team_id, game.away_team_id, config)
+    side = tiebreak_side(margin, edge.league_spread)
+    _emit_decision_event(
+        "INFO",
+        f"Elo tiebreak projects home by {margin:+.1f}",
+        event="tiebreak_applied",
+        method="elo",
+        game_id=edge.game_id,
+        tier=edge.tier.value,
+        home_team_id=game.home_team_id,
+        away_team_id=game.away_team_id,
+        home_rating=ratings.get(game.home_team_id, config.initial),
+        away_rating=ratings.get(game.away_team_id, config.initial),
+        projected_margin=margin,
+        league_spread=edge.league_spread,
+        side=side.value,
+    )
+    return edge.model_copy(
+        update={
+            "side": side,
+            "rationale": (
+                f"{edge.rationale}; Elo rating projects home by {margin:+.1f} "
+                f"vs a board of {edge.league_spread:+.1f}"
+            ),
+        }
+    )
 
 
 def predict_tiebreaker_total(market_lines: Sequence[MarketLine]) -> float | None:

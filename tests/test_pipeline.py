@@ -68,18 +68,37 @@ def test_settled_divergence_does_not_require_a_matching_game(
     assert edge.tier is expected_tier
 
 
-def test_coinflip_returns_the_rating_side_not_a_placeholder():
+def test_coinflip_returns_the_board_favorite_not_a_placeholder():
     [edge] = decide_edges([league(-3.0)], [market(-3.5)], [game()], HISTORY)
     assert edge.side is Side.HOME
     assert edge.tier is Tier.COINFLIP
-    assert "Elo rating projects" in edge.rationale
+    assert "frozen-board favorite" in edge.rationale
 
 
-def test_coinflip_with_a_heavy_home_number_returns_the_rating_away_side():
-    [edge] = decide_edges([league(-40.0)], [market(-40.0)], [game()], HISTORY)
+def test_coinflip_on_an_away_favored_board_returns_away():
+    [edge] = decide_edges([league(3.0)], [market(3.5)], [game()], HISTORY)
     assert edge.side is Side.AWAY
     assert edge.tier is Tier.COINFLIP
-    assert "rating" in edge.rationale.lower()
+    assert "frozen-board favorite" in edge.rationale
+
+
+def test_coinflip_takes_the_favorite_however_big_the_number():
+    """The Elo tiebreak this replaced returned AWAY here, flipping to the dog
+    once the board outran its projected margin."""
+    [edge] = decide_edges([league(-40.0)], [market(-40.0)], [game()], HISTORY)
+    assert edge.side is Side.HOME
+    assert edge.tier is Tier.COINFLIP
+
+
+def test_coinflip_never_consults_the_rating(records):
+    [edge] = decide_edges([league(-3.0)], [market(-3.5)], [game()], HISTORY)
+
+    assert "elo" not in edge.rationale.lower()
+    tiebreak = next(r for r in records if r["extra"]["event"] == "tiebreak_applied")
+    assert tiebreak["extra"]["method"] == "frozen_line_favorite"
+    assert tiebreak["extra"]["league_spread"] == -3.0
+    assert tiebreak["extra"]["side"] == edge.side.value
+    assert "projected_margin" not in tiebreak["extra"]
 
 
 def test_no_market_returns_the_rating_side_not_a_placeholder():
@@ -199,6 +218,7 @@ def test_tiebreak_log_contains_the_actual_default_ratings(records):
 
     tiebreak = next(r for r in records if r["extra"]["event"] == "tiebreak_applied")
     assert tiebreak["extra"]["game_id"] == edge.game_id
+    assert tiebreak["extra"]["method"] == "elo"
     assert tiebreak["extra"]["tier"] == Tier.NO_MARKET.value
     assert tiebreak["extra"]["home_team_id"] == "MIA"
     assert tiebreak["extra"]["away_team_id"] == "BUF"
