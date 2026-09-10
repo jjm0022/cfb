@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -16,12 +16,14 @@ import discord
 import yaml
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from discord import app_commands
 from discord.ext import commands
 from loguru import logger
 
 from pickem import config
 from pickem.automation.monitor import MonitorScope, RecommendationMonitor, RefreshResult
+from pickem.automation.poll_plan import PollInstant, plan_polls
 from pickem.models import Game, Side, Sport, Tier
 from pickem.obs.log import configure_logging, run_context
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
@@ -32,6 +34,14 @@ EASTERN = ZoneInfo("America/New_York")
 DEFAULT_CONFIG_PATH = Path("config/discord-bot.yaml")
 REMINDER_MESSAGE = "Reminder: submit this week's picks."
 PRIVATE_MESSAGE = "This bot is private."
+
+# Hours before each kickoff that the market is polled, on top of the daily
+# refresh. A fixed wall-clock time cannot be close to kickoff for a slate that
+# runs twelve hours; these are anchored to the kickoffs themselves.
+DEFAULT_POLL_OFFSETS_HOURS = (12.0, 6.0, 2.0, 1.0)
+DEFAULT_POLL_PLAN_EVERY_HOURS = 6
+DEFAULT_POLL_HORIZON_DAYS = 10
+POLL_JOB_PREFIX = "poll:"
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,9 @@ class DiscordSettings:
     refresh_days: str = "wed-sun,mon"
     refresh_hour: int = 10
     refresh_minute: int = 0
+    poll_offsets_hours: tuple[float, ...] = DEFAULT_POLL_OFFSETS_HOURS
+    poll_plan_every_hours: int = DEFAULT_POLL_PLAN_EVERY_HOURS
+    poll_horizon_days: int = DEFAULT_POLL_HORIZON_DAYS
 
     @classmethod
     def from_env(
@@ -61,6 +74,16 @@ class DiscordSettings:
             refresh_hour, refresh_minute = _parse_time(schedule["refresh"]["time"])
             refresh_days = ",".join(schedule["refresh"]["days"])
             timezone = ZoneInfo(raw["timezone"])
+            # Optional: a config file written before kickoff-anchored polling
+            # existed must still start the bot.
+            polls = schedule.get("kickoff_polls") or {}
+            offsets = _parse_offsets(polls.get("offsets_hours", DEFAULT_POLL_OFFSETS_HOURS))
+            plan_every = int(polls.get("plan_every_hours", DEFAULT_POLL_PLAN_EVERY_HOURS))
+            horizon_days = int(polls.get("horizon_days", DEFAULT_POLL_HORIZON_DAYS))
+            if not 1 <= plan_every <= 23:
+                raise ValueError(f"plan_every_hours must be 1-23, got {plan_every}")
+            if horizon_days < 1:
+                raise ValueError(f"horizon_days must be positive, got {horizon_days}")
         except (KeyError, TypeError, ValueError, OSError, yaml.YAMLError) as error:
             raise RuntimeError(
                 f"invalid Discord bot configuration at {config_path}: {error}"
@@ -76,7 +99,24 @@ class DiscordSettings:
             refresh_days=refresh_days,
             refresh_hour=refresh_hour,
             refresh_minute=refresh_minute,
+            poll_offsets_hours=offsets,
+            poll_plan_every_hours=plan_every,
+            poll_horizon_days=horizon_days,
         )
+
+
+def _parse_offsets(values: object) -> tuple[float, ...]:
+    """Normalize configured kickoff offsets, rejecting ones that cannot fire.
+
+    A zero or negative offset would name an instant at or after kickoff, which
+    is a poll that cannot change a pick and can only capture in-play prices.
+    """
+    if isinstance(values, str) or not isinstance(values, Sequence):
+        raise ValueError(f"offsets_hours must be a list, got {values!r}")
+    offsets = tuple(float(value) for value in values)
+    if any(offset <= 0 for offset in offsets):
+        raise ValueError(f"offsets_hours must all be positive, got {offsets}")
+    return offsets
 
 def _parse_time(value: str) -> tuple[int, int]:
     hour, minute = (int(part) for part in value.split(":", maxsplit=1))
@@ -111,8 +151,15 @@ def build_schedule(
     refresh: Callable[[], Awaitable[Any] | Any] | RecommendationMonitor,
     send_dm: Callable[[str], Awaitable[None] | None],
     scheduler: Any,
+    plan: Callable[[], Awaitable[Any] | Any] | None = None,
 ) -> None:
-    """Register reminder and recommendation refresh jobs in Eastern time."""
+    """Register the reminder, the daily refresh, and the poll planner.
+
+    The daily refresh stays: it is the digest, and the fallback for a week
+    whose kickoffs are not yet stored. ``plan`` is the callback that turns
+    those kickoffs into one-shot poll jobs; without it no planner is
+    registered and the bot behaves exactly as it did before.
+    """
 
     async def reminder_job() -> None:
         await _invoke(send_dm, REMINDER_MESSAGE)
@@ -121,6 +168,10 @@ def build_schedule(
         with run_context("sched:refresh", db=str(settings.db)):
             callback = getattr(refresh, "refresh", refresh)
             await _invoke(callback)
+
+    async def plan_job() -> None:
+        with run_context("sched:plan-polls", db=str(settings.db)):
+            await _invoke(plan)
 
     scheduler.add_job(
         reminder_job,
@@ -158,6 +209,88 @@ def build_schedule(
         at=f"{settings.refresh_hour:02d}:{settings.refresh_minute:02d}",
         timezone=str(settings.timezone),
     ).info("refresh job scheduled")
+    if plan is None:
+        return
+    scheduler.add_job(
+        plan_job,
+        CronTrigger(
+            hour=f"*/{settings.poll_plan_every_hours}",
+            minute=settings.refresh_minute,
+            timezone=settings.timezone,
+        ),
+        id="poll-planner",
+        replace_existing=True,
+    )
+    logger.bind(
+        event="job_scheduled",
+        job="poll-planner",
+        days="*",
+        at=f"every {settings.poll_plan_every_hours}h",
+        timezone=str(settings.timezone),
+    ).info("poll planner job scheduled")
+
+
+def poll_job_id(scope: MonitorScope, instant: PollInstant) -> str:
+    """A stable id for one scope's poll at one instant.
+
+    Stable so that re-planning the same slate replaces its jobs rather than
+    duplicating them, and so a job whose instant left the plan can be
+    identified and dropped.
+    """
+    return (
+        f"{POLL_JOB_PREFIX}{scope.sport.value}:{scope.season}:{scope.week}"
+        f":{instant.at.isoformat()}"
+    )
+
+
+def schedule_kickoff_polls(
+    plans: Mapping[MonitorScope, Sequence[PollInstant]],
+    run_poll: Callable[[MonitorScope, PollInstant], Awaitable[Any] | Any],
+    scheduler: Any,
+) -> tuple[str, ...]:
+    """Make the scheduler's poll jobs match ``plans`` exactly, and say which.
+
+    Re-planning is the whole point: a slate re-ingested with a moved kickoff
+    must not leave the old instant's poll behind to spend a credit on a game
+    that is no longer there. Every poll job is owned by this function, so any
+    it did not just register is removed.
+    """
+    wanted: dict[str, tuple[MonitorScope, PollInstant]] = {
+        poll_job_id(scope, instant): (scope, instant)
+        for scope, instants in plans.items()
+        for instant in instants
+    }
+
+    for job in list(scheduler.get_jobs()):
+        job_id = getattr(job, "id", None) or ""
+        if job_id.startswith(POLL_JOB_PREFIX) and job_id not in wanted:
+            scheduler.remove_job(job_id)
+
+    for job_id, (scope, instant) in wanted.items():
+        scheduler.add_job(
+            _poll_job(run_poll, scope, instant),
+            DateTrigger(run_date=instant.at),
+            id=job_id,
+            replace_existing=True,
+        )
+
+    logger.bind(
+        event="polls_planned",
+        jobs=len(wanted),
+        scopes=[f"{s.sport.value}/{s.season}/wk{s.week}" for s in plans],
+    ).info(f"planned {len(wanted)} kickoff-anchored polls")
+    return tuple(wanted)
+
+
+def _poll_job(
+    run_poll: Callable[[MonitorScope, PollInstant], Awaitable[Any] | Any],
+    scope: MonitorScope,
+    instant: PollInstant,
+) -> Callable[[], Awaitable[Any]]:
+    async def job() -> Any:
+        return await _invoke(run_poll, scope, instant)
+
+    return job
 
 
 async def send_dm(
@@ -509,7 +642,16 @@ class PickemBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
-        build_schedule(self.settings, self._scheduled_refresh, self._send_owner_dm, self.scheduler)
+        build_schedule(
+            self.settings,
+            self._scheduled_refresh,
+            self._send_owner_dm,
+            self.scheduler,
+            self._plan_kickoff_polls,
+        )
+        # Plan once at startup as well as on the cron: a restart between
+        # planning runs must not leave the rest of the week unpolled.
+        self._plan_kickoff_polls()
         start = getattr(self.scheduler, "start", None)
         if start is not None and not getattr(self.scheduler, "running", False):
             start()
@@ -534,13 +676,22 @@ class PickemBot(commands.Bot):
         return True
 
     def _resolve_scopes(
-        self, season: int | None = None, week: int | None = None
+        self,
+        season: int | None = None,
+        week: int | None = None,
+        *,
+        sport: Sport | None = None,
     ) -> tuple[MonitorScope, ...]:
         scopes = tuple(
-            MonitorScope(sport, scope_season, scope_week)
-            for sport, scope_season, scope_week in resolve_pickem_scopes(
+            MonitorScope(scope_sport, scope_season, scope_week)
+            for scope_sport, scope_season, scope_week in resolve_pickem_scopes(
                 self.settings.db, datetime.now(UTC), season=season, week=week
             )
+            # CFB week 2 and NFL week 1 are the same pool week but not the same
+            # board, and an explicit season+week returns every sport holding
+            # lines for it. A poll anchored to one sport's kickoff must not
+            # spend a credit on the other's.
+            if sport is None or scope_sport is sport
         )
         logger.bind(
             event="scope_resolved",
@@ -559,13 +710,14 @@ class PickemBot(commands.Bot):
         monitor = self._monitors.get(scope)
         if monitor is None:
             monitor = RecommendationMonitor(
-                refresh_week=lambda current_scope: asyncio.to_thread(
+                refresh_week=lambda current_scope, **kwargs: asyncio.to_thread(
                     refresh_recommendations,
                     self.settings.db,
                     current_scope.sport,
                     current_scope.season,
                     current_scope.week,
                     datetime.now(UTC),
+                    **kwargs,
                 ),
                 load_state=self._load_state,
                 save_state=self._save_state,
@@ -592,14 +744,22 @@ class PickemBot(commands.Bot):
         )
 
     async def _refresh_scopes(
-        self, season: int | None = None, week: int | None = None
+        self,
+        season: int | None = None,
+        week: int | None = None,
+        *,
+        sport: Sport | None = None,
+        window_start: datetime | None = None,
     ) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
+        # Passed through only when set, so an adapter whose refresh() takes no
+        # keywords keeps working.
+        refresh_kwargs = {} if window_start is None else {"window_start": window_start}
         async with self._refresh_lock:
-            scopes = self._resolve_scopes(season, week)
+            scopes = self._resolve_scopes(season, week, sport=sport)
             results: list[tuple[MonitorScope, RefreshResult]] = []
             for scope in scopes:
                 try:
-                    result = await self._monitor_for(scope).refresh()
+                    result = await self._monitor_for(scope).refresh(**refresh_kwargs)
                 except Exception as error:
                     logger.bind(
                         event="refresh_failed",
@@ -616,6 +776,51 @@ class PickemBot(commands.Bot):
 
     async def _scheduled_refresh(self) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
         return await self._refresh_scopes()
+
+    def _plan_kickoff_polls(self, now: datetime | None = None) -> tuple[str, ...]:
+        """Re-derive the poll schedule from the kickoffs currently stored.
+
+        Run periodically rather than once, because the slate arrives during
+        the week: CBS posts the two boards on different days, so a week
+        ingested after the last planning run would otherwise go unpolled.
+        Each scope is planned separately -- a poll only ever covers one sport
+        -- and a scope with nothing left to poll contributes no jobs.
+        """
+        moment = now if now is not None else datetime.now(UTC)
+        plans: dict[MonitorScope, tuple[PollInstant, ...]] = {}
+        for scope in self._resolve_scopes():
+            games, _ = _stored_week_details(self.settings, scope)
+            instants = plan_polls(
+                [game.kickoff_utc for game in games],
+                offsets_hours=self.settings.poll_offsets_hours,
+                now=moment,
+                horizon=timedelta(days=self.settings.poll_horizon_days),
+            )
+            if instants:
+                plans[scope] = instants
+        return schedule_kickoff_polls(plans, self._run_kickoff_poll, self.scheduler)
+
+    async def _run_kickoff_poll(
+        self, scope: MonitorScope, instant: PollInstant
+    ) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
+        with run_context("sched:kickoff-poll", db=str(self.settings.db)):
+            logger.bind(
+                event="kickoff_poll_fired",
+                sport=scope.sport.value,
+                season=scope.season,
+                week=scope.week,
+                offset_hours=instant.offset_hours,
+                kickoff=instant.kickoff_utc.isoformat(),
+            ).info(
+                f"polling {scope.sport.value} {instant.offset_hours:g}h before "
+                f"{instant.kickoff_utc.isoformat()}"
+            )
+            return await self._refresh_scopes(
+                scope.season,
+                scope.week,
+                sport=scope.sport,
+                window_start=instant.at,
+            )
 
     async def status(
         self,
@@ -734,15 +939,19 @@ def main() -> None:
 
 
 __all__ = [
+    "DEFAULT_POLL_OFFSETS_HOURS",
     "DiscordSettings",
     "DiscordBot",
     "EASTERN",
+    "POLL_JOB_PREFIX",
     "PickemBot",
     "REMINDER_MESSAGE",
     "build_schedule",
     "build_bot",
     "create_bot",
     "main",
+    "poll_job_id",
     "resolve_pickem_scopes",
+    "schedule_kickoff_polls",
     "send_dm",
 ]

@@ -281,8 +281,8 @@ you pass matches the plan.
 ## Optional: the Discord reminder bot
 
 An owner-only bot that DMs you a Tuesday reminder, refreshes recommendations on
-the other days, and answers `/status` and `/refresh` in DM. It never submits
-picks either.
+the other days, polls the market again as each kickoff approaches, and answers
+`/status` and `/refresh` in DM. It never submits picks either.
 
 ```bash
 uv run pickem-discord-bot
@@ -293,6 +293,13 @@ token and owner ID come from `.env`. The bot discovers each sport's current
 stored pick week automatically, so no weekly config edit is needed. Both
 commands accept optional `season`/`week` arguments and a `details: True` flag
 that appends each pick's rationale.
+
+Besides the daily refresh it polls at `12, 6, 2, 1` hours before **each
+kickoff on the board** — a fixed daily time is hours stale for a night game,
+and the market keeps moving. One poll covers every game in the sport, so this
+costs about 60 credits per pool week. It DMs you only when a pick's side or
+tier actually changes. See `docs/runbooks/discord-pick-reminder.md` for the
+offsets, the cost model, and what happens on a restart.
 
 To run it as a user systemd service, `deploy/pickem-discord-bot.service` is
 ready to copy into `~/.config/systemd/user/` — it assumes the checkout is at

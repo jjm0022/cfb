@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +11,7 @@ import pytest
 from loguru import logger
 
 from pickem.automation.monitor import MonitorScope, RefreshResult
+from pickem.automation.poll_plan import PollInstant
 from pickem.discord_bot import (
     DiscordSettings,
     PickemBot,
@@ -19,6 +20,7 @@ from pickem.discord_bot import (
     _format_status,
     build_schedule,
     resolve_pickem_scopes,
+    schedule_kickoff_polls,
     send_dm,
 )
 from pickem.models import Edge, Game, LeagueLine, Side, Sport, Tier
@@ -31,6 +33,14 @@ class FakeJob:
     func: object
     trigger: object
     kwargs: dict
+
+    @property
+    def id(self):
+        return self.kwargs.get("id")
+
+    @property
+    def run_date(self):
+        return getattr(self.trigger, "run_date", None)
 
     @property
     def trigger_fields(self):
@@ -49,12 +59,26 @@ class FakeScheduler:
     def __init__(self):
         self.jobs: list[FakeJob] = []
         self.running = False
+        self.removed: list[str] = []
 
     def add_job(self, func, trigger, **kwargs):
+        job_id = kwargs.get("id")
+        if job_id is not None and kwargs.get("replace_existing"):
+            self.jobs = [job for job in self.jobs if job.id != job_id]
         self.jobs.append(FakeJob(func, trigger, kwargs))
+
+    def get_jobs(self):
+        return list(self.jobs)
+
+    def remove_job(self, job_id):
+        self.removed.append(job_id)
+        self.jobs = [job for job in self.jobs if job.id != job_id]
 
     def start(self):
         self.running = True
+
+    def job_ids(self, prefix=""):
+        return [job.id for job in self.jobs if (job.id or "").startswith(prefix)]
 
 
 class FakeMonitor:
@@ -811,7 +835,9 @@ async def test_monitor_change_notification_uses_status_pick_format(settings, mon
     monkeypatch.setattr("pickem.discord_bot.refresh_recommendations", lambda *_args: snapshot)
     monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
     bot = PickemBot(settings, scheduler=FakeScheduler())
-    bot._load_state = lambda _scope: AutomationState(signature=f"{game.game_id}:away")
+    bot._load_state = lambda _scope: AutomationState(
+        signature=f"v2|{game.game_id}:away:strong"
+    )
     bot._save_state = lambda _scope, _state: None
     sent: list[tuple[str | None, object | None]] = []
 
@@ -1309,3 +1335,301 @@ def test_config_required_still_has_no_secret_logging(monkeypatch, caplog):
         monkeypatch.setenv(name, value)
     DiscordSettings.from_env()
     assert "secret-value" not in caplog.text
+
+
+# --- kickoff-anchored polling -------------------------------------------------
+
+CFB_SCOPE = MonitorScope(Sport.CFB, 2026, 2)
+NFL_SCOPE = MonitorScope(Sport.NFL, 2026, 1)
+PLAN_NOW = datetime(2026, 9, 10, 12, tzinfo=UTC)
+
+
+def _instant(day: int, hour: int, *, offset: float = 1.0, kickoff_hour: int = 17):
+    return PollInstant(
+        at=datetime(2026, 9, day, hour, tzinfo=UTC),
+        offset_hours=offset,
+        kickoff_utc=datetime(2026, 9, day, kickoff_hour, tzinfo=UTC),
+    )
+
+
+def test_settings_read_kickoff_poll_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_OWNER_ID", "123")
+    config_path = tmp_path / "discord-bot.yaml"
+    config_path.write_text(
+        "database: pickem.duckdb\n"
+        "timezone: America/New_York\n"
+        "schedule:\n"
+        "  reminder:\n"
+        "    day: tue\n"
+        "    time: '10:00'\n"
+        "  refresh:\n"
+        "    days: [wed, thu, fri, sat, sun, mon]\n"
+        "    time: '10:00'\n"
+        "  kickoff_polls:\n"
+        "    offsets_hours: [6, 2, 0.5]\n"
+        "    plan_every_hours: 4\n"
+        "    horizon_days: 3\n"
+    )
+
+    settings = DiscordSettings.from_env(config_path=config_path, db=tmp_path / "p.duckdb")
+
+    assert settings.poll_offsets_hours == (6.0, 2.0, 0.5)
+    assert settings.poll_plan_every_hours == 4
+    assert settings.poll_horizon_days == 3
+
+
+def test_settings_default_kickoff_polls_when_the_block_is_absent(settings):
+    """A config file written before this feature must still start the bot."""
+    assert settings.poll_offsets_hours == (12.0, 6.0, 2.0, 1.0)
+    assert settings.poll_plan_every_hours == 6
+    assert settings.poll_horizon_days == 10
+
+
+def test_build_schedule_adds_a_poll_planner_alongside_the_daily_jobs(settings):
+    scheduler = FakeScheduler()
+
+    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler, plan=lambda: None)
+
+    assert scheduler.job_ids() == ["pick-reminder", "recommendation-refresh", "poll-planner"]
+    assert scheduler.jobs[2].trigger_fields["hour"] == "*/6"
+
+
+def test_planner_registers_one_job_per_planned_instant():
+    scheduler = FakeScheduler()
+
+    ids = schedule_kickoff_polls(
+        {NFL_SCOPE: (_instant(13, 5), _instant(13, 16))},
+        lambda _scope, _instant: None,
+        scheduler,
+    )
+
+    assert ids == (
+        "poll:nfl:2026:1:2026-09-13T05:00:00+00:00",
+        "poll:nfl:2026:1:2026-09-13T16:00:00+00:00",
+    )
+    assert scheduler.job_ids("poll:") == list(ids)
+    assert scheduler.jobs[0].run_date == datetime(2026, 9, 13, 5, tzinfo=UTC)
+
+
+def test_planner_keeps_two_scopes_apart():
+    scheduler = FakeScheduler()
+
+    ids = schedule_kickoff_polls(
+        {NFL_SCOPE: (_instant(13, 5),), CFB_SCOPE: (_instant(13, 5),)},
+        lambda _scope, _instant: None,
+        scheduler,
+    )
+
+    assert set(ids) == {
+        "poll:nfl:2026:1:2026-09-13T05:00:00+00:00",
+        "poll:cfb:2026:2:2026-09-13T05:00:00+00:00",
+    }
+
+
+def test_replanning_the_same_slate_leaves_the_same_jobs():
+    scheduler = FakeScheduler()
+    plan = {NFL_SCOPE: (_instant(13, 5), _instant(13, 16))}
+
+    first = schedule_kickoff_polls(plan, lambda _s, _i: None, scheduler)
+    second = schedule_kickoff_polls(plan, lambda _s, _i: None, scheduler)
+
+    assert first == second
+    assert scheduler.job_ids("poll:") == list(second)
+    assert scheduler.removed == []
+
+
+def test_planner_drops_jobs_for_instants_that_left_the_plan():
+    """A re-ingested slate that moves a kickoff must not leave its old poll behind."""
+    scheduler = FakeScheduler()
+    schedule_kickoff_polls(
+        {NFL_SCOPE: (_instant(13, 5), _instant(13, 16))}, lambda _s, _i: None, scheduler
+    )
+
+    schedule_kickoff_polls({NFL_SCOPE: (_instant(13, 16),)}, lambda _s, _i: None, scheduler)
+
+    assert scheduler.job_ids("poll:") == ["poll:nfl:2026:1:2026-09-13T16:00:00+00:00"]
+    assert scheduler.removed == ["poll:nfl:2026:1:2026-09-13T05:00:00+00:00"]
+
+
+def test_planner_leaves_the_daily_jobs_alone(settings):
+    scheduler = FakeScheduler()
+    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler, plan=lambda: None)
+
+    schedule_kickoff_polls({NFL_SCOPE: (_instant(13, 5),)}, lambda _s, _i: None, scheduler)
+    schedule_kickoff_polls({}, lambda _s, _i: None, scheduler)
+
+    assert scheduler.job_ids() == ["pick-reminder", "recommendation-refresh", "poll-planner"]
+
+
+@pytest.mark.asyncio
+async def test_a_planned_job_polls_its_own_instant():
+    scheduler = FakeScheduler()
+    fired: list[tuple[MonitorScope, PollInstant]] = []
+    instant = _instant(13, 16)
+
+    schedule_kickoff_polls(
+        {NFL_SCOPE: (instant,)},
+        lambda scope, poll: fired.append((scope, poll)),
+        scheduler,
+    )
+    await scheduler.jobs[0].func()
+
+    assert fired == [(NFL_SCOPE, instant)]
+
+
+@pytest.mark.asyncio
+async def test_a_kickoff_poll_refreshes_only_its_own_sport(settings):
+    """CFB week 2 and NFL week 1 can share a season+week; a poll must not pay for both."""
+    add_pick_scope(settings, Sport.CFB)
+    add_pick_scope(settings, Sport.NFL)
+    monitor = FakeMonitor()
+    bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
+
+    results = await bot._refresh_scopes(2026, 1, sport=Sport.NFL)
+
+    assert [scope.sport for scope, _ in results] == [Sport.NFL]
+
+
+@pytest.mark.asyncio
+async def test_a_kickoff_poll_excludes_games_already_underway(settings):
+    add_pick_scope(settings, Sport.NFL)
+    seen: list[object] = []
+
+    class RecordingMonitor:
+        async def refresh(self, **kwargs):
+            seen.append(kwargs.get("window_start"))
+            return RefreshResult(changed=False)
+
+    bot = PickemBot(settings, RecordingMonitor(), scheduler=FakeScheduler())
+    instant = _instant(13, 16)
+
+    await bot._run_kickoff_poll(NFL_SCOPE, instant)
+
+    assert seen == [instant.at]
+
+
+@pytest.mark.asyncio
+async def test_the_daily_refresh_keeps_its_lookback_window(settings):
+    add_pick_scope(settings, Sport.NFL)
+    seen: list[dict] = []
+
+    class RecordingMonitor:
+        async def refresh(self, **kwargs):
+            seen.append(kwargs)
+            return RefreshResult(changed=False)
+
+    bot = PickemBot(settings, RecordingMonitor(), scheduler=FakeScheduler())
+
+    await bot._scheduled_refresh()
+
+    assert seen == [{}]
+
+
+def _seed_slate(settings, sport: Sport, kickoffs: list[datetime]) -> None:
+    """Store a picked week whose games kick off at the given instants."""
+    games = [
+        Game(
+            game_id=f"{sport.value}-2026-01-A{index}-at-B{index}",
+            sport=sport,
+            season=2026,
+            week=1,
+            kickoff_utc=kickoff,
+            home_team_id=f"B{index}",
+            away_team_id=f"A{index}",
+        )
+        for index, kickoff in enumerate(kickoffs)
+    ]
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.upsert_games(games)
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id=game.game_id,
+                    season=game.season,
+                    week=game.week,
+                    spread_home=-3.0,
+                    posted_at=game.kickoff_utc,
+                )
+                for game in games
+            ]
+        )
+
+
+def test_planning_turns_a_stored_slate_into_one_job_per_instant(settings):
+    afternoon = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    night = datetime(2026, 9, 14, 0, 20, tzinfo=UTC)
+    _seed_slate(settings, Sport.NFL, [afternoon, night])
+    scheduler = FakeScheduler()
+    bot = PickemBot(settings, FakeMonitor(), scheduler=scheduler)
+
+    ids = bot._plan_kickoff_polls(now=PLAN_NOW)
+
+    # Four offsets against two distinct kickoffs, none of them colliding.
+    assert len(ids) == 8
+    assert scheduler.job_ids("poll:") == list(ids)
+    assert {job.run_date for job in scheduler.jobs} == {
+        afternoon - timedelta(hours=h) for h in (12, 6, 2, 1)
+    } | {night - timedelta(hours=h) for h in (12, 6, 2, 1)}
+
+
+def test_planning_charges_one_set_of_polls_for_games_sharing_a_kickoff(settings):
+    kickoff = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    _seed_slate(settings, Sport.NFL, [kickoff, kickoff, kickoff])
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+
+    assert len(bot._plan_kickoff_polls(now=PLAN_NOW)) == 4
+
+
+def test_planning_skips_a_week_whose_kickoffs_have_all_passed(settings):
+    _seed_slate(settings, Sport.NFL, [datetime(2026, 9, 6, 17, tzinfo=UTC)])
+    scheduler = FakeScheduler()
+    bot = PickemBot(settings, FakeMonitor(), scheduler=scheduler)
+
+    assert bot._plan_kickoff_polls(now=PLAN_NOW) == ()
+    assert scheduler.job_ids("poll:") == []
+
+
+def test_planning_honours_the_configured_offsets(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_OWNER_ID", "123")
+    config_path = tmp_path / "discord-bot.yaml"
+    config_path.write_text(
+        "database: pickem.duckdb\n"
+        "timezone: America/New_York\n"
+        "schedule:\n"
+        "  reminder: {day: tue, time: '10:00'}\n"
+        "  refresh: {days: [wed], time: '10:00'}\n"
+        "  kickoff_polls: {offsets_hours: [2]}\n"
+    )
+    settings = DiscordSettings.from_env(
+        config_path=config_path, db=tmp_path / "pickem.duckdb"
+    )
+    kickoff = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    _seed_slate(settings, Sport.NFL, [kickoff])
+    scheduler = FakeScheduler()
+    bot = PickemBot(settings, FakeMonitor(), scheduler=scheduler)
+
+    bot._plan_kickoff_polls(now=PLAN_NOW)
+
+    assert [job.run_date for job in scheduler.jobs] == [kickoff - timedelta(hours=2)]
+
+
+@pytest.mark.asyncio
+async def test_a_planned_job_polls_the_scope_that_earned_it(settings):
+    _seed_slate(settings, Sport.CFB, [datetime(2026, 9, 13, 17, tzinfo=UTC)])
+    seen: list[tuple[Sport, object]] = []
+
+    class RecordingMonitor:
+        async def refresh(self, **kwargs):
+            seen.append(kwargs.get("window_start"))
+            return RefreshResult(changed=False)
+
+    scheduler = FakeScheduler()
+    bot = PickemBot(settings, RecordingMonitor(), scheduler=scheduler)
+    bot._plan_kickoff_polls(now=PLAN_NOW)
+
+    await scheduler.jobs[0].func()
+
+    assert seen == [scheduler.jobs[0].run_date]
