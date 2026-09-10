@@ -25,13 +25,12 @@ duplication and prize share matter.
 
 ## Start here
 
-You have a working system with a real result. The completed CFB COINFLIP and
-Week 1 preflight work is integrated in `master` at `6ed6ed7`, which is now 48
-commits behind: `master` is at `3b184ff`, having since taken the Discord bot,
-the logging/observability deployment (`177900c`), and later CBS-parsing and
-pick-sheet fixes. The 2026-09-09 COINFLIP tiebreak change is **not** on
-`master` — it is on `feature/coinflip-favorite-tiebreak` at `01e6479`. Orient
-yourself in about two minutes:
+You have a working system with a real result. Everything described in these
+documents is integrated in `master`, which is at `b0cb542` as of 2026-09-10.
+It has taken, in order, the CFB COINFLIP and Week 1 preflight work (`6ed6ed7`),
+the Discord bot, the logging/observability deployment (`177900c`), later
+CBS-parsing and pick-sheet fixes (`3b184ff`), and the 2026-09-09 COINFLIP
+tiebreak change with its documentation. Orient yourself in about two minutes:
 
 ```bash
 uv run pytest -q                              # verify current integrated suite
@@ -39,11 +38,15 @@ uv run pickem backtest --from 2020 --to 2025  # expect the phase-exit result
 uv run pickem --help                          # the whole surface, 12 commands
 ```
 
-The authoritative checkout is `master`, now at `3b184ff`. The Week 1 readiness
+The authoritative checkout is `master`, now at `b0cb542`. The Week 1 readiness
 implementation was integrated at `6ed6ed7` by fast-forward from
 `feature/week1-preflight`, adding the `preflight` command and its tests; the
-help surface has since grown to 12 commands (verified 2026-09-09). Review and
-verify the integrated change before live execution.
+help surface has since grown to 12 commands (verified 2026-09-09).
+
+**There is a remote, and it is well behind.** `origin` is
+`git@github.com:jjm0022/cfb.git`, whose `master` sits at `a4bb432` — 28 commits
+back, predating the logging deployment. Nothing since has been pushed. Treat
+local `master` as authoritative and the remote as stale.
 
 Then read **"The phase-exit result"** in `docs/results.md` — it is the finding
 everything else now serves — and "Remaining work" at the bottom of this file
@@ -120,9 +123,10 @@ Scope limit: every evaluated game has a market line by definition, so the
 evaluation says nothing about `NO_MARKET`, which is why Elo was left in place
 there. Preflight still gates on completed Elo history.
 
-Committed on `feature/coinflip-favorite-tiebreak` at `01e6479`, branched from
-`master` at `3b184ff`. 526 tests pass, Ruff clean. Not yet integrated into
-`master`.
+Integrated into `master` on 2026-09-10 by fast-forward from
+`feature/coinflip-favorite-tiebreak` (`01e6479`, the code) and then
+`docs/tiebreak-and-handoff-accuracy` (`b0cb542`, these documents). Verified on
+`master` after the merge: 526 tests pass, Ruff clean.
 
 ### Everything before that
 
