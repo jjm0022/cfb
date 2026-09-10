@@ -5,6 +5,14 @@
 **Scope:** CFB-first historical acquisition, model evaluation, and conditional
 deployment for forced ATS picks
 
+> **Note added 2026-09-10 — this design is frozen and was not rewritten.**
+> Candidate 1 returned NULL, and the `COINFLIP` tiebreak later moved off Elo to
+> the frozen-board favorite on 2026-09-09 (`src/pickem/edge/favorite.py`) on a
+> baseline comparison rather than a model. Every "retain Elo" / "Elo remains the
+> CFB `COINFLIP` method" statement below describes the rule in force when this
+> design was approved, not current behaviour. Current behaviour is in
+> `docs/HANDOFF.md`.
+
 ## 1. Goal
 
 Improve the number of correct CFB picks without replacing the line-divergence

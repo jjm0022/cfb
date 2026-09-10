@@ -2,6 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note added 2026-09-10 — this plan is complete and frozen.** It is kept as a
+> record of how the work was done, and was not rewritten. `docs/HANDOFF.md` was
+> split on 2026-09-09, so the sections these tasks updated now live in
+> `docs/invariants.md`, `docs/results.md`, `docs/system-map.md`,
+> `docs/data-inventory.md` and `docs/deployment-history.md`. Instructions below
+> that say "update `docs/HANDOFF.md`" record what was actually done at the time.
+>
+> The `COINFLIP` tiebreak also moved off Elo to the frozen-board favorite on
+> 2026-09-09 (`src/pickem/edge/favorite.py`), so every "retain Elo" /
+> "Elo remains production" statement below describes the rule in force when this
+> plan ran, not current behaviour.
+
 **Goal:** Build and freeze the season-locked CFB market-residual ridge experiment, retain Elo on a null result, and make a passing 2021–2025 artifact immediately eligible for remaining 2026 `COINFLIP` picks.
 
 **Architecture:** A pure deep module accepts stored games and the two market-proxy streams, owns leakage-safe row construction, ridge fitting, chronological calibration, paired evaluation, certification, and deterministic rendering, and returns one audit-ready result. The CLI is an I/O adapter. Artifact creation and live pipeline integration are conditional tasks that execute only after the frozen historical result passes every gate.

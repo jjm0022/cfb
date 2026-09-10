@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note added 2026-09-10 — this plan is complete and frozen.** It is kept as a
+> record of how the work was done, and was not rewritten. `docs/HANDOFF.md` was
+> split on 2026-09-09, so the sections these tasks updated now live in
+> `docs/invariants.md`, `docs/results.md`, `docs/system-map.md`,
+> `docs/data-inventory.md` and `docs/deployment-history.md`. Instructions below
+> that say "update `docs/HANDOFF.md`" record what was actually done at the time.
+
 **Goal:** Deepen the edge decision, CBS intake, Store reads, archive acquisition, and canonical game identity modules so correctness rules live behind small interfaces instead of being assembled by CLI callers.
 
 **Architecture:** Preserve the existing one-directional `ingest → resolve → store → edge → report` flow and every load-bearing behavior. Replace shallow interfaces rather than layering new ones beside them: callers receive final picks, complete CBS games, and coherent stored datasets; paid archive coordination moves behind one module; all source adapters reuse one canonical matchup module while retaining their intentional differences.
@@ -10,7 +17,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-11-pickem-edge-design.md`
 
-**Standing decisions:** `docs/HANDOFF.md` — especially “Load-bearing conventions,” “The odds poll has two guards,” and the phase-exit result.
+**Standing decisions:** `docs/invariants.md` — especially “Load-bearing conventions” and “The odds poll has two guards” — and the phase-exit result in `docs/results.md`. (All three were in `docs/HANDOFF.md` when this plan was written; see the note at the top of this file.)
 
 ## Global Constraints
 

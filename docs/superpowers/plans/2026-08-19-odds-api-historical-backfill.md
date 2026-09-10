@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note added 2026-09-10 — this plan is complete and frozen.** It is kept as a
+> record of how the work was done, and was not rewritten. `docs/HANDOFF.md` was
+> split on 2026-09-09, so the sections these tasks updated now live in
+> `docs/invariants.md`, `docs/results.md`, `docs/system-map.md`,
+> `docs/data-inventory.md` and `docs/deployment-history.md`. Instructions below
+> that say "update `docs/HANDOFF.md`" record what was actually done at the time.
+
 **Goal:** Backfill 2020-2025 NFL frozen-line and submission-time market snapshots from The Odds API archive, sourced identically at both ends, so `pickem backtest` produces a phase-exit number.
 
 **Architecture:** A pure planner turns the stored NFL schedule into a list of timestamped snapshot requests — one early-week "frozen" anchor per week, plus one per distinct kickoff slot. A new `OddsClient.fetch_historical_spreads` unwraps the archive's snapshot envelope and reuses the existing per-event parsing, including both guards. The backtest then classifies the two proxies by `source` rather than by book name.

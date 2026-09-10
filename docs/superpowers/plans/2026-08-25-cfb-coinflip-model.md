@@ -2,6 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note added 2026-09-10 — this plan is complete and frozen.** It is kept as a
+> record of how the work was done, and was not rewritten. `docs/HANDOFF.md` was
+> split on 2026-09-09, so the sections these tasks updated now live in
+> `docs/invariants.md`, `docs/results.md`, `docs/system-map.md`,
+> `docs/data-inventory.md` and `docs/deployment-history.md`. Instructions below
+> that say "update `docs/HANDOFF.md`" record what was actually done at the time.
+>
+> The `COINFLIP` tiebreak also moved off Elo to the frozen-board favorite on
+> 2026-09-09 (`src/pickem/edge/favorite.py`), so every "retain Elo" /
+> "Elo remains production" statement below describes the rule in force when this
+> plan ran, not current behaviour.
+
 **Goal:** Acquire a resumable 2021–2025 CFB odds archive, evaluate a three-feature market model with strict walk-forward predictions, and use it for live CFB COINFLIP picks only if it clears the predeclared gate.
 
 **Architecture:** Extend the pure snapshot planner with an opt-in maximum-age batching rule while preserving the NFL default. Generalize the archive runner around sport-aware keys and a transactional request ledger, then build a separate experiment module whose saved outer-fold predictions decide whether a small, validated JSON artifact may enter the pure edge pipeline.
