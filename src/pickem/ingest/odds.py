@@ -116,12 +116,26 @@ def _request_fields(path: str, params: dict[str, str]) -> dict[str, object]:
     return fields
 
 
+def _quota_header(response: httpx.Response, name: str) -> int | None:
+    """Read a credit header as a number, or None when it is absent or junk.
+
+    The API sends these as strings; stored as strings they neither compare nor
+    sort in the JSON sink, so "did this week cost more than last" cannot be
+    asked of the log.
+    """
+    try:
+        return int(response.headers[name])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _log_quota(response: httpx.Response) -> None:
-    logger.bind(
-        event="odds_quota",
-        remaining=response.headers.get("x-requests-remaining"),
-        used=response.headers.get("x-requests-used"),
-    ).info("odds api quota")
+    remaining = _quota_header(response, "x-requests-remaining")
+    used = _quota_header(response, "x-requests-used")
+    logger.bind(event="odds_quota", remaining=remaining, used=used).info(
+        f"odds api quota: {remaining if remaining is not None else 'unknown'} remaining, "
+        f"{used if used is not None else 'unknown'} used"
+    )
 
 
 def _log_poll(result: MarketLinesResult, *, sport: Sport, season: int, week: int) -> None:

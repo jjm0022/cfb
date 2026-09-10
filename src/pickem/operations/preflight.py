@@ -154,7 +154,12 @@ def evaluate_preflight(
         game_count=len(dataset.games),
         league_line_count=len(dataset.league_lines),
         not_ready=sum(1 for game_result in game_results if not game_result.ready),
-    ).info("preflight ready" if not reasons else "preflight not ready")
+    ).info(
+        f"preflight {'ready' if not reasons else 'not ready'} for "
+        f"{target_sport.value}: {len(dataset.games)}/{expected_games} games, "
+        f"{len(dataset.league_lines)} league lines, "
+        f"{sum(1 for game_result in game_results if not game_result.ready)} not ready"
+    )
 
     return PreflightResult(
         ready=not reasons,

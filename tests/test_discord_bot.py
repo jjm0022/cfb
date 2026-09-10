@@ -91,7 +91,7 @@ class FakeMonitor:
         self.calls = 0
         self.events = events
 
-    async def refresh(self):
+    async def refresh(self, **kwargs):
         if self.events is not None:
             self.events.append("monitor")
         self.calls += 1
@@ -99,7 +99,7 @@ class FakeMonitor:
 
 
 class RaisingMonitor:
-    async def refresh(self):
+    async def refresh(self, **kwargs):
         raise RuntimeError("monitor exploded")
 
 
@@ -435,7 +435,10 @@ async def test_status_uses_stored_teams_to_render_readable_picks(settings, monke
             ),
         ),
     )
-    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    monkeypatch.setattr(
+        "pickem.discord_bot.generate_recommendations",
+        lambda *_args, **_kwargs: snapshot,
+    )
     bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
     interaction = FakeInteraction(user_id=settings.owner_id)
 
@@ -588,7 +591,10 @@ async def test_status_uses_the_discovered_cfb_scope(settings, monkeypatch):
         generated_at=datetime(2026, 8, 31, tzinfo=UTC),
         edges=(),
     )
-    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    monkeypatch.setattr(
+        "pickem.discord_bot.generate_recommendations",
+        lambda *_args, **_kwargs: snapshot,
+    )
     bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
     interaction = FakeInteraction(user_id=settings.owner_id)
 
@@ -836,8 +842,14 @@ async def test_monitor_change_notification_uses_status_pick_format(settings, mon
             ),
         ),
     )
-    monkeypatch.setattr("pickem.discord_bot.refresh_recommendations", lambda *_args: snapshot)
-    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    monkeypatch.setattr(
+        "pickem.discord_bot.refresh_recommendations",
+        lambda *_args, **_kwargs: snapshot,
+    )
+    monkeypatch.setattr(
+        "pickem.discord_bot.generate_recommendations",
+        lambda *_args, **_kwargs: snapshot,
+    )
     bot = PickemBot(settings, scheduler=FakeScheduler())
     bot._load_state = lambda _scope: AutomationState(
         signature=f"v2|{game.game_id}:away:strong"
@@ -1181,7 +1193,10 @@ async def test_status_details_option_restores_reasoning(settings, monkeypatch):
     game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
     _store_slate(settings, (game,))
     snapshot = _snapshot_for(_edge(game.game_id, rationale="the market moved three points"))
-    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    monkeypatch.setattr(
+        "pickem.discord_bot.generate_recommendations",
+        lambda *_args, **_kwargs: snapshot,
+    )
     bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
     compact = FakeInteraction(user_id=settings.owner_id)
     verbose = FakeInteraction(user_id=settings.owner_id)
@@ -1275,7 +1290,10 @@ async def test_status_lists_each_stored_recommendation_in_its_embed(settings, mo
             ),
         ),
     )
-    monkeypatch.setattr("pickem.discord_bot.generate_recommendations", lambda *_args: snapshot)
+    monkeypatch.setattr(
+        "pickem.discord_bot.generate_recommendations",
+        lambda *_args, **_kwargs: snapshot,
+    )
     bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
     interaction = FakeInteraction(user_id=settings.owner_id)
 
@@ -1527,7 +1545,28 @@ async def test_the_daily_refresh_keeps_its_lookback_window(settings):
 
     await bot._scheduled_refresh()
 
-    assert seen == [{}]
+    assert [kwargs.get("window_start") for kwargs in seen] == [None]
+
+
+@pytest.mark.asyncio
+async def test_every_automated_refresh_decides_only_games_still_ahead(settings):
+    """Both scheduled paths pass a cutoff; a locked pick cannot be acted on."""
+    add_pick_scope(settings, Sport.NFL)
+    seen: list[dict] = []
+
+    class RecordingMonitor:
+        async def refresh(self, **kwargs):
+            seen.append(kwargs)
+            return RefreshResult(changed=False)
+
+    bot = PickemBot(settings, RecordingMonitor(), scheduler=FakeScheduler())
+
+    await bot._scheduled_refresh()
+    await bot._run_kickoff_poll(NFL_SCOPE, _instant(13, 16))
+
+    assert len(seen) == 2
+    for kwargs in seen:
+        assert isinstance(kwargs["pending_as_of"], datetime)
 
 
 def _seed_slate(settings, sport: Sport, kickoffs: list[datetime]) -> None:

@@ -180,7 +180,8 @@ def test_refresh_notifies_only_when_the_side_mapping_changes():
     assert fake.state.error_fingerprint is None
 
 
-def test_refresh_describes_added_and_removed_games():
+def test_refresh_describes_added_and_changed_games_but_not_departed_ones():
+    """game-a leaving the board is a game that locked, not a pick that moved."""
     fake = FakeMonitor(
         [
             snapshot_with({"game-a": Side.HOME, "game-b": Side.AWAY}),
@@ -194,8 +195,7 @@ def test_refresh_describes_added_and_removed_games():
     assert result.changed is True
     assert fake.notifications == [
         "Recommendations changed: added: game-c → lean away; "
-        "changed: game-b lean away → lean home; "
-        "removed: game-a (was lean home)"
+        "changed: game-b lean away → lean home"
     ]
 
 
@@ -806,3 +806,113 @@ def test_successful_state_save_clears_persistence_deduplication(records):
     assert result.error is None
     assert len(_events(records, "state_saved")) == 1
     assert saved[0].signature == signature_of({"game-a": Side.HOME})
+
+
+def test_a_game_leaving_the_board_is_not_a_change():
+    """A game that kicks off drops out of the snapshot. That is the board
+    shrinking, not a pick changing, and it must never earn a DM."""
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME, "game-b": Side.AWAY}),
+            snapshot_with({"game-b": Side.AWAY}),
+        ]
+    )
+    monitor = fake.monitor()
+
+    _, second = [asyncio.run(monitor.refresh()) for _ in range(2)]
+
+    assert second.changed is False
+    assert fake.notifications == []
+
+
+def test_a_real_flip_still_notifies_when_another_game_drops_out():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME, "game-b": Side.AWAY}),
+            snapshot_with({"game-b": Side.HOME}),
+        ]
+    )
+    monitor = fake.monitor()
+
+    _, second = [asyncio.run(monitor.refresh()) for _ in range(2)]
+
+    assert second.changed is True
+    assert fake.notifications == [
+        "Recommendations changed: changed: game-b lean away → lean home"
+    ]
+
+
+def test_a_game_joining_the_board_still_notifies():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME}),
+            snapshot_with({"game-a": Side.HOME, "game-b": Side.AWAY}),
+        ]
+    )
+    monitor = fake.monitor()
+
+    _, second = [asyncio.run(monitor.refresh()) for _ in range(2)]
+
+    assert second.changed is True
+    assert fake.notifications == ["Recommendations changed: added: game-b → lean away"]
+
+
+def _messages(records, event: str) -> list[str]:
+    return [r["message"] for r in records if r["extra"].get("event") == event]
+
+
+def test_refresh_lines_name_the_scope_they_are_about(records):
+    """The text sink shows no bound fields, so a bare "refresh started" cannot
+    say which sport and week ran -- and two scopes refresh back to back."""
+    fake = FakeMonitor([snapshot_with({"game-a": Side.HOME})])
+    monitor = RecommendationMonitor(
+        fake.refresh_week,
+        fake.load_state,
+        fake.save_state,
+        fake.notify,
+        MonitorScope(Sport.NFL, 2026, 1),
+    )
+
+    asyncio.run(monitor.refresh())
+
+    assert _messages(records, "refresh_started") == ["refresh started for nfl/2026 wk1"]
+    assert _messages(records, "refresh_succeeded") == [
+        "refresh succeeded for nfl/2026 wk1: 1 edge, unchanged"
+    ]
+
+
+def test_a_scopeless_adapter_still_logs_a_readable_line(records):
+    """`scope` is an opaque adapter value; it may carry no sport at all."""
+    fake = FakeMonitor([snapshot_with({"game-a": Side.HOME})])
+    asyncio.run(fake.monitor().refresh())
+
+    assert _messages(records, "refresh_started") == ["refresh started"]
+    assert _messages(records, "refresh_succeeded") == ["refresh succeeded: 1 edge, unchanged"]
+
+
+def test_notification_lines_say_which_notification(records):
+    fake = FakeMonitor(
+        [snapshot_with({"game-a": Side.HOME}), snapshot_with({"game-a": Side.AWAY})]
+    )
+    monitor = fake.monitor()
+    asyncio.run(monitor.refresh())
+    asyncio.run(monitor.refresh())
+
+    assert _messages(records, "notify_sent") == ["notification sent: recommendation_change"]
+
+
+def test_a_suppressed_notification_says_what_was_suppressed(records):
+    fake = FakeMonitor([])
+
+    async def always_fail(_scope, **_kwargs):
+        raise RuntimeError("boom")
+
+    monitor = RecommendationMonitor(
+        always_fail, fake.load_state, fake.save_state, fake.notify, SCOPE
+    )
+    asyncio.run(monitor.refresh())
+    asyncio.run(monitor.refresh())
+
+    assert _messages(records, "notify_suppressed") == [
+        "duplicate notification suppressed: refresh_failure (RuntimeError: boom)"
+    ]

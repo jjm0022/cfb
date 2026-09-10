@@ -105,11 +105,26 @@ def _change_message(old_signature: str | None, snapshot: RecommendationSnapshot)
         for game_id in sorted(old.keys() & new.keys())
         if old[game_id] != new[game_id]
     )
-    changes.extend(
-        f"removed: {game_id} (was {old[game_id]})"
-        for game_id in sorted(old.keys() - new.keys())
-    )
+    # Games that left the board are deliberately not reported: automation
+    # decides only games that have not kicked off, so a disappearance means
+    # "locked, no longer actionable" -- see `_picks_changed`.
     return "Recommendations changed: " + "; ".join(changes)
+
+
+def _picks_changed(old_signature: str | None, snapshot: RecommendationSnapshot) -> bool:
+    """Report whether any game still on the board picks differently than before.
+
+    Only games present in the new snapshot are compared. Automation excludes
+    games that have kicked off, so the board shrinks as a week burns down; a
+    game dropping out is a pick becoming unactionable, not a pick changing, and
+    treating it as news would DM the owner about a game already locked. A
+    genuine flip and a newly added game both still register.
+    """
+    if not _is_current_signature(old_signature):
+        return False
+    old = _mapping_from_signature(old_signature)
+    new = _mapping_from_snapshot(snapshot)
+    return any(old.get(game_id) != pick for game_id, pick in new.items())
 
 
 def _failure_fingerprint(error: BaseException) -> str:
@@ -134,6 +149,24 @@ def _scope_fields(scope: Any) -> dict[str, Any]:
                 continue
         fields[name] = value
     return fields
+
+
+def _scope_label(scope: Any) -> str:
+    """Return ``"nfl/2026 wk1"`` for a scope, or ``""`` when it cannot say.
+
+    ``scope`` is an opaque adapter value, so the label is best-effort: the text
+    sink shows no bound fields, and two scopes refresh back to back, so a line
+    that cannot name its scope is a line that cannot be attributed.
+    """
+    fields = _scope_fields(scope)
+    if not {"sport", "season", "week"} <= fields.keys():
+        return ""
+    return f"{fields['sport']}/{fields['season']} wk{fields['week']}"
+
+
+def _for_scope(scope: Any) -> str:
+    label = _scope_label(scope)
+    return f" for {label}" if label else ""
 
 
 class RecommendationMonitor:
@@ -172,7 +205,7 @@ class RecommendationMonitor:
             logger.bind(
                 event="refresh_started",
                 **_scope_fields(self._scope),
-            ).info("refresh started")
+            ).info(f"refresh started{_for_scope(self._scope)}")
             try:
                 loaded_state = await _invoke(self._load_state, self._scope)
             except asyncio.CancelledError:
@@ -264,7 +297,7 @@ class RecommendationMonitor:
         # adopt it as the new baseline silently rather than DMing that every
         # game on the board "changed" the first time the bot runs after a
         # deploy.
-        changed = _is_current_signature(state.signature) and state.signature != signature
+        changed = _picks_changed(state.signature, snapshot)
         next_state = state.model_copy(
             update={
                 "signature": signature,
@@ -298,12 +331,17 @@ class RecommendationMonitor:
             persistence_result = await self._record_persistence_failure(error)
             return RefreshResult(changed, snapshot=snapshot, error=persistence_result.error)
 
+        count = len(snapshot.edges)
         logger.bind(
             event="refresh_succeeded",
             **_scope_fields(self._scope),
             changed=changed,
-            edges=len(snapshot.edges),
-        ).info("refresh succeeded" + ("; recommendations changed" if changed else ""))
+            edges=count,
+        ).info(
+            f"refresh succeeded{_for_scope(self._scope)}: "
+            f"{count} edge{'' if count == 1 else 's'}, "
+            f"{'recommendations changed' if changed else 'unchanged'}"
+        )
         return RefreshResult(changed, snapshot=snapshot)
 
     def _log_notification(self, kind: str, *, fingerprint: str | None = None) -> None:
@@ -314,7 +352,9 @@ class RecommendationMonitor:
         }
         if fingerprint is not None:
             fields["fingerprint"] = fingerprint
-        logger.bind(**fields).info("notification sent")
+        logger.bind(**fields).info(
+            f"notification sent{_for_scope(self._scope)}: {kind}"
+        )
 
     def _log_notification_suppressed(self, kind: str, fingerprint: str) -> None:
         logger.bind(
@@ -322,7 +362,10 @@ class RecommendationMonitor:
             notification_kind=kind,
             fingerprint=fingerprint,
             **_scope_fields(self._scope),
-        ).info("duplicate notification suppressed")
+        ).info(
+            f"duplicate notification suppressed{_for_scope(self._scope)}: "
+            f"{kind} ({fingerprint})"
+        )
 
     def _log_state_saved(self, state: AutomationState) -> None:
         logger.bind(

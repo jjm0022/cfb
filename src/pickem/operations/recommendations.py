@@ -48,19 +48,60 @@ def _open_store(db: Path) -> Store:
     return store
 
 
+def _still_pending(dataset, cutoff: datetime | None) -> list:
+    """Return the league lines whose game has not kicked off by ``cutoff``.
+
+    Only a game with a *known* kickoff at or before the cutoff is dropped. A
+    league line with no matching game record keeps its existing path, so a
+    missing game still surfaces as a loud ``MissingGameError`` downstream
+    rather than being quietly swept out by this filter.
+    """
+    if cutoff is None:
+        return list(dataset.league_lines)
+
+    locked = {game.game_id for game in dataset.games if game.kickoff_utc <= cutoff}
+    if not locked:
+        return list(dataset.league_lines)
+
+    pending = [line for line in dataset.league_lines if line.game_id not in locked]
+    # One aggregate line, not one warning per game. These are not anomalous
+    # drops -- every game locks eventually, and a per-game warning on every
+    # poll would rebuild exactly the noise this logging pass removed.
+    excluded = sorted(locked & {line.game_id for line in dataset.league_lines})
+    logger.bind(
+        event="locked_games_excluded",
+        locked=len(excluded),
+        game_ids=excluded,
+        cutoff=cutoff,
+    ).info(f"excluded {len(excluded)} game(s) past kickoff: {', '.join(excluded)}")
+    return pending
+
+
 def generate_recommendations(
-    db: Path, sport: Sport, season: int, week: int, now: datetime
+    db: Path,
+    sport: Sport,
+    season: int,
+    week: int,
+    now: datetime,
+    *,
+    pending_as_of: datetime | None = None,
 ) -> RecommendationSnapshot:
     """Build ranked recommendations from the currently stored weekly data.
 
     This function deliberately does not call :meth:`Store.record_picks`.
     Persisting submitted picks remains a report concern so automation can
     inspect recommendation changes without creating grading records.
+
+    ``pending_as_of`` restricts the board to games that have not kicked off by
+    that moment. Automation passes it because a pick that is already locked
+    cannot be acted on, so re-deciding it every poll is noise at best and a
+    misleading notification at worst. It defaults to ``None`` -- the pick sheet
+    renders the whole week, played games included.
     """
     with _open_store(db) as store:
         dataset = store.load_week(sport, season, week)
         edges = decide_edges(
-            dataset.league_lines,
+            _still_pending(dataset, pending_as_of),
             dataset.market_lines,
             dataset.games,
             store.games_before(sport, season, week),
@@ -142,10 +183,13 @@ def refresh_recommendations(
     now: datetime,
     *,
     window_start: datetime | None = None,
+    pending_as_of: datetime | None = None,
 ) -> RecommendationSnapshot:
     """Append a current market snapshot, then generate recommendations."""
     poll_odds_snapshot(db, sport, season, week, now, window_start=window_start)
-    return generate_recommendations(db, sport, season, week, now)
+    return generate_recommendations(
+        db, sport, season, week, now, pending_as_of=pending_as_of
+    )
 
 
 __all__ = [

@@ -185,3 +185,97 @@ def test_refresh_passes_its_window_start_through_to_the_poll(
     refresh_recommendations(db, Sport.NFL, 2026, 1, now, window_start=now)
 
     assert recording_client.calls[0]["window"][0] == now
+
+
+def _seed_two_games(db, early_kickoff, late_kickoff):
+    """One game already kicked off, one still ahead, both with league lines."""
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games(
+            [
+                Game(
+                    game_id=f"nfl:{name}",
+                    sport=Sport.NFL,
+                    season=2026,
+                    week=1,
+                    kickoff_utc=kickoff,
+                    home_team_id=f"{name}-home",
+                    away_team_id=f"{name}-away",
+                )
+                for name, kickoff in (("early", early_kickoff), ("late", late_kickoff))
+            ]
+        )
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id=f"nfl:{name}",
+                    season=2026,
+                    week=1,
+                    spread_home=-3.0,
+                    posted_at=early_kickoff - timedelta(days=2),
+                )
+                for name in ("early", "late")
+            ]
+        )
+
+
+def test_pending_as_of_drops_games_that_already_kicked_off(db):
+    early = datetime(2026, 9, 10, 0, 20, tzinfo=UTC)
+    late = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    _seed_two_games(db, early, late)
+
+    snapshot = generate_recommendations(
+        db, Sport.NFL, 2026, 1, late, pending_as_of=datetime(2026, 9, 10, 18, tzinfo=UTC)
+    )
+
+    assert [edge.game_id for edge in snapshot.edges] == ["nfl:late"]
+
+
+def test_pending_as_of_keeps_a_game_that_has_not_kicked_off_yet(db):
+    early = datetime(2026, 9, 10, 0, 20, tzinfo=UTC)
+    late = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    _seed_two_games(db, early, late)
+
+    snapshot = generate_recommendations(
+        db, Sport.NFL, 2026, 1, early, pending_as_of=datetime(2026, 9, 9, tzinfo=UTC)
+    )
+
+    assert sorted(edge.game_id for edge in snapshot.edges) == ["nfl:early", "nfl:late"]
+
+
+def test_without_pending_as_of_every_game_in_the_week_is_still_decided(db):
+    """`pickem report` renders the whole week, played games included."""
+    early = datetime(2026, 9, 10, 0, 20, tzinfo=UTC)
+    late = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    _seed_two_games(db, early, late)
+
+    snapshot = generate_recommendations(db, Sport.NFL, 2026, 1, late)
+
+    assert sorted(edge.game_id for edge in snapshot.edges) == ["nfl:early", "nfl:late"]
+
+
+def test_excluded_games_are_logged_once_as_an_aggregate(records, db):
+    early = datetime(2026, 9, 10, 0, 20, tzinfo=UTC)
+    late = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    _seed_two_games(db, early, late)
+
+    generate_recommendations(
+        db, Sport.NFL, 2026, 1, late, pending_as_of=datetime(2026, 9, 10, 18, tzinfo=UTC)
+    )
+
+    [excluded] = [r for r in records if r["extra"]["event"] == "locked_games_excluded"]
+    assert excluded["extra"]["locked"] == 1
+    assert excluded["extra"]["game_ids"] == ["nfl:early"]
+    assert "nfl:early" in excluded["message"]
+
+
+def test_nothing_is_logged_when_no_game_has_kicked_off(records, db):
+    early = datetime(2026, 9, 10, 0, 20, tzinfo=UTC)
+    late = datetime(2026, 9, 13, 17, tzinfo=UTC)
+    _seed_two_games(db, early, late)
+
+    generate_recommendations(
+        db, Sport.NFL, 2026, 1, early, pending_as_of=datetime(2026, 9, 9, tzinfo=UTC)
+    )
+
+    assert not any(r["extra"]["event"] == "locked_games_excluded" for r in records)

@@ -191,7 +191,10 @@ def build_schedule(
         days=settings.reminder_day,
         at=f"{settings.reminder_hour:02d}:{settings.reminder_minute:02d}",
         timezone=str(settings.timezone),
-    ).info("reminder job scheduled")
+    ).info(
+        f"reminder job scheduled: {settings.reminder_day} at "
+        f"{settings.reminder_hour:02d}:{settings.reminder_minute:02d} {settings.timezone}"
+    )
     scheduler.add_job(
         refresh_job,
         CronTrigger(
@@ -210,7 +213,10 @@ def build_schedule(
         days=settings.refresh_days,
         at=f"{settings.refresh_hour:02d}:{settings.refresh_minute:02d}",
         timezone=str(settings.timezone),
-    ).info("refresh job scheduled")
+    ).info(
+        f"refresh job scheduled: {settings.refresh_days} at "
+        f"{settings.refresh_hour:02d}:{settings.refresh_minute:02d} {settings.timezone}"
+    )
     if plan is None:
         return
     scheduler.add_job(
@@ -230,7 +236,10 @@ def build_schedule(
         days="*",
         at=f"every {settings.poll_plan_every_hours}h",
         timezone=str(settings.timezone),
-    ).info("poll planner job scheduled")
+    ).info(
+        f"poll planner job scheduled: every {settings.poll_plan_every_hours}h at "
+        f":{settings.refresh_minute:02d} {settings.timezone}"
+    )
 
 
 def poll_job_id(scope: MonitorScope, instant: PollInstant) -> str:
@@ -713,7 +722,9 @@ class PickemBot(commands.Bot):
         start = getattr(self.scheduler, "start", None)
         if start is not None and not getattr(self.scheduler, "running", False):
             start()
-        logger.bind(event="bot_ready", owner_id=self.settings.owner_id).info("bot ready")
+        logger.bind(event="bot_ready", owner_id=self.settings.owner_id).info(
+            f"bot ready; owner {self.settings.owner_id}"
+        )
 
     def _is_owner(self, interaction: discord.Interaction) -> bool:
         user = getattr(interaction, "user", None)
@@ -730,7 +741,10 @@ class PickemBot(commands.Bot):
         logger.bind(
             event="command_rejected",
             user_id=getattr(getattr(interaction, "user", None), "id", None),
-        ).warning("non-owner command rejected")
+        ).warning(
+            "non-owner command rejected: user "
+            f"{getattr(getattr(interaction, 'user', None), 'id', None)}"
+        )
         return True
 
     def _resolve_scopes(
@@ -790,12 +804,16 @@ class PickemBot(commands.Bot):
             await self._send_owner_dm(message)
             return
         games, _ = _stored_week_details(self.settings, scope)
+        now = datetime.now(UTC)
         snapshot = generate_recommendations(
             self.settings.db,
             scope.sport,
             scope.season,
             scope.week,
-            datetime.now(UTC),
+            now,
+            # Matches the refresh that produced this notification; without it
+            # the embed would re-list games the refresh deliberately excluded.
+            pending_as_of=now,
         )
         await self._send_owner_dm(
             embed=_format_change_notification(scope, snapshot, games)
@@ -809,9 +827,14 @@ class PickemBot(commands.Bot):
         sport: Sport | None = None,
         window_start: datetime | None = None,
     ) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
+        # Automation only ever acts on games that have not kicked off: a locked
+        # pick cannot be changed, so re-deciding it is noise and notifying on
+        # it is misleading. The pick sheet still renders the whole week.
+        refresh_kwargs: dict[str, Any] = {"pending_as_of": datetime.now(UTC)}
         # Passed through only when set, so an adapter whose refresh() takes no
         # keywords keeps working.
-        refresh_kwargs = {} if window_start is None else {"window_start": window_start}
+        if window_start is not None:
+            refresh_kwargs["window_start"] = window_start
         async with self._refresh_lock:
             scopes = self._resolve_scopes(season, week, sport=sport)
             results: list[tuple[MonitorScope, RefreshResult]] = []
@@ -992,7 +1015,9 @@ build_bot = create_bot
 def main() -> None:
     configure_logging("pickem", console="off")
     settings = DiscordSettings.from_env()
-    logger.bind(event="bot_starting", db=str(settings.db)).info("starting discord bot")
+    logger.bind(event="bot_starting", db=str(settings.db)).info(
+        f"starting discord bot on {settings.db}"
+    )
     create_bot(settings).run(settings.token)
 
 

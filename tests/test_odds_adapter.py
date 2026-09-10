@@ -437,8 +437,8 @@ def test_live_poll_logs_quota_and_counts(records):
     polled = [r for r in records if r["extra"].get("event") == "odds_polled"]
     assert len(quota) == 1
     assert quota[0]["level"].name == "INFO"
-    assert quota[0]["extra"]["remaining"] == "100"
-    assert quota[0]["extra"]["used"] == "12"
+    assert quota[0]["extra"]["remaining"] == 100
+    assert quota[0]["extra"]["used"] == 12
     assert len(polled) == 1
     assert polled[0]["extra"]["lines"] == len(result.lines) == 2
     assert polled[0]["extra"]["books"] == 2
@@ -457,8 +457,8 @@ def test_historical_poll_logs_the_same_quota_and_count_contract(records):
     quota = [r for r in records if r["extra"].get("event") == "odds_quota"]
     polled = [r for r in records if r["extra"].get("event") == "odds_polled"]
     assert len(quota) == 1
-    assert quota[0]["extra"]["remaining"] == "90"
-    assert quota[0]["extra"]["used"] == "20"
+    assert quota[0]["extra"]["remaining"] == 90
+    assert quota[0]["extra"]["used"] == 20
     assert len(polled) == 1
     assert polled[0]["extra"]["lines"] == len(result.lines) == 2
     assert polled[0]["extra"]["books"] == 2
@@ -649,3 +649,27 @@ def test_the_real_response_has_out_of_window_events_that_are_rejected():
     # Week 4 games carry posted odds already and must never be stamped week 3.
     assert any("outside" in row for row in result.skipped)
     assert {line.game_id for line in result.lines} == {"nfl-2024-03-CHI-at-IND"}
+
+
+def test_quota_numbers_are_in_the_message_and_typed_as_integers(records):
+    """The text sink renders only the message; "odds api quota" alone said
+    nothing, and header strings do not compare or sort in the JSON sink."""
+    fetch(
+        client_returning(
+            PAYLOAD,
+            headers={"x-requests-remaining": "17918", "x-requests-used": "2082"},
+        )
+    )
+
+    [quota] = [r for r in records if r["extra"].get("event") == "odds_quota"]
+    assert quota["extra"]["remaining"] == 17918
+    assert quota["extra"]["used"] == 2082
+    assert quota["message"] == "odds api quota: 17918 remaining, 2082 used"
+
+
+def test_missing_quota_headers_do_not_break_the_line(records):
+    fetch(client_returning(PAYLOAD))
+
+    [quota] = [r for r in records if r["extra"].get("event") == "odds_quota"]
+    assert quota["extra"]["remaining"] is None
+    assert quota["message"] == "odds api quota: unknown remaining, unknown used"

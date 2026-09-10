@@ -88,7 +88,11 @@ def calibrate(
         market_lines=len(market_lines),
         source=source,
         tolerance_minutes=tolerance.total_seconds() / 60,
-    ).info("calibration started")
+    ).info(
+        f"calibration started: {'/'.join(sports) or 'no sport'} "
+        f"{'/'.join(str(season) for season in seasons) or 'no season'}, "
+        f"{len(league_lines)} league lines vs {len(market_lines)} {source} lines"
+    )
 
     with suppress_decision_logging():
         result = _calibrate(league_lines, market_lines, source, tolerance)

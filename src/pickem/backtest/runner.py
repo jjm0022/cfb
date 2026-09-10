@@ -130,7 +130,12 @@ def run_backtest(
         games=len(games),
         frozen_lines=len(frozen),
         submission_lines=len(submission),
-    ).info("backtest started")
+    ).info(
+        f"backtest started: {'/'.join(sports) or 'no sport'} "
+        f"{'/'.join(str(season) for season in seasons) or 'no season'}, "
+        f"{len(games)} games, {len(frozen)} frozen lines, "
+        f"{len(submission)} submission lines"
+    )
 
     with suppress_decision_logging():
         result = _run_backtest(games, frozen, submission, thresholds, elo_config)

@@ -47,7 +47,7 @@ def _skip_row(skipped: list[str], row: str, *, guard: str, source: str) -> None:
         source=source,
         guard=guard,
         reason=row,
-    ).warning("CBS row skipped")
+    ).warning(f"CBS row skipped ({guard}): {row}")
 
 
 def _log_parse_summary(
