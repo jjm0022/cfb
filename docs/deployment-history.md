@@ -196,9 +196,10 @@ does not reopen either candidate.
   fast-forward from `feature/cfb-coinflip-model`. There is no remote configured,
   so `git log` is the only history and nothing is pushed anywhere.
   (Correction, 2026-09-10: a remote `origin`
-  `git@github.com:jjm0022/cfb.git` does now exist, but its `master` is at
-  `a4bb432`, 28 commits behind local. Nothing recent has been pushed, so the
-  practical effect described above still holds.)
+  `git@github.com:jjm0022/cfb.git` does exist. It had fallen 29 commits behind
+  local, its `master` still at `a4bb432`, and was pushed back into sync on
+  2026-09-10. The statement above was true of the working practice at the time
+  but is no longer the state of the repository.)
 - **Tests:** the last recorded full-suite run before the Week 1 changes was
   346 passing, `uv run pytest -q`. Run the current integrated suite before live
   execution. The suite is fully offline — HTTP is injected via

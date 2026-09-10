@@ -43,10 +43,11 @@ implementation was integrated at `6ed6ed7` by fast-forward from
 `feature/week1-preflight`, adding the `preflight` command and its tests; the
 help surface has since grown to 12 commands (verified 2026-09-09).
 
-**There is a remote, and it is well behind.** `origin` is
-`git@github.com:jjm0022/cfb.git`, whose `master` sits at `a4bb432` — 28 commits
-back, predating the logging deployment. Nothing since has been pushed. Treat
-local `master` as authoritative and the remote as stale.
+**The remote is `origin`, `git@github.com:jjm0022/cfb.git`.** It had drifted 29
+commits behind — its `master` sat at `a4bb432`, predating the logging
+deployment — and was brought back in sync on 2026-09-10. Check with
+`git rev-list --left-right --count origin/master...master` rather than trusting
+this line; the gap had gone unnoticed for weeks once before.
 
 Then read **"The phase-exit result"** in `docs/results.md` — it is the finding
 everything else now serves — and "Remaining work" at the bottom of this file
