@@ -18,25 +18,43 @@ SCOPE = object()
 GENERATED_AT = datetime(2026, 9, 2, 14, tzinfo=UTC)
 
 
-def edge(game_id: str, side: Side, *, delta: float = 3.0) -> Edge:
+def edge(game_id: str, side: Side, *, delta: float = 3.0, tier: Tier = Tier.LEAN) -> Edge:
     return Edge(
         game_id=game_id,
         side=side,
         delta=delta,
-        tier=Tier.LEAN,
+        tier=tier,
         league_spread=-3.0,
         market_spread=-6.0,
         rationale="test",
     )
 
 
-def snapshot_with(mapping: dict[str, Side], *, generated_at: datetime = GENERATED_AT):
+def signature_of(mapping: dict[str, Side]) -> str:
+    """A stored baseline in whatever format the monitor currently writes.
+
+    Tests that pin the format assert on literals; these are the ones where the
+    signature is only a baseline to move away from.
+    """
+    return recommendation_signature(snapshot_with(mapping))
+
+
+def snapshot_with(
+    mapping: dict[str, Side],
+    *,
+    generated_at: datetime = GENERATED_AT,
+    tiers: dict[str, Tier] | None = None,
+):
+    tiers = tiers or {}
     return RecommendationSnapshot(
         sport="nfl",
         season=2026,
         week=1,
         generated_at=generated_at,
-        edges=tuple(edge(game_id, side) for game_id, side in mapping.items()),
+        edges=tuple(
+            edge(game_id, side, tier=tiers.get(game_id, Tier.LEAN))
+            for game_id, side in mapping.items()
+        ),
     )
 
 
@@ -70,7 +88,7 @@ class FakeMonitor:
         )
 
 
-def test_recommendation_signature_is_sorted_and_ignores_non_side_fields():
+def test_recommendation_signature_is_sorted_and_ignores_non_pick_fields():
     first = snapshot_with({"game-b": Side.AWAY, "game-a": Side.HOME})
     second = replace(
         first,
@@ -80,8 +98,64 @@ def test_recommendation_signature_is_sorted_and_ignores_non_side_fields():
         ),
     )
 
-    assert recommendation_signature(first) == "game-a:home|game-b:away"
+    assert recommendation_signature(first) == "v2|game-a:home:lean|game-b:away:lean"
     assert recommendation_signature(second) == recommendation_signature(first)
+
+
+def test_recommendation_signature_separates_two_tiers_of_the_same_side():
+    coinflip = snapshot_with({"game-a": Side.HOME}, tiers={"game-a": Tier.COINFLIP})
+    lean = snapshot_with({"game-a": Side.HOME}, tiers={"game-a": Tier.LEAN})
+
+    assert recommendation_signature(coinflip) != recommendation_signature(lean)
+
+
+def test_refresh_notifies_when_only_the_tier_changes():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME}, tiers={"game-a": Tier.COINFLIP}),
+            snapshot_with({"game-a": Side.HOME}, tiers={"game-a": Tier.LEAN}),
+        ]
+    )
+    monitor = fake.monitor()
+
+    first, changed = [asyncio.run(monitor.refresh()) for _ in range(2)]
+
+    assert first.changed is False
+    assert changed.changed is True
+    assert fake.notifications == [
+        "Recommendations changed: changed: game-a coinflip home → lean home"
+    ]
+
+
+def test_refresh_stays_silent_when_the_edge_grows_inside_one_tier():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME}),
+            replace(
+                snapshot_with({"game-a": Side.HOME}),
+                edges=(edge("game-a", Side.HOME, delta=99.0),),
+            ),
+        ]
+    )
+    monitor = fake.monitor()
+
+    first, second = [asyncio.run(monitor.refresh()) for _ in range(2)]
+
+    assert first.changed is False
+    assert second.changed is False
+    assert fake.notifications == []
+
+
+def test_refresh_adopts_a_pre_tier_signature_without_announcing_a_change():
+    """A stored signature from before tiers joined it is a format change, not news."""
+    fake = FakeMonitor([snapshot_with({"game-a": Side.HOME})])
+    fake.state = AutomationState(signature="game-a:home", checked_at=GENERATED_AT)
+
+    result = asyncio.run(fake.monitor().refresh())
+
+    assert result.changed is False
+    assert fake.notifications == []
+    assert fake.state.signature == "v2|game-a:home:lean"
 
 
 def test_refresh_notifies_only_when_the_side_mapping_changes():
@@ -99,8 +173,10 @@ def test_refresh_notifies_only_when_the_side_mapping_changes():
     assert first.changed is False
     assert unchanged.changed is False
     assert changed.changed is True
-    assert fake.notifications == ["Recommendations changed: changed: game-a home → away"]
-    assert fake.state.signature == "game-a:away"
+    assert fake.notifications == [
+        "Recommendations changed: changed: game-a lean home → lean away"
+    ]
+    assert fake.state.signature == "v2|game-a:away:lean"
     assert fake.state.error_fingerprint is None
 
 
@@ -117,8 +193,9 @@ def test_refresh_describes_added_and_removed_games():
 
     assert result.changed is True
     assert fake.notifications == [
-        "Recommendations changed: added: game-c → away; changed: game-b away → home; "
-        "removed: game-a (was home)"
+        "Recommendations changed: added: game-c → lean away; "
+        "changed: game-b lean away → lean home; "
+        "removed: game-a (was lean home)"
     ]
 
 
@@ -150,9 +227,9 @@ def test_refresh_delivers_a_changed_notice_before_saving_the_new_signature():
     asyncio.run(monitor.refresh())
 
     assert events == [
-        "save:game-a:home",
-        "notify:Recommendations changed: changed: game-a home → away",
-        "save:game-a:away",
+        "save:v2|game-a:home:lean",
+        "notify:Recommendations changed: changed: game-a lean home → lean away",
+        "save:v2|game-a:away:lean",
     ]
 
 
@@ -187,7 +264,7 @@ def test_refresh_keeps_old_baseline_when_changed_notice_fails():
     assert failed.changed is True
     assert failed.error is not None
     assert retried.changed is True
-    assert fake.state.signature == "game-a:away"
+    assert fake.state.signature == signature_of({"game-a": Side.AWAY})
     assert failures == 2
 
 
@@ -195,7 +272,7 @@ def test_refresh_preserves_baseline_when_state_loading_fails():
     checked_at = GENERATED_AT.replace(minute=30)
     persisted = {
         "state": AutomationState(
-            signature="game-a:home",
+            signature=signature_of({"game-a": Side.HOME}),
             checked_at=checked_at,
             error_fingerprint=None,
         )
@@ -235,13 +312,15 @@ def test_refresh_preserves_baseline_when_state_loading_fails():
 
     failed = asyncio.run(monitor.refresh())
     assert failed.error is not None
-    assert persisted["state"].signature == "game-a:home"
+    assert persisted["state"].signature == signature_of({"game-a": Side.HOME})
 
     changed = asyncio.run(monitor.refresh())
 
     assert changed.changed is True
-    assert notifications[-1] == "Recommendations changed: changed: game-a home → away"
-    assert persisted["state"].signature == "game-a:away"
+    assert notifications[-1] == (
+        "Recommendations changed: changed: game-a lean home → lean away"
+    )
+    assert persisted["state"].signature == signature_of({"game-a": Side.AWAY})
 
 
 def test_refresh_notifies_once_when_initial_state_save_fails():
@@ -326,7 +405,7 @@ def test_refresh_deduplicates_changed_checkpoint_failure_but_retries_change_noti
     notifications: list[str] = []
 
     def save_state(scope, state):
-        if state.signature == "game-a:away":
+        if state.signature == signature_of({"game-a": Side.AWAY}):
             raise OSError("checkpoint unavailable")
         fake.save_state(scope, state)
 
@@ -348,9 +427,9 @@ def test_refresh_deduplicates_changed_checkpoint_failure_but_retries_change_noti
     assert first_change.changed is True
     assert second_change.changed is True
     assert notifications == [
-        "Recommendations changed: changed: game-a home → away",
+        "Recommendations changed: changed: game-a lean home → lean away",
         "Recommendation refresh failed: checkpoint unavailable",
-        "Recommendations changed: changed: game-a home → away",
+        "Recommendations changed: changed: game-a lean home → lean away",
     ]
 
 
@@ -522,7 +601,7 @@ def test_successful_refresh_logs_change_notification_save_and_success(records):
     saved: list[AutomationState] = []
     monitor = RecommendationMonitor(
         refresh_week=lambda _scope: snapshot,
-        load_state=lambda _scope: AutomationState(signature="game-a:home"),
+        load_state=lambda _scope: AutomationState(signature=signature_of({"game-a": Side.HOME})),
         save_state=lambda _scope, state: saved.append(state),
         notify=notify,
         scope=scope,
@@ -532,7 +611,7 @@ def test_successful_refresh_logs_change_notification_save_and_success(records):
 
     assert result.changed is True
     assert result.error is None
-    assert notifications == ["Recommendations changed: changed: game-a home → away"]
+    assert notifications == ["Recommendations changed: changed: game-a lean home → lean away"]
     assert len(saved) == 1
 
     started = _events(records, "refresh_started")
@@ -545,7 +624,7 @@ def test_successful_refresh_logs_change_notification_save_and_success(records):
     changed = _events(records, "recommendation_changed")
     assert len(changed) == 1
     assert changed[0]["level"].name == "INFO"
-    assert changed[0]["message"] == "Recommendations changed: changed: game-a home → away"
+    assert changed[0]["message"] == "Recommendations changed: changed: game-a lean home → lean away"
 
     sent = _events(records, "notify_sent")
     assert len(sent) == 1
@@ -555,7 +634,7 @@ def test_successful_refresh_logs_change_notification_save_and_success(records):
     state_saved = _events(records, "state_saved")
     assert len(state_saved) == 1
     assert state_saved[0]["level"].name == "DEBUG"
-    assert state_saved[0]["extra"]["signature"] == "game-a:away"
+    assert state_saved[0]["extra"]["signature"] == signature_of({"game-a": Side.AWAY})
     assert state_saved[0]["extra"]["checked_at"] == GENERATED_AT
 
     succeeded = _events(records, "refresh_succeeded")
@@ -602,7 +681,7 @@ def test_each_returned_error_phase_logs_once_with_its_traceback(
 ):
     scope = MonitorScope(Sport.NFL, 2026, 1)
     snapshot = snapshot_with({"game-a": Side.AWAY})
-    state = AutomationState(signature="game-a:home")
+    state = AutomationState(signature=signature_of({"game-a": Side.HOME}))
     notify_calls = 0
 
     async def refresh_week(_scope):
@@ -726,4 +805,4 @@ def test_successful_state_save_clears_persistence_deduplication(records):
 
     assert result.error is None
     assert len(_events(records, "state_saved")) == 1
-    assert saved[0].signature == "game-a:home"
+    assert saved[0].signature == signature_of({"game-a": Side.HOME})

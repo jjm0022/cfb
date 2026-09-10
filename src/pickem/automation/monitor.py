@@ -39,34 +39,57 @@ _SaveState = Callable[[Any, AutomationState], Awaitable[None] | None]
 _Notify = Callable[[str], Awaitable[None] | None]
 
 
-async def _invoke[T](callback: Callable[..., T], *args: Any) -> T:
+async def _invoke[T](callback: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """Invoke an adapter regardless of whether it is sync or async."""
-    result = callback(*args)
+    result = callback(*args, **kwargs)
     if inspect.isawaitable(result):
         return await result
     return result
 
 
+_SIGNATURE_VERSION = "v2"
+_SIGNATURE_PREFIX = f"{_SIGNATURE_VERSION}|"
+
+
 def recommendation_signature(snapshot: RecommendationSnapshot) -> str:
-    """Return the canonical game-ID-to-side mapping for a snapshot."""
-    return "|".join(
-        f"{edge.game_id}:{edge.side.value}"
+    """Return the canonical game-ID-to-pick mapping for a snapshot.
+
+    Side and tier both participate. A coinflip that firms into a lean is worth
+    a DM even though the side never moved, and a game that acquires a side it
+    did not have is the same event seen from the other end. ``delta``
+    deliberately does not participate: an edge growing inside its own tier
+    changes no pick, and notifying on it would make every poll noisy.
+
+    The version tag exists so a signature written by an older format is
+    recognizable as unreadable rather than mistaken for a different set of
+    picks -- see :meth:`RecommendationMonitor._record_success`.
+    """
+    return _SIGNATURE_PREFIX + "|".join(
+        f"{edge.game_id}:{edge.side.value}:{edge.tier.value}"
         for edge in sorted(snapshot.edges, key=lambda edge: edge.game_id)
     )
 
 
+def _is_current_signature(signature: str | None) -> bool:
+    return signature is not None and signature.startswith(_SIGNATURE_PREFIX)
+
+
 def _mapping_from_signature(signature: str | None) -> dict[str, str]:
-    if not signature:
+    if not _is_current_signature(signature):
         return {}
     mapping: dict[str, str] = {}
-    for item in signature.split("|"):
-        game_id, side = item.rsplit(":", 1)
-        mapping[game_id] = side
+    for item in signature[len(_SIGNATURE_PREFIX) :].split("|"):
+        if not item:
+            continue
+        game_id, side, tier = item.rsplit(":", 2)
+        mapping[game_id] = f"{tier} {side}"
     return mapping
 
 
 def _mapping_from_snapshot(snapshot: RecommendationSnapshot) -> dict[str, str]:
-    return {edge.game_id: edge.side.value for edge in snapshot.edges}
+    return {
+        edge.game_id: f"{edge.tier.value} {edge.side.value}" for edge in snapshot.edges
+    }
 
 
 def _change_message(old_signature: str | None, snapshot: RecommendationSnapshot) -> str:
@@ -138,8 +161,13 @@ class RecommendationMonitor:
         self._load_error_fingerprint: str | None = None
         self._persistence_error_fingerprint: str | None = None
 
-    async def refresh(self) -> RefreshResult:
-        """Refresh the active week while serializing all state transitions."""
+    async def refresh(self, **refresh_kwargs: Any) -> RefreshResult:
+        """Refresh the active week while serializing all state transitions.
+
+        Keyword arguments are forwarded to ``refresh_week`` untouched, so a
+        caller can vary one poll without needing its own monitor and its own
+        copy of the change-detection state.
+        """
         async with self._lock:
             logger.bind(
                 event="refresh_started",
@@ -155,7 +183,7 @@ class RecommendationMonitor:
             self._load_error_fingerprint = None
             state = loaded_state if loaded_state is not None else AutomationState()
             try:
-                snapshot = await _invoke(self._refresh_week, self._scope)
+                snapshot = await _invoke(self._refresh_week, self._scope, **refresh_kwargs)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -232,7 +260,11 @@ class RecommendationMonitor:
         self, state: AutomationState, snapshot: RecommendationSnapshot
     ) -> RefreshResult:
         signature = recommendation_signature(snapshot)
-        changed = state.signature is not None and state.signature != signature
+        # A stored signature in an older format is a format change, not news:
+        # adopt it as the new baseline silently rather than DMing that every
+        # game on the board "changed" the first time the bot runs after a
+        # deploy.
+        changed = _is_current_signature(state.signature) and state.signature != signature
         next_state = state.model_copy(
             update={
                 "signature": signature,

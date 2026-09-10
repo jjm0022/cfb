@@ -70,6 +70,49 @@ Set the database path, timezone, and schedules in the tracked
 each sport's current stored pick week, keeping it active until all of its pick
 games have final scores. No weekly configuration edit or restart is required.
 
+### Kickoff-anchored polls
+
+Besides the daily 10:00 refresh, the bot polls the market at fixed offsets
+before **each kickoff on the board**. A single wall-clock time cannot be close
+to kickoff for a slate that runs twelve hours: measured over 2021-2025, the
+10:00 job leaves 47% of CFB and 49% of NFL games picked off a line more than
+six hours old, and every prime-time game more than ten. The offsets fix that
+without a schedule edit per week.
+
+```yaml
+schedule:
+  kickoff_polls:
+    offsets_hours: [12, 6, 2, 1]   # hours before kickoff; all must be positive
+    plan_every_hours: 6            # how often the plan is re-derived, 1-23
+    horizon_days: 10               # ignore kickoffs further out than this
+```
+
+Omit the whole `kickoff_polls` block to accept those defaults; the bot still
+starts on a config file written before this feature existed.
+
+What to expect operationally:
+
+- **Cost.** One poll returns every game in the sport, so the bill scales with
+  distinct *instants*, not games — about 28 NFL and 34 CFB polls per pool week
+  at 1 credit each, roughly **60 credits per pool week**. Check the balance
+  with the free `/v4/sports` endpoint before a season, not per run.
+- **Planning is idempotent.** Jobs carry deterministic ids
+  (`poll:<sport>:<season>:<week>:<instant>`), so re-planning the same slate
+  replaces rather than duplicates. A re-ingested week that moves a kickoff
+  drops the stale instant's job.
+- **Missed polls are not replayed.** A bot restarted mid-week plans only
+  future instants. A poll whose moment has passed cannot change a locked pick,
+  and firing it late would spend a credit for nothing.
+- **A late poll does not store in-play prices.** Polls anchored to a kickoff
+  narrow the feed window to future kickoffs only, so the afternoon games in
+  progress during the 1h-before-SNF poll are not written to `lines`. The daily
+  refresh keeps its twelve-hour lookback.
+
+Notifications fire on a change of **side or tier** — a coinflip firming into a
+lean counts, an edge growing inside its own tier does not. The first refresh
+after upgrading adopts the stored signature silently instead of announcing
+that every game changed.
+
 `/status` and `/refresh` also accept optional `season` and `week` arguments.
 Supply both to view or refresh every sport with stored picks for that exact
 week; omit both for the automatically selected current scopes.

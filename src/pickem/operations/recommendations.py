@@ -85,6 +85,7 @@ def poll_odds_snapshot(
     now: datetime,
     *,
     days: int = 7,
+    window_start: datetime | None = None,
     client_factory: Callable[..., OddsClient] | None = None,
 ) -> MarketLinesResult:
     """Fetch and append the live market snapshot for one ingested week.
@@ -92,6 +93,15 @@ def poll_odds_snapshot(
     The slate and kickoff-window guards are kept here with the append-only
     write.  ``client_factory`` is an adapter seam for the CLI's existing HTTP
     transport test seam; production callers leave it unset.
+
+    ``window_start`` overrides the lower edge of the kickoff window.  The
+    default reaches twelve hours back so a poll running slightly late still
+    covers the game it was meant to.  A poll anchored to a *later* kickoff
+    passes ``now`` instead: the feed returns every event with posted odds, and
+    an hour before a night game the afternoon games are in progress, quoting
+    live in-game spreads.  Those are not the pre-kickoff market this system
+    reasons about, and `lines` is append-only, so a stored one cannot be
+    withdrawn.
     """
     if not db.exists():
         raise RecommendationDatabaseMissing(f"no database at {db}; run ingest-cbs first")
@@ -115,17 +125,26 @@ def poll_odds_snapshot(
                 week=week,
                 now=now,
                 slate=slate,
-                window=(now - timedelta(hours=12), now + timedelta(days=days)),
+                window=(
+                    window_start if window_start is not None else now - timedelta(hours=12),
+                    now + timedelta(days=days),
+                ),
             )
         store.append_market_lines(result.lines)
     return result
 
 
 def refresh_recommendations(
-    db: Path, sport: Sport, season: int, week: int, now: datetime
+    db: Path,
+    sport: Sport,
+    season: int,
+    week: int,
+    now: datetime,
+    *,
+    window_start: datetime | None = None,
 ) -> RecommendationSnapshot:
     """Append a current market snapshot, then generate recommendations."""
-    poll_odds_snapshot(db, sport, season, week, now)
+    poll_odds_snapshot(db, sport, season, week, now, window_start=window_start)
     return generate_recommendations(db, sport, season, week, now)
 
 
