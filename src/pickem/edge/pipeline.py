@@ -27,7 +27,7 @@ from pickem.edge.divergence import (
 )
 from pickem.edge.elo import EloConfig, build_ratings, projected_margin, tiebreak_side
 from pickem.edge.favorite import favorite_side
-from pickem.models import Edge, Game, LeagueLine, MarketLine, Tier
+from pickem.models import Edge, Game, LeagueLine, MarketLine, Side, Tier
 
 _TIEBREAK_TIERS = {Tier.COINFLIP, Tier.NO_MARKET}
 
@@ -55,10 +55,12 @@ def decide_edges(
             for league in league_lines
         ]
         decided = _apply_tiebreaks(measured, games, history, elo_config)
+    by_id = {game.game_id: game for game in games}
     for edge in decided:
+        game = by_id.get(edge.game_id)
         _emit_decision_event(
             "INFO",
-            edge.rationale,
+            _decision_message(edge, game),
             event="edge_decided",
             game_id=edge.game_id,
             side=edge.side.value,
@@ -66,8 +68,32 @@ def decide_edges(
             delta=round(edge.delta, 3),
             league_spread=edge.league_spread,
             market_spread=edge.market_spread,
+            **_team_fields(game),
         )
     return decided
+
+
+def _decision_message(edge: Edge, game: Game | None) -> str:
+    """Name the matchup and the team picked, ahead of the rationale.
+
+    The rationale alone reads "1.5 pts toward away" — true, but the text sink
+    renders only the message, so without this prefix a human tailing the log
+    sees a decision with no idea whose. `divergence.py` is pure and never sees a
+    Game, so the names are attached here, where `decide_edges` already has them.
+    """
+    if game is None:
+        return edge.rationale
+    picked = game.home_team_id if edge.side is Side.HOME else game.away_team_id
+    return (
+        f"{game.away_team_id} at {game.home_team_id}: "
+        f"pick {picked} ({edge.tier.value}) - {edge.rationale}"
+    )
+
+
+def _team_fields(game: Game | None) -> dict[str, str]:
+    if game is None:
+        return {}
+    return {"home_team_id": game.home_team_id, "away_team_id": game.away_team_id}
 
 
 def _apply_tiebreaks(

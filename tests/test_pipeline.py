@@ -208,9 +208,39 @@ def test_every_decided_edge_is_logged_with_its_rationale(records):
     assert len(decided) == len(edges)
     by_game = {r["extra"]["game_id"]: r for r in decided}
     for edge in edges:
-        assert by_game[edge.game_id]["message"] == edge.rationale
+        assert by_game[edge.game_id]["message"].endswith(edge.rationale)
         assert by_game[edge.game_id]["extra"]["side"] == edge.side.value
         assert by_game[edge.game_id]["extra"]["tier"] == edge.tier.value
+
+
+def test_edge_decided_names_the_matchup_and_the_team_picked(records):
+    [edge] = decide_edges([league(-3.0)], [market(-6.0)], [game()], HISTORY)
+
+    [decided] = [r for r in records if r["extra"]["event"] == "edge_decided"]
+    assert edge.side is Side.HOME
+    assert decided["message"].startswith("BUF at MIA: pick MIA (strong) - ")
+    assert decided["message"].endswith(edge.rationale)
+    assert decided["extra"]["home_team_id"] == "MIA"
+    assert decided["extra"]["away_team_id"] == "BUF"
+
+
+def test_edge_decided_names_the_away_team_when_the_pick_is_away(records):
+    [edge] = decide_edges([league(-3.0)], [market(-1.5)], [game()], HISTORY)
+
+    [decided] = [r for r in records if r["extra"]["event"] == "edge_decided"]
+    assert edge.side is Side.AWAY
+    assert decided["message"].startswith("BUF at MIA: pick BUF (lean) - ")
+
+
+def test_edge_decided_falls_back_to_the_rationale_when_no_game_is_known(records):
+    """A settled divergence needs no game record, so one may legitimately be
+    absent. The line loses the team names, not the decision."""
+    [edge] = decide_edges([league(-3.0)], [market(-6.0)], [], HISTORY)
+
+    [decided] = [r for r in records if r["extra"]["event"] == "edge_decided"]
+    assert decided["message"] == edge.rationale
+    assert "home_team_id" not in decided["extra"]
+    assert decided["extra"]["game_id"] == GID
 
 
 def test_tiebreak_log_contains_the_actual_default_ratings(records):

@@ -39,6 +39,10 @@ class FakeJob:
         return self.kwargs.get("id")
 
     @property
+    def name(self):
+        return self.kwargs.get("name")
+
+    @property
     def run_date(self):
         return getattr(self.trigger, "run_date", None)
 
@@ -1633,3 +1637,64 @@ async def test_a_planned_job_polls_the_scope_that_earned_it(settings):
     await scheduler.jobs[0].func()
 
     assert seen == [scheduler.jobs[0].run_date]
+
+
+def test_every_job_is_named_for_its_work_not_its_callable(settings):
+    """APScheduler quotes job.name in its own records.
+
+    Unnamed closures all render as `_poll_job.<locals>.job`, so a file with a
+    slate's worth of polls in it says the same uninformative thing dozens of
+    times.
+    """
+    scheduler = FakeScheduler()
+    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler, plan=lambda: None)
+    schedule_kickoff_polls(
+        {NFL_SCOPE: (_instant(13, 16),)}, lambda _s, _i: None, scheduler
+    )
+
+    assert [job.name for job in scheduler.jobs] == [
+        "pick reminder",
+        "recommendation refresh",
+        "kickoff poll planner",
+        "poll nfl/2026/wk1 T-1h before 2026-09-13T17:00:00+00:00",
+    ]
+
+
+def test_planning_records_what_changed_and_when_the_next_poll_fires(records):
+    scheduler = FakeScheduler()
+    schedule_kickoff_polls(
+        {NFL_SCOPE: (_instant(13, 5, offset=12.0), _instant(13, 16, offset=1.0))},
+        lambda _s, _i: None,
+        scheduler,
+    )
+    schedule_kickoff_polls(
+        {
+            NFL_SCOPE: (
+                _instant(13, 16, offset=1.0),
+                _instant(14, 8, offset=6.0, kickoff_hour=14),
+            )
+        },
+        lambda _s, _i: None,
+        scheduler,
+    )
+
+    planned = [r for r in records if r["extra"].get("event") == "polls_planned"][-1]
+    assert planned["extra"]["jobs"] == 2
+    assert planned["extra"]["added"] == 1
+    assert planned["extra"]["removed"] == 1
+    assert planned["extra"]["unchanged"] == 1
+    assert planned["extra"]["next_poll"] == "2026-09-13T16:00:00+00:00"
+    assert planned["extra"]["per_scope"] == {"nfl/2026/wk1": 2}
+    assert planned["extra"]["offsets_hours"] == [6.0, 1.0]
+
+
+def test_planning_says_so_when_there_is_nothing_left_to_poll(records):
+    """A week correctly finished and a planner that never ran must not look alike."""
+    scheduler = FakeScheduler()
+
+    schedule_kickoff_polls({}, lambda _s, _i: None, scheduler)
+
+    planned = [r for r in records if r["extra"].get("event") == "polls_planned"][-1]
+    assert planned["extra"]["jobs"] == 0
+    assert planned["extra"]["next_poll"] is None
+    assert "no kickoff polls" in planned["message"]

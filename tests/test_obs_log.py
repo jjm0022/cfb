@@ -9,7 +9,7 @@ from apscheduler.events import EVENT_JOB_ERROR
 from apscheduler.schedulers.background import BackgroundScheduler
 from loguru import logger
 
-from pickem.models import Game, LeagueLine, Sport
+from pickem.models import Game, LeagueLine, Side, Sport
 from pickem.obs.log import configure_logging, run_context
 from pickem.operations.recommendations import generate_recommendations
 from pickem.store.db import Store
@@ -419,8 +419,47 @@ def test_a_refresh_leaves_a_complete_audit_trail(tmp_path, monkeypatch, seeded_d
             sorted(snapshot.edges, key=lambda edge: edge.game_id),
             strict=True,
         ):
-            assert row["message"] == edge.rationale
+            assert row["message"].endswith(edge.rationale)
             assert row["side"] == edge.side.value
+            # The text sink renders only the message, so the matchup has to be
+            # in it for a human tailing the log to know whose decision this is.
+            assert row["message"].startswith(
+                f"{row['away_team_id']} at {row['home_team_id']}: "
+            )
+            picked = (
+                row["home_team_id"] if edge.side is Side.HOME else row["away_team_id"]
+            )
+            assert f"pick {picked} ({edge.tier.value})" in row["message"]
     finally:
         logger.complete()
         logger.remove()
+
+
+def test_scheduler_bookkeeping_is_dropped_but_its_warnings_survive(log_dir):
+    """Job registration is bookkeeping; a missed run time is news.
+
+    APScheduler logs one INFO line per job added, which drowns the file when a
+    slate registers dozens of kickoff polls and names none of them usefully.
+    Its WARNINGs report runs that did not happen, which is exactly what this
+    log exists to reveal.
+    """
+    import logging
+
+    scheduler_log = logging.getLogger("apscheduler.scheduler")
+    scheduler_log.info('Added job "poll cfb wk2" to job store "default"')
+    scheduler_log.warning('Run time of job "poll cfb wk2" was missed by 0:05:00')
+
+    messages = [r["message"] for r in _rows(log_dir)]
+    assert not any("Added job" in message for message in messages)
+    assert any("was missed by" in message for message in messages)
+
+
+def test_scheduler_execution_records_are_kept(log_dir):
+    """The executor's account of a job firing is independent of our own."""
+    import logging
+
+    logging.getLogger("apscheduler.executors.default").info(
+        'Running job "poll cfb/2026/wk2 T-6h" (scheduled at 2026-09-12 13:30:00+00:00)'
+    )
+
+    assert any("Running job" in r["message"] for r in _rows(log_dir))

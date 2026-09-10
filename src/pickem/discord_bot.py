@@ -182,6 +182,7 @@ def build_schedule(
             timezone=settings.timezone,
         ),
         id="pick-reminder",
+        name="pick reminder",
         replace_existing=True,
     )
     logger.bind(
@@ -200,6 +201,7 @@ def build_schedule(
             timezone=settings.timezone,
         ),
         id="recommendation-refresh",
+        name="recommendation refresh",
         replace_existing=True,
     )
     logger.bind(
@@ -219,6 +221,7 @@ def build_schedule(
             timezone=settings.timezone,
         ),
         id="poll-planner",
+        name="kickoff poll planner",
         replace_existing=True,
     )
     logger.bind(
@@ -261,25 +264,80 @@ def schedule_kickoff_polls(
         for instant in instants
     }
 
-    for job in list(scheduler.get_jobs()):
-        job_id = getattr(job, "id", None) or ""
-        if job_id.startswith(POLL_JOB_PREFIX) and job_id not in wanted:
-            scheduler.remove_job(job_id)
+    existing = {
+        job_id
+        for job in scheduler.get_jobs()
+        if (job_id := getattr(job, "id", None) or "").startswith(POLL_JOB_PREFIX)
+    }
+    for job_id in existing - set(wanted):
+        scheduler.remove_job(job_id)
 
     for job_id, (scope, instant) in wanted.items():
         scheduler.add_job(
             _poll_job(run_poll, scope, instant),
             DateTrigger(run_date=instant.at),
             id=job_id,
+            name=_poll_job_name(scope, instant),
             replace_existing=True,
         )
 
-    logger.bind(
-        event="polls_planned",
-        jobs=len(wanted),
-        scopes=[f"{s.sport.value}/{s.season}/wk{s.week}" for s in plans],
-    ).info(f"planned {len(wanted)} kickoff-anchored polls")
+    _log_plan(wanted, existing)
     return tuple(wanted)
+
+
+def _poll_job_name(scope: MonitorScope, instant: PollInstant) -> str:
+    """A job name that says what the poll is for.
+
+    APScheduler quotes ``job.name`` in its own execution records. Left unset it
+    is the callable's qualified name, so every poll on the board reports itself
+    as the same anonymous closure.
+    """
+    return (
+        f"poll {_scope_key(scope)} T-{instant.offset_hours:g}h "
+        f"before {instant.kickoff_utc.isoformat()}"
+    )
+
+
+def _scope_key(scope: MonitorScope) -> str:
+    return f"{scope.sport.value}/{scope.season}/wk{scope.week}"
+
+
+def _log_plan(
+    wanted: Mapping[str, tuple[MonitorScope, PollInstant]], existing: set[str]
+) -> None:
+    """Record what this planning run decided, not that it ran.
+
+    A planner that found nothing to do and a planner that never ran are
+    otherwise indistinguishable, so the empty plan is logged too.
+    """
+    per_scope: dict[str, int] = {}
+    for scope, _ in wanted.values():
+        per_scope[_scope_key(scope)] = per_scope.get(_scope_key(scope), 0) + 1
+    next_poll = min((instant.at for _, instant in wanted.values()), default=None)
+    added = len(set(wanted) - existing)
+    fields = {
+        "event": "polls_planned",
+        "jobs": len(wanted),
+        "added": added,
+        "removed": len(existing - set(wanted)),
+        "unchanged": len(existing & set(wanted)),
+        "per_scope": per_scope,
+        "next_poll": next_poll.isoformat() if next_poll else None,
+        "offsets_hours": sorted(
+            {instant.offset_hours for _, instant in wanted.values()}, reverse=True
+        ),
+    }
+    if not wanted:
+        logger.bind(**fields).info(
+            "no kickoff polls to schedule: no active scope has a future kickoff"
+        )
+        return
+    logger.bind(**fields).info(
+        f"planned {len(wanted)} polls across {len(per_scope)} scope(s) "
+        f"({', '.join(f'{key} {count}' for key, count in sorted(per_scope.items()))}); "
+        f"next {next_poll.isoformat()}; "
+        f"+{added} -{len(existing - set(wanted))}"
+    )
 
 
 def _poll_job(

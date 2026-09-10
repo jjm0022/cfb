@@ -121,6 +121,18 @@ def _make_patcher(secrets: tuple[str, ...]):
     return patch
 
 
+# Third-party loggers whose INFO output is bookkeeping rather than decisions.
+# `apscheduler.scheduler` narrates every job it registers and removes -- one
+# line per job, naming the callable rather than the work -- which buries the
+# file once a slate registers dozens of kickoff polls. Its WARNINGs are the
+# opposite: a missed run time is a job that did not happen, which is precisely
+# what this log exists to surface, so the floor is raised rather than silenced.
+# `apscheduler.executors` is deliberately left at INFO: its "Running job" and
+# "executed successfully" pair is an account of a job firing that does not
+# depend on our own instrumentation being correct.
+_STDLIB_LOG_FLOORS = {"apscheduler.scheduler": logging.WARNING}
+
+
 class _InterceptHandler(logging.Handler):
     """Route standard-library records (discord.py, apscheduler, httpx) to loguru."""
 
@@ -210,6 +222,8 @@ def configure_logging(
         logger.add(sys.stderr, level=console.upper(), format=_TEXT_FORMAT, **common)
 
     logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
+    for name, floor in _STDLIB_LOG_FLOORS.items():
+        logging.getLogger(name).setLevel(floor)
     return directory
 
 
