@@ -164,6 +164,10 @@ uv run pickem ingest-cbs --html \
   --sport cfb --season 2026 --week 2
 ```
 
+For a whole pool week, `scripts/import-cbs-week.sh 3` does both boards from
+`data/cbs/weeks/week3.html`: CFB week 3 and NFL week 2 (`--sport`, `--season`,
+`--file`, `--db` override the defaults).
+
 Omit `--file` to read the pasted block from stdin. Re-ingesting a week is safe:
 it will not erase scores a later `sync-results` wrote.
 
