@@ -396,3 +396,69 @@ def _standing(
         beat_share=beaten / max(len(results) - 1, 1),
         boards=tuple(boards),
     )
+
+
+@dataclass(frozen=True)
+class Findings:
+    claims: tuple[str, ...]
+    not_yet: tuple[str, ...]
+
+
+def _separate(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    return a[1] < b[0] or b[1] < a[0]
+
+
+def findings(games: Sequence[GradedGame]) -> Findings:
+    """Statements the numbers support, and comparisons they cannot settle yet.
+
+    A difference is claimed only when the two 95% intervals do not overlap.
+    That test is deliberately conservative: comparisons on the same games are
+    paired, and it errs toward saying nothing.
+    """
+    claims: list[str] = []
+    not_yet: list[str] = []
+    sports = sorted({game.game.sport for game in games})
+    scopes: list[tuple[Sport | None, str]] = [(None, "all boards")]
+    scopes += [(sport, sport.value.upper()) for sport in sports]
+
+    for sport, label in scopes:
+        ours = record_for(games, Strategy.US, sport=sport)
+        for baseline in BASELINES:
+            other = record_for(games, baseline, sport=sport)
+            if not ours.decided or not other.decided:
+                continue
+            text = (
+                f"{label}: us {ours.rate:.1%} (n={ours.decided}) vs {baseline.value} "
+                f"{other.rate:.1%} (n={other.decided})"
+            )
+            if _separate(ours.interval, other.interval):
+                claims.append(f"{text} — us {'ahead' if ours.rate > other.rate else 'behind'}")
+            else:
+                not_yet.append(f"{text} — not distinguishable yet")
+
+        for tier, expected in BACKTEST_TIER_RATES.items():
+            model = record_for(games, Strategy.MODEL, sport=sport, tier=tier)
+            if not model.decided:
+                continue
+            low, high = model.interval
+            text = (
+                f"{label}: model {tier.value} {model.rate:.1%} (n={model.decided}) vs NFL "
+                f"backtest {expected:.1%}"
+            )
+            if expected < low:
+                claims.append(f"{text} — above expectation")
+            elif expected > high:
+                claims.append(f"{text} — below expectation")
+            else:
+                not_yet.append(f"{text} — not distinguishable yet")
+
+        clv = clv_summary(games, sport=sport)
+        if not clv.n:
+            continue
+        text = f"{label}: mean CLV {clv.mean:+.2f} pts (n={clv.n})"
+        if clv.interval is not None and (clv.interval[0] > 0 or clv.interval[1] < 0):
+            direction = "toward" if clv.mean > 0 else "against"
+            claims.append(f"{text} — the market moved {direction} our picks")
+        else:
+            not_yet.append(f"{text} — not distinguishable from zero yet")
+    return Findings(tuple(claims), tuple(not_yet))
