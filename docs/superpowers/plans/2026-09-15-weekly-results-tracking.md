@@ -17,7 +17,8 @@
 - Tests: `uv run pytest`. Async bot tests use `@pytest.mark.asyncio`; monitor tests use `asyncio.run(...)`, like their neighbours.
 - Logging: `logger.bind(event="<snake_case>", ...).<level>(message)`, as in the existing code. Commands run inside `run_context("cli:<command>", ...)`.
 - `data/` is gitignored. Never commit anything under `data/`. Real entrant names never go into committed files; only `Jota` (the user's entry) may appear.
-- The working tree has **uncommitted user work** in `README.md`, `src/pickem/automation/__init__.py`, `src/pickem/automation/monitor.py`, `src/pickem/discord_bot.py`, `tests/test_discord_bot.py`, plus untracked `scripts/` and two untracked test files. Never revert, reformat, or stash it. Stage only the exact paths each task names (`git add <path>…`, never `git add -A` or `git add .`). Task 6 and Task 11 touch files with uncommitted user work: **stop before those tasks and ask the user to commit or approve including their pending changes.**
+- The user's earlier work was committed before execution (`ff73a08`, `c3140ac`). Stage only the exact paths each task names (`git add <path>…`, never `git add -A` or `git add .`).
+- `tests/test_import_cbs_week_script.py` has two pre-existing E501 findings (lines 11 and 19) that belong to the user. Leave them; judge lint by the files each task touches.
 - Pool week N = CFB week N + NFL week N−1. Pool week 1 has no NFL board.
 - "The model's pick" = the `recommendation_history` row with the greatest `generated_at` strictly before the game's `kickoff_utc`.
 - Every commit message ends with:
@@ -2054,8 +2055,6 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ---
 ### Task 6: Record history live from the bot and from `report`
 
-> **Gate:** `monitor.py`, `discord_bot.py` and `tests/test_discord_bot.py` carry uncommitted user work. Before starting, ask the user to commit it, or to approve this task's commit including it. Do not continue without an answer.
-
 **Files:**
 - Modify: `src/pickem/automation/monitor.py` (`RecommendationMonitor.__init__`, `_record_success`, new `_record_history_for`)
 - Modify: `src/pickem/discord_bot.py` (imports; `_monitor_for`)
@@ -3868,8 +3867,6 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ### Task 11: Real-page check, README, and acceptance
 
-> **Gate:** `README.md` carries uncommitted user work. Ask the user before committing it (Step 4).
-
 **Files:**
 - Create: `tests/test_results_real_pages.py`
 - Modify: `README.md` (weekly workflow)
@@ -3987,9 +3984,7 @@ uv run pickem backfill-recommendations --season 2026
 ```
 ````
 
-- [ ] **Step 4: Commit the README (after the gate)**
-
-Ask the user whether to commit `README.md` with their pending edits included. Only on a yes:
+- [ ] **Step 4: Commit the README**
 
 ```bash
 git add README.md
@@ -4001,7 +3996,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `uv run pytest` then `uv run ruff check src tests`
-Expected: all tests PASS, no lint findings. Report any failure with its output; do not claim completion without this.
+Expected: all tests PASS; the only lint findings are the two pre-existing E501s in `tests/test_import_cbs_week_script.py`. Report any failure with its output; do not claim completion without this.
 
 - [ ] **Step 6: Acceptance on real data**
 
