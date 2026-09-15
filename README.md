@@ -233,6 +233,39 @@ and lets `preflight` pass next week. `--week` is required for CFB (fetched a
 week at a time) and optional for NFL. It fetches the whole league week, which
 will contain more games than your CBS slate — that count mismatch is expected.
 
+### 7. Import the week's results
+
+After every game in the pool week is final, open CBS **Standings → Weekly**,
+pick the week, let the page finish loading, and save it (Save Page As →
+"Webpage, Complete" or "HTML only") as `data/cbs/results/week<N>.html`, where
+N is the **pool** week. Then:
+
+```bash
+uv run pickem import-results --season 2026 --pool-week 2
+```
+
+It links every game to the stored boards, checks CBS's green and red marks
+against the scores and lines, and refuses the whole page if anything disagrees.
+It then writes `data/cbs/results/week2-report.md` and DMs a summary. Use
+`--no-notify` to skip the DM. If the DM fails, the command exits 2 but keeps the
+import and the report; `uv run pickem results-report --season 2026 --notify`
+resends it.
+
+The report grades four things side by side: your submitted picks, the model's
+last recommendation before each kickoff, the field's consensus, and simple
+baselines (favorites, home teams, the closing market). A comparison is called a
+difference only once its 95% intervals separate; until then it says "not
+distinguishable yet".
+
+An unknown CBS abbreviation stops the import with the name to add to
+`src/pickem/resolve/aliases.yaml`.
+
+One-off, for weeks played before recommendation history existed:
+
+```bash
+uv run pickem backfill-recommendations --season 2026
+```
+
 ### Stop conditions
 
 Stop and investigate rather than working around any of these:
