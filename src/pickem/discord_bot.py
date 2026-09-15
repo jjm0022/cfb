@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -22,7 +22,12 @@ from discord.ext import commands
 from loguru import logger
 
 from pickem import config
-from pickem.automation.monitor import MonitorScope, RecommendationMonitor, RefreshResult
+from pickem.automation.monitor import (
+    MonitorScope,
+    RecommendationChange,
+    RecommendationMonitor,
+    RefreshResult,
+)
 from pickem.automation.poll_plan import PollInstant, plan_polls
 from pickem.models import Game, Side, Sport, Tier
 from pickem.obs.log import configure_logging, run_context
@@ -804,17 +809,29 @@ class PickemBot(commands.Bot):
             await self._send_owner_dm(message)
             return
         games, _ = _stored_week_details(self.settings, scope)
-        now = datetime.now(UTC)
-        snapshot = generate_recommendations(
-            self.settings.db,
-            scope.sport,
-            scope.season,
-            scope.week,
-            now,
-            # Matches the refresh that produced this notification; without it
-            # the embed would re-list games the refresh deliberately excluded.
-            pending_as_of=now,
-        )
+        if isinstance(message, RecommendationChange):
+            changed_game_ids = set(message.game_ids)
+            games = tuple(game for game in games if game.game_id in changed_game_ids)
+            snapshot = replace(
+                message.snapshot,
+                edges=tuple(
+                    edge
+                    for edge in message.snapshot.edges
+                    if edge.game_id in changed_game_ids
+                ),
+            )
+        else:
+            # Retain support for callers that provide the legacy text-only
+            # notification rather than the monitor's structured string.
+            now = datetime.now(UTC)
+            snapshot = generate_recommendations(
+                self.settings.db,
+                scope.sport,
+                scope.season,
+                scope.week,
+                now,
+                pending_as_of=now,
+            )
         await self._send_owner_dm(
             embed=_format_change_notification(scope, snapshot, games)
         )

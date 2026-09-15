@@ -33,6 +33,24 @@ class RefreshResult:
     error: BaseException | None = None
 
 
+class RecommendationChange(str):
+    """A change notification carrying the exact snapshot and games that changed."""
+
+    snapshot: RecommendationSnapshot
+    game_ids: tuple[str, ...]
+
+    def __new__(
+        cls,
+        message: str,
+        snapshot: RecommendationSnapshot,
+        game_ids: tuple[str, ...],
+    ) -> RecommendationChange:
+        notification = super().__new__(cls, message)
+        notification.snapshot = snapshot
+        notification.game_ids = game_ids
+        return notification
+
+
 _RefreshWeek = Callable[[Any], Awaitable[RecommendationSnapshot] | RecommendationSnapshot]
 _LoadState = Callable[[Any], Awaitable[AutomationState] | AutomationState]
 _SaveState = Callable[[Any, AutomationState], Awaitable[None] | None]
@@ -111,8 +129,10 @@ def _change_message(old_signature: str | None, snapshot: RecommendationSnapshot)
     return "Recommendations changed: " + "; ".join(changes)
 
 
-def _picks_changed(old_signature: str | None, snapshot: RecommendationSnapshot) -> bool:
-    """Report whether any game still on the board picks differently than before.
+def _changed_game_ids(
+    old_signature: str | None, snapshot: RecommendationSnapshot
+) -> tuple[str, ...]:
+    """Return games still on the board whose actionable pick changed.
 
     Only games present in the new snapshot are compared. Automation excludes
     games that have kicked off, so the board shrinks as a week burns down; a
@@ -121,10 +141,14 @@ def _picks_changed(old_signature: str | None, snapshot: RecommendationSnapshot) 
     genuine flip and a newly added game both still register.
     """
     if not _is_current_signature(old_signature):
-        return False
+        return ()
     old = _mapping_from_signature(old_signature)
     new = _mapping_from_snapshot(snapshot)
-    return any(old.get(game_id) != pick for game_id, pick in new.items())
+    return tuple(sorted(game_id for game_id, pick in new.items() if old.get(game_id) != pick))
+
+
+def _picks_changed(old_signature: str | None, snapshot: RecommendationSnapshot) -> bool:
+    return bool(_changed_game_ids(old_signature, snapshot))
 
 
 def _failure_fingerprint(error: BaseException) -> str:
@@ -297,7 +321,8 @@ class RecommendationMonitor:
         # adopt it as the new baseline silently rather than DMing that every
         # game on the board "changed" the first time the bot runs after a
         # deploy.
-        changed = _picks_changed(state.signature, snapshot)
+        changed_game_ids = _changed_game_ids(state.signature, snapshot)
+        changed = bool(changed_game_ids)
         next_state = state.model_copy(
             update={
                 "signature": signature,
@@ -313,7 +338,14 @@ class RecommendationMonitor:
                     event="recommendation_changed",
                     **_scope_fields(self._scope),
                 ).info(message)
-                await _invoke(self._notify, message)
+                await _invoke(
+                    self._notify,
+                    RecommendationChange(
+                        message,
+                        snapshot,
+                        changed_game_ids,
+                    ),
+                )
                 self._log_notification("recommendation_change")
         except asyncio.CancelledError:
             raise
@@ -390,6 +422,7 @@ class RecommendationMonitor:
 
 __all__ = [
     "MonitorScope",
+    "RecommendationChange",
     "RecommendationMonitor",
     "RefreshResult",
     "recommendation_signature",

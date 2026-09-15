@@ -10,7 +10,7 @@ import discord
 import pytest
 from loguru import logger
 
-from pickem.automation.monitor import MonitorScope, RefreshResult
+from pickem.automation.monitor import MonitorScope, RecommendationMonitor, RefreshResult
 from pickem.automation.poll_plan import PollInstant
 from pickem.discord_bot import (
     DiscordSettings,
@@ -812,7 +812,7 @@ async def test_monitor_exception_is_logged_once_with_scope_and_traceback(setting
 
 
 @pytest.mark.asyncio
-async def test_monitor_change_notification_uses_status_pick_format(settings, monkeypatch):
+async def test_monitor_change_notification_lists_only_changed_picks(settings):
     game = Game(
         game_id="nfl-2026-01-BUF-at-MIA",
         sport=Sport.NFL,
@@ -822,9 +822,18 @@ async def test_monitor_change_notification_uses_status_pick_format(settings, mon
         home_team_id="MIA",
         away_team_id="BUF",
     )
+    unchanged_game = Game(
+        game_id="nfl-2026-01-DAL-at-PHI",
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        kickoff_utc=datetime(2026, 9, 10, tzinfo=UTC),
+        home_team_id="PHI",
+        away_team_id="DAL",
+    )
     with Store(settings.db) as store:
         store.init_schema()
-        store.upsert_games([game])
+        store.upsert_games([game, unchanged_game])
     snapshot = RecommendationSnapshot(
         sport=Sport.NFL,
         season=2026,
@@ -840,19 +849,22 @@ async def test_monitor_change_notification_uses_status_pick_format(settings, mon
                 market_spread=-6.0,
                 rationale="league -3.0 vs market -6.0: 3.0 pts toward home",
             ),
+            Edge(
+                game_id=unchanged_game.game_id,
+                side=Side.HOME,
+                delta=2.0,
+                tier=Tier.LEAN,
+                league_spread=-2.0,
+                market_spread=-4.0,
+                rationale="league -2.0 vs market -4.0: 2.0 pts toward home",
+            ),
         ),
-    )
-    monkeypatch.setattr(
-        "pickem.discord_bot.refresh_recommendations",
-        lambda *_args, **_kwargs: snapshot,
-    )
-    monkeypatch.setattr(
-        "pickem.discord_bot.generate_recommendations",
-        lambda *_args, **_kwargs: snapshot,
     )
     bot = PickemBot(settings, scheduler=FakeScheduler())
     bot._load_state = lambda _scope: AutomationState(
-        signature=f"v2|{game.game_id}:away:strong"
+        signature=(
+            f"v2|{game.game_id}:away:strong|{unchanged_game.game_id}:home:lean"
+        )
     )
     bot._save_state = lambda _scope, _state: None
     sent: list[tuple[str | None, object | None]] = []
@@ -861,8 +873,16 @@ async def test_monitor_change_notification_uses_status_pick_format(settings, mon
         sent.append((message, embed))
 
     bot._send_owner_dm = capture_dm
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+    monitor = RecommendationMonitor(
+        refresh_week=lambda _scope: snapshot,
+        load_state=bot._load_state,
+        save_state=bot._save_state,
+        notify=lambda message: bot._send_monitor_notification(scope, message),
+        scope=scope,
+    )
 
-    result = await bot._monitor_for(MonitorScope(Sport.NFL, 2026, 1)).refresh()
+    result = await monitor.refresh()
 
     assert result.changed is True
     assert sent[0][0] is None
@@ -870,6 +890,7 @@ async def test_monitor_change_notification_uses_status_pick_format(settings, mon
     assert embed.title == "🏈 Recommendations Updated"
     assert embed.fields[0].name == "NFL • 2026 — Week 1 — Picks"
     assert embed.fields[0].value == "• 🔥 Strong — ~~Buffalo Bills~~ at **Miami Dolphins**"
+    await bot.close()
 
 
 def test_bot_uses_no_privileged_intents_and_registers_dm_commands(settings):

@@ -2,6 +2,7 @@
 
 from pickem.automation.monitor import (
     MonitorScope,
+    RecommendationChange,
     RecommendationMonitor,
     RefreshResult,
     recommendation_signature,
@@ -9,6 +10,7 @@ from pickem.automation.monitor import (
 
 __all__ = [
     "MonitorScope",
+    "RecommendationChange",
     "RecommendationMonitor",
     "RefreshResult",
     "recommendation_signature",
