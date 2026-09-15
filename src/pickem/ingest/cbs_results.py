@@ -269,6 +269,8 @@ def _row(
 
     tiebreak_cell = row.first("weekly-tb-cell")
     tiebreak_text = tiebreak_cell.text().strip() if tiebreak_cell is not None else ""
+    if tiebreak_text == "-":
+        tiebreak_text = ""  # CBS's placeholder for "no tiebreaker entered".
     if tiebreak_text and not tiebreak_text.isdigit():
         raise CbsParseError(f"entry {entry_id}: tiebreaker {tiebreak_text!r} is not an integer")
 

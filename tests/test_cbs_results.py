@@ -114,3 +114,16 @@ def test_picked_team_outside_the_game_is_rejected(page):
     )
     with pytest.raises(CbsParseError, match="neither OKLA nor MICH"):
         parse_cbs_results_html(broken)
+
+
+def test_tiebreak_placeholder_reads_as_no_tiebreak(page):
+    broken = page.replace('mui-1hkd266">41</span>', 'mui-1hkd266">-</span>')
+    parsed = parse_cbs_results_html(broken)
+    jota = next(e for e in parsed.entrants if e.entry_id == JOTA)
+    assert jota.tiebreak is None
+
+
+def test_non_integer_tiebreak_is_rejected(page):
+    broken = page.replace('mui-1hkd266">41</span>', 'mui-1hkd266">x</span>')
+    with pytest.raises(CbsParseError, match="is not an integer"):
+        parse_cbs_results_html(broken)
