@@ -77,11 +77,20 @@ def iter_log_records(log_dir: Path) -> Iterator[dict]:
     """Yield JSON records from current and rotated JSONL logs, oldest file first.
 
     Rotated files are zipped by the logger. Lines that are not JSON objects are
-    skipped: a record cut off mid-write must not stop a backfill.
+    skipped: a record cut off mid-write must not stop a backfill. A rotated
+    archive that is itself corrupt or truncated is skipped the same way, so one
+    bad archive cannot abort a backfill that would otherwise read the rest.
     """
     for path in sorted(log_dir.glob("pickem*.jsonl*")):
         if path.name.endswith(".jsonl.zip"):
-            with zipfile.ZipFile(path) as archive:
+            try:
+                archive = zipfile.ZipFile(path)
+            except zipfile.BadZipFile as exc:
+                logger.bind(event="log_archive_unreadable", path=str(path)).warning(
+                    f"skipping unreadable log archive {path}: {exc}"
+                )
+                continue
+            with archive:
                 for member in archive.namelist():
                     with archive.open(member) as handle:
                         yield from _json_objects(

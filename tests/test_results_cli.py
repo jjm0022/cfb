@@ -80,6 +80,16 @@ def test_unparseable_page_exits_1(workspace):
     assert "no Weekly Standings table" in result.output
 
 
+def test_non_utf8_page_exits_1_without_writing(workspace):
+    db, results = workspace
+    (results / "week2.html").write_bytes(b"\xff\xfe\x00bad")
+    result = invoke_import(db, results, "--no-notify")
+    assert result.exit_code == 1
+    assert "week2.html" in result.output
+    assert "not UTF-8" in result.output
+    assert not (results / "week2-report.md").exists()
+
+
 def test_page_that_does_not_link_exits_1_without_writing(tmp_path):
     db = tmp_path / "empty.duckdb"
     results = tmp_path / "results"

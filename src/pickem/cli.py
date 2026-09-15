@@ -404,6 +404,9 @@ def import_results_cmd(
         except OSError as exc:
             typer.secho(f"cannot read {source}: {exc}", fg="red", err=True)
             raise typer.Exit(code=1) from exc
+        except UnicodeDecodeError as exc:
+            typer.secho(f"{source} is not UTF-8: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
         except CbsParseError as exc:
             typer.secho(f"cannot parse {source}: {exc}", fg="red", err=True)
             raise typer.Exit(code=1) from exc

@@ -83,6 +83,12 @@ def test_iter_log_records_reads_current_and_rotated_files(tmp_path):
     ]
 
 
+def test_iter_log_records_skips_a_corrupt_rotated_archive(tmp_path):
+    (tmp_path / "pickem.jsonl").write_text(decision("2026-09-11T10:00:00-04:00"))
+    (tmp_path / "pickem.2026-09-10_00-00-00_000000.jsonl.zip").write_bytes(b"not a zip file")
+    assert [r["ts"] for r in iter_log_records(tmp_path)] == ["2026-09-11T10:00:00-04:00"]
+
+
 def test_backfill_reads_pick_batches_and_logged_decisions(store, tmp_path):
     store.record_picks([edge(Side.HOME, Tier.LEAN)], 2026, 2, KICK - timedelta(days=4))
     (tmp_path / "pickem.jsonl").write_text("\n".join([

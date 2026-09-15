@@ -1,3 +1,4 @@
+import math
 from datetime import timedelta
 
 import pytest
@@ -52,6 +53,12 @@ def test_closing_line_value_sign():
     assert closing_line_value(Side.AWAY, -3.5, -5.0) == pytest.approx(-1.5)
     assert closing_line_value(Side.HOME, -3.5, None) is None
     assert closing_line_value(None, -3.5, -5.0) is None
+
+
+def test_closing_line_value_normalizes_negative_zero():
+    value = closing_line_value(Side.AWAY, -3.5, -3.5)
+    assert f"{value:+.1f}" == "+0.0"
+    assert math.copysign(1, value) == 1
 
 
 def test_field_consensus_skips_ties():

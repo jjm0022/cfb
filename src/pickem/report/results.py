@@ -88,7 +88,8 @@ def closing_line_value(
     if side is None or close_spread is None:
         return None
     toward_home = league_spread - close_spread
-    return toward_home if side is Side.HOME else -toward_home
+    value = toward_home if side is Side.HOME else -toward_home
+    return value + 0.0
 
 
 def closing_spread(lines: Iterable[MarketLine], kickoff: datetime) -> float | None:
