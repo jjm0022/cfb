@@ -3,13 +3,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import duckdb
 import typer
+from loguru import logger
 
 from pickem import config
 from pickem.backtest.archive import (
@@ -44,19 +47,29 @@ from pickem.edge.divergence import suppress_decision_logging
 from pickem.edge.pipeline import MissingGameError
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
 from pickem.ingest.cbs_html import parse_cbs_html
+from pickem.ingest.cbs_results import parse_cbs_results_html
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
 from pickem.models import HISTORY_REPORT, Game, Sport
+from pickem.notify.discord_dm import build_results_embed, send_owner_dm
 from pickem.obs.log import configure_logging, run_context
 from pickem.operations.preflight import evaluate_preflight, render_preflight
-from pickem.operations.recommendation_history import history_from_snapshot
+from pickem.operations.recommendation_history import (
+    backfill_history as backfill_recommendation_history,
+)
+from pickem.operations.recommendation_history import (
+    history_from_snapshot,
+)
 from pickem.operations.recommendations import (
     RecommendationDatabaseMissing,
     RecommendationSlateMissing,
     generate_recommendations,
     poll_odds_snapshot,
 )
+from pickem.operations.results_import import ResultsImportError, import_results
+from pickem.report.results import ResultsReport, ResultsReportError, build_results_report
+from pickem.report.results_markdown import render_results_report
 from pickem.report.sheet import render_sheet
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
@@ -324,6 +337,146 @@ def sync_results(
                 )
             store.upsert_games(games)
             typer.echo(f"synced {len(games)} {sport.value} games for {season}")
+
+
+def _write_results_report(
+    store: Store, season: int, pool_week: int, entry_name: str, out_dir: Path
+) -> tuple[ResultsReport, Path]:
+    try:
+        report = build_results_report(
+            store, season=season, pool_week=pool_week, entry_name=entry_name
+        )
+    except ResultsReportError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(code=1) from exc
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"week{pool_week}-report.md"
+    path.write_text(render_results_report(report, generated_at=datetime.now(tz=UTC)))
+    logger.bind(event="results_report_written", pool_week=pool_week, path=str(path)).info(
+        f"results report written to {path}"
+    )
+    typer.echo(f"report written to {path}")
+    return report, path
+
+
+def _notify_results(report: ResultsReport, path: Path) -> None:
+    """Send the DM; on failure keep everything and exit 2 so the miss is visible."""
+    try:
+        asyncio.run(
+            send_owner_dm(
+                build_results_embed(report, path),
+                token=config.discord_bot_token(),
+                owner_id=config.discord_owner_id(),
+            )
+        )
+    except Exception as exc:
+        logger.bind(
+            event="results_dm_failed",
+            pool_week=report.pool_week,
+            error_type=type(exc).__name__,
+            error_detail=str(exc),
+        ).error(f"results DM not sent: {exc}")
+        typer.secho(
+            f"report kept at {path}, but the Discord DM failed: {exc}", fg="red", err=True
+        )
+        raise typer.Exit(code=2) from exc
+    logger.bind(event="results_dm_sent", pool_week=report.pool_week).info("results DM sent")
+    typer.echo("Discord DM sent")
+
+
+@app.command("import-results")
+def import_results_cmd(
+    season: int = typer.Option(...),
+    pool_week: int = typer.Option(..., help="Pool week, not league week: CFB N + NFL N-1"),
+    file: Path = typer.Option(
+        None, help="Saved CBS Weekly Standings page (default: <out-dir>/week<N>.html)"
+    ),
+    entry_name: str = typer.Option(config.DEFAULT_ENTRY_NAME),
+    out_dir: Path = typer.Option(config.DEFAULT_RESULTS_DIR),
+    notify: bool = typer.Option(True, "--notify/--no-notify"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Import a saved Weekly Standings page, write its report, and DM a summary."""
+    with run_context("cli:import-results", season=season, pool_week=pool_week, db=str(db)):
+        source = file or out_dir / f"week{pool_week}.html"
+        try:
+            parsed = parse_cbs_results_html(source.read_text(encoding="utf-8"))
+        except OSError as exc:
+            typer.secho(f"cannot read {source}: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        except CbsParseError as exc:
+            typer.secho(f"cannot parse {source}: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+
+        with _store(db) as store:
+            try:
+                summary = import_results(
+                    store,
+                    parsed,
+                    season=season,
+                    pool_week=pool_week,
+                    resolver=TeamResolver.default(),
+                    imported_at=datetime.now(tz=UTC),
+                )
+            except ResultsImportError as exc:
+                typer.secho(str(exc), fg="red", err=True)
+                raise typer.Exit(code=1) from exc
+            boards = ", ".join(
+                f"{count} {sport.value}" for sport, count in sorted(summary.games_by_sport.items())
+            )
+            typer.echo(
+                f"imported pool week {pool_week}: {summary.entrants} entrants, {boards} games, "
+                f"{summary.picks} picks ({summary.blank_picks} blank)"
+            )
+            report, path = _write_results_report(store, season, pool_week, entry_name, out_dir)
+        if notify:
+            _notify_results(report, path)
+
+
+@app.command("results-report")
+def results_report_cmd(
+    season: int = typer.Option(...),
+    pool_week: int = typer.Option(None, help="Default: the latest imported pool week"),
+    entry_name: str = typer.Option(config.DEFAULT_ENTRY_NAME),
+    out_dir: Path = typer.Option(config.DEFAULT_RESULTS_DIR),
+    notify: bool = typer.Option(False, "--notify/--no-notify"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Rebuild a results report from the store; DM it only with --notify."""
+    with run_context("cli:results-report", season=season, pool_week=pool_week, db=str(db)):
+        with _store(db) as store:
+            weeks = store.pool_weeks(season)
+            if not weeks:
+                typer.secho(
+                    f"no pool weeks of {season} are imported; run import-results first",
+                    fg="red",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            week = pool_week if pool_week is not None else weeks[-1]
+            report, path = _write_results_report(store, season, week, entry_name, out_dir)
+        if notify:
+            _notify_results(report, path)
+
+
+@app.command("backfill-recommendations")
+def backfill_recommendations_cmd(
+    season: int = typer.Option(...),
+    logs: Path = typer.Option(
+        None, help="Log directory (default: $PICKEM_LOG_DIR or ~/LOGS/pickem)"
+    ),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Rebuild recommendation history from recorded report batches and the JSONL logs."""
+    with run_context("cli:backfill-recommendations", season=season, db=str(db)):
+        log_dir = logs or Path(os.environ.get("PICKEM_LOG_DIR") or Path.home() / "LOGS" / "pickem")
+        with _store(db) as store:
+            summary = backfill_recommendation_history(store, season=season, log_dir=log_dir)
+        typer.echo(
+            f"added {summary.from_picks} history rows from report batches and "
+            f"{summary.from_logs} from logs ({summary.log_decisions_seen} logged decisions "
+            f"seen, {summary.log_decisions_unmatched} not matched to a stored game)"
+        )
 
 
 @app.command("backfill")

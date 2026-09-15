@@ -14,6 +14,9 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 DEFAULT_DB = Path("data/pickem.duckdb")
+DEFAULT_RESULTS_DIR = Path("data/cbs/results")
+# The owner's display name on the CBS standings page.
+DEFAULT_ENTRY_NAME = "Jota"
 
 # usecwd so the search starts where the command was run, not where this module
 # happens to be installed.
