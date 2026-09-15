@@ -916,3 +916,37 @@ def test_a_suppressed_notification_says_what_was_suppressed(records):
     assert _messages(records, "notify_suppressed") == [
         "duplicate notification suppressed: refresh_failure (RuntimeError: boom)"
     ]
+
+
+def test_refresh_records_history_for_each_successful_snapshot():
+    fake = FakeMonitor([snapshot_with({"game-a": Side.HOME})])
+    recorded = []
+    monitor = RecommendationMonitor(
+        fake.refresh_week, fake.load_state, fake.save_state, fake.notify, SCOPE,
+        record_history=lambda scope, snapshot: recorded.append((scope, snapshot)),
+    )
+
+    result = asyncio.run(monitor.refresh())
+
+    assert result.error is None
+    assert recorded == [(SCOPE, result.snapshot)]
+
+
+def test_history_failure_is_logged_and_does_not_fail_the_refresh(records):
+    fake = FakeMonitor([snapshot_with({"game-a": Side.HOME})])
+
+    def fail(_scope, _snapshot):
+        raise RuntimeError("disk full")
+
+    monitor = RecommendationMonitor(
+        fake.refresh_week, fake.load_state, fake.save_state, fake.notify, SCOPE,
+        record_history=fail,
+    )
+
+    result = asyncio.run(monitor.refresh())
+
+    assert result.error is None
+    assert len(fake.saved_states) == 1
+    failures = [r for r in records if r["extra"].get("event") == "history_record_failed"]
+    assert len(failures) == 1
+    assert "disk full" in failures[0]["message"]

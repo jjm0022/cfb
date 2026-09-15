@@ -29,8 +29,9 @@ from pickem.automation.monitor import (
     RefreshResult,
 )
 from pickem.automation.poll_plan import PollInstant, plan_polls
-from pickem.models import Game, Side, Sport, Tier
+from pickem.models import HISTORY_MONITOR, Game, Side, Sport, Tier
 from pickem.obs.log import configure_logging, run_context
+from pickem.operations.recommendation_history import record_snapshot_history
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
 from pickem.resolve.resolver import TeamResolver
 from pickem.store.db import AutomationState, Store
@@ -800,6 +801,9 @@ class PickemBot(commands.Bot):
                 save_state=self._save_state,
                 notify=lambda message: self._send_monitor_notification(scope, message),
                 scope=scope,
+                record_history=lambda _scope, snapshot: asyncio.to_thread(
+                    record_snapshot_history, self.settings.db, snapshot, HISTORY_MONITOR
+                ),
             )
             self._monitors[scope] = monitor
         return monitor

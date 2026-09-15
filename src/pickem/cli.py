@@ -47,9 +47,10 @@ from pickem.ingest.cbs_html import parse_cbs_html
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
-from pickem.models import Game, Sport
+from pickem.models import HISTORY_REPORT, Game, Sport
 from pickem.obs.log import configure_logging, run_context
 from pickem.operations.preflight import evaluate_preflight, render_preflight
+from pickem.operations.recommendation_history import history_from_snapshot
 from pickem.operations.recommendations import (
     RecommendationDatabaseMissing,
     RecommendationSlateMissing,
@@ -292,6 +293,7 @@ def report(
                 out.write_text(sheet)
             # Recorded so the live picks can be graded against the backtest later.
             store.record_picks(snapshot.edges, season, week, now)
+            store.append_recommendation_history(history_from_snapshot(snapshot, HISTORY_REPORT))
 
 
 @app.command("sync-results")

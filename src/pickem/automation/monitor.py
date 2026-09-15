@@ -55,6 +55,7 @@ _RefreshWeek = Callable[[Any], Awaitable[RecommendationSnapshot] | Recommendatio
 _LoadState = Callable[[Any], Awaitable[AutomationState] | AutomationState]
 _SaveState = Callable[[Any, AutomationState], Awaitable[None] | None]
 _Notify = Callable[[str], Awaitable[None] | None]
+_RecordHistory = Callable[[Any, RecommendationSnapshot], Awaitable[None] | None]
 
 
 async def _invoke[T](callback: Callable[..., T], *args: Any, **kwargs: Any) -> T:
@@ -199,6 +200,8 @@ class RecommendationMonitor:
     Adapter callbacks receive ``scope``. ``load_state`` returns an
     :class:`AutomationState`; ``save_state`` receives the scope and complete
     replacement state. All callbacks may be synchronous or asynchronous.
+    ``record_history``, when given, receives the scope and every successful
+    snapshot.
     """
 
     def __init__(
@@ -208,12 +211,15 @@ class RecommendationMonitor:
         save_state: _SaveState,
         notify: _Notify,
         scope: Any,
+        *,
+        record_history: _RecordHistory | None = None,
     ) -> None:
         self._refresh_week = refresh_week
         self._load_state = load_state
         self._save_state = save_state
         self._notify = notify
         self._scope = scope
+        self._record_history = record_history
         self._lock = asyncio.Lock()
         self._load_error_fingerprint: str | None = None
         self._persistence_error_fingerprint: str | None = None
@@ -316,6 +322,7 @@ class RecommendationMonitor:
     async def _record_success(
         self, state: AutomationState, snapshot: RecommendationSnapshot
     ) -> RefreshResult:
+        await self._record_history_for(snapshot)
         signature = recommendation_signature(snapshot)
         # A stored signature in an older format is a format change, not news:
         # adopt it as the new baseline silently rather than DMing that every
@@ -375,6 +382,28 @@ class RecommendationMonitor:
             f"{'recommendations changed' if changed else 'unchanged'}"
         )
         return RefreshResult(changed, snapshot=snapshot)
+
+    async def _record_history_for(self, snapshot: RecommendationSnapshot) -> None:
+        """Keep what the model said before anything else can fail.
+
+        A failure is logged, never raised: history is evidence for grading
+        later, and losing one refresh's rows must not stop a pick-change DM.
+        """
+        if self._record_history is None:
+            return
+        try:
+            await _invoke(self._record_history, self._scope, snapshot)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.bind(
+                event="history_record_failed",
+                error_type=type(error).__name__,
+                error_detail=str(error),
+                **_scope_fields(self._scope),
+            ).opt(exception=(type(error), error, error.__traceback__)).error(
+                f"recommendation history not recorded{_for_scope(self._scope)}: {error}"
+            )
 
     def _log_notification(self, kind: str, *, fingerprint: str | None = None) -> None:
         fields: dict[str, Any] = {

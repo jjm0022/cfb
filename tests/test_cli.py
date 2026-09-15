@@ -888,6 +888,22 @@ def test_report_shows_provenance_and_records_its_picks(tmp_path):
     assert picks[0][5] == "strong"
 
 
+def test_report_records_recommendation_history(tmp_path):
+    from pickem.store.db import Store
+
+    db = tmp_path / "test.duckdb"
+    _seed(db)
+    result = runner.invoke(
+        app,
+        ["report", "--sport", "nfl", "--season", "2025", "--week", "3", "--db", str(db)],
+    )
+    assert result.exit_code == 0, result.output
+
+    with Store(db) as store:
+        history = store.recommendation_history(["nfl-2025-03-BUF-at-MIA"])
+    assert [(r.tier.value, r.source) for r in history] == [("strong", "report")]
+
+
 def test_backtest_explains_why_nothing_was_graded(tmp_path):
     # Before `backfill-history` there are no frozen-line snapshots at all, so
     # every game is excluded. A bare 0-0-0 with no reason is the silent
