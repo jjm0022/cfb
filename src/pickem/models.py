@@ -116,3 +116,49 @@ class Edge(BaseModel):
     league_spread: float
     market_spread: float | None
     rationale: str
+
+
+# Where a recommendation-history row came from.
+HISTORY_MONITOR = "monitor"
+HISTORY_REPORT = "report"
+HISTORY_LOG_BACKFILL = "log_backfill"
+
+
+class PoolResult(BaseModel):
+    """One entrant's line on a CBS Weekly Standings page."""
+
+    season: int
+    pool_week: int
+    entry_id: str
+    name: str
+    rank: int
+    points: int
+    ytd: int
+    tiebreak: int | None
+    imported_at: datetime
+
+
+class PoolPick(BaseModel):
+    """One entrant's pick on one game. `side` is None when it was left blank."""
+
+    season: int
+    pool_week: int
+    entry_id: str
+    game_id: str
+    cbs_event_id: int
+    side: Side | None
+    cbs_correct: bool | None
+
+
+class RecommendationRecord(BaseModel):
+    """What the model said about a game, and when. Not a submitted pick."""
+
+    game_id: str
+    sport: Sport
+    season: int
+    week: int
+    side: Side
+    tier: Tier
+    edge_points: float
+    generated_at: datetime
+    source: str
