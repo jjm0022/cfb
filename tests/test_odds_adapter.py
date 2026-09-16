@@ -104,6 +104,36 @@ def test_snapshot_is_stamped_with_capture_time():
     assert fetch(client_returning(PAYLOAD)).lines[0].captured_at == NOW
 
 
+# A neutral-site game has no real home team, so the feed and our board can
+# disagree about which side is home. The matchup is the same game either way:
+# match it on the pair, keep OUR board's orientation, and read the point off
+# the team our board calls home.
+FLIPPED_PAYLOAD = [
+    {
+        **PAYLOAD[0],
+        "home_team": "Buffalo Bills",
+        "away_team": "Miami Dolphins",
+    }
+]
+
+
+def test_a_flipped_neutral_site_event_is_matched_to_our_slate_id():
+    assert fetch(client_returning(FLIPPED_PAYLOAD)).lines[0].game_id == "nfl-2025-03-BUF-at-MIA"
+
+
+def test_a_flipped_event_takes_the_point_of_the_team_we_call_home():
+    # Our board has MIA at home, so the stored spread must stay MIA's -6.0,
+    # not the +6.0 the feed prints for the side it happens to call home.
+    lines = {line.book: line.spread_home for line in fetch(client_returning(FLIPPED_PAYLOAD)).lines}
+    assert lines == {"pinnacle": -6.0, "draftkings": -6.5}
+
+
+def test_a_flipped_event_is_not_stored_when_neither_orientation_is_on_the_slate():
+    result = fetch(client_returning(FLIPPED_PAYLOAD), slate={"nfl-2025-03-DAL-at-NYJ"})
+    assert result.lines == []
+    assert any("not in the nfl 2025 week 3 slate" in row for row in result.skipped)
+
+
 def test_quota_exhaustion_raises_a_distinct_error():
     # The caller must be able to fall back to cached snapshots on quota, but not on a bug.
     with pytest.raises(QuotaExhausted):
