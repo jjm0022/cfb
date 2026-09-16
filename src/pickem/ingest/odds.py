@@ -241,6 +241,27 @@ def _parse_events(
             )
             continue
         game_id = matchup.game_id
+        # The side the feed calls home, in the feed's own spelling. The
+        # per-book outcome is read off this team, so it tracks whichever
+        # orientation the slate accepts below.
+        home_outcome_name = home_name
+
+        if game_id not in wanted and matchup.flipped().game_id in wanted:
+            # A neutral-site game has no true home team, so this feed and the
+            # board can name opposite sides -- the same game under two ids. Our
+            # board's orientation wins: `lines` is append-only and every report
+            # joins on the board's id, so storing the feed's id would leave the
+            # game permanently NO_MARKET. The point is then read off the team
+            # the board calls home, which is this event's away side, so the
+            # stored spread stays home-perspective without flipping a sign.
+            game_id = matchup.flipped().game_id
+            home_outcome_name = away_name
+            logger.bind(
+                event="odds_row_reoriented",
+                game_id=game_id,
+                feed_home=home_name,
+                feed_away=away_name,
+            ).info(f"{game_id}: feed lists {home_name} at home; stored as the board has it")
 
         if game_id not in wanted:
             _skip(
@@ -273,7 +294,7 @@ def _parse_events(
                 (
                     outcome
                     for outcome in spreads.get("outcomes", [])
-                    if outcome.get("name") == home_name
+                    if outcome.get("name") == home_outcome_name
                 ),
                 None,
             )

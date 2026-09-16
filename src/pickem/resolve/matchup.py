@@ -19,6 +19,21 @@ class CanonicalMatchup(BaseModel):
             raise ValueError(f"a team cannot play itself: {self.away_team_id}")
         return self
 
+    def flipped(self) -> CanonicalMatchup:
+        """The same pairing with the sides swapped.
+
+        A neutral-site game has no true home team, so sources disagree about
+        which side is home. A caller holding a set of canonical ids uses this
+        to recognize its own game under the other orientation.
+        """
+        return CanonicalMatchup(
+            sport=self.sport,
+            season=self.season,
+            week=self.week,
+            away_team_id=self.home_team_id,
+            home_team_id=self.away_team_id,
+        )
+
     @property
     def game_id(self) -> str:
         return make_game_id(

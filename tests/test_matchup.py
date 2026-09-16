@@ -40,3 +40,18 @@ def test_resolve_matchup_preserves_fail_loud_resolution():
             away_name="Fictional Aardvarks",
             home_name="Miami Dolphins",
         )
+
+
+def test_flipped_swaps_the_sides_and_the_id():
+    matchup = CanonicalMatchup(
+        sport=Sport.NFL,
+        season=2025,
+        week=3,
+        away_team_id="BUF",
+        home_team_id="MIA",
+    )
+    flipped = matchup.flipped()
+
+    assert (flipped.away_team_id, flipped.home_team_id) == ("MIA", "BUF")
+    assert flipped.game_id == "nfl-2025-03-MIA-at-BUF"
+    assert flipped.flipped().game_id == matchup.game_id
