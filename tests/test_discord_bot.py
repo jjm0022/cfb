@@ -1758,3 +1758,39 @@ def test_planning_says_so_when_there_is_nothing_left_to_poll(records):
     assert planned["extra"]["jobs"] == 0
     assert planned["extra"]["next_poll"] is None
     assert "no kickoff polls" in planned["message"]
+
+
+@pytest.mark.asyncio
+async def test_monitor_refresh_records_recommendation_history(settings, monkeypatch):
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+    snapshot = RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 9, 2, tzinfo=UTC),
+        edges=(
+            Edge(
+                game_id="nfl-2026-01-BUF-at-MIA",
+                side=Side.HOME,
+                delta=3.0,
+                tier=Tier.STRONG,
+                league_spread=-3.0,
+                market_spread=-6.0,
+                rationale="league -3.0 vs market -6.0: 3.0 pts toward home",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "pickem.discord_bot.refresh_recommendations", lambda *args, **kwargs: snapshot
+    )
+    bot = PickemBot(settings, scheduler=FakeScheduler())
+    bot._load_state = lambda _scope: AutomationState()
+    bot._save_state = lambda _scope, _state: None
+
+    result = await bot._monitor_for(scope).refresh()
+
+    assert result.error is None
+    with Store(settings.db) as store:
+        store.init_schema()
+        history = store.recommendation_history(["nfl-2026-01-BUF-at-MIA"])
+    assert [(r.side, r.tier, r.source) for r in history] == [(Side.HOME, Tier.STRONG, "monitor")]

@@ -16,7 +16,19 @@ import duckdb
 from loguru import logger
 from pydantic import BaseModel
 
-from pickem.models import Edge, Game, LeagueLine, MarketLine, Sport
+from pickem.models import (
+    HISTORY_REPORT,
+    Edge,
+    Game,
+    LeagueLine,
+    MarketLine,
+    PoolPick,
+    PoolResult,
+    RecommendationRecord,
+    Side,
+    Sport,
+    Tier,
+)
 
 
 class StoredDataset(BaseModel):
@@ -70,6 +82,20 @@ def _market_line_from_row(row: tuple) -> MarketLine:
         spread_home=row[3],
         total=row[4],
         captured_at=row[5],
+    )
+
+
+def _history_from_row(row: tuple) -> RecommendationRecord:
+    return RecommendationRecord(
+        game_id=row[0],
+        sport=Sport(row[1]),
+        season=row[2],
+        week=row[3],
+        side=Side(row[4]),
+        tier=Tier(row[5]),
+        edge_points=row[6],
+        generated_at=row[7],
+        source=row[8],
     )
 
 
@@ -410,6 +436,187 @@ class Store:
             """,
             [season, week],
         ).fetchall()
+
+    def replace_pool_week(
+        self,
+        season: int,
+        pool_week: int,
+        results: Sequence[PoolResult],
+        picks: Sequence[PoolPick],
+    ) -> None:
+        """Replace one pool week's standings and picks in one transaction.
+
+        A re-import must never leave a week half old and half new.
+        """
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            for table in ("pool_picks", "pool_results"):
+                self._con.execute(
+                    f"DELETE FROM {table} WHERE season = ? AND pool_week = ?", [season, pool_week]
+                )
+            self._executemany(
+                "INSERT INTO pool_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (r.season, r.pool_week, r.entry_id, r.name, r.rank, r.points, r.ytd,
+                     r.tiebreak, r.imported_at)
+                    for r in results
+                ],
+            )
+            self._executemany(
+                "INSERT INTO pool_picks VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (p.season, p.pool_week, p.entry_id, p.game_id, p.cbs_event_id,
+                     p.side.value if p.side is not None else None, p.cbs_correct)
+                    for p in picks
+                ],
+            )
+        except Exception:
+            self._con.execute("ROLLBACK")
+            raise
+        else:
+            self._con.execute("COMMIT")
+
+    def pool_weeks(self, season: int) -> list[int]:
+        rows = self._con.execute(
+            "SELECT DISTINCT pool_week FROM pool_results WHERE season = ? ORDER BY pool_week",
+            [season],
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def pool_results(self, season: int, pool_week: int) -> list[PoolResult]:
+        rows = self._con.execute(
+            """
+            SELECT season, pool_week, entry_id, name, rank, points, ytd, tiebreak, imported_at
+            FROM pool_results WHERE season = ? AND pool_week = ? ORDER BY rank, name
+            """,
+            [season, pool_week],
+        ).fetchall()
+        return [
+            PoolResult(
+                season=r[0], pool_week=r[1], entry_id=r[2], name=r[3], rank=r[4], points=r[5],
+                ytd=r[6], tiebreak=r[7], imported_at=r[8],
+            )
+            for r in rows
+        ]
+
+    def pool_picks(self, season: int, pool_week: int) -> list[PoolPick]:
+        rows = self._con.execute(
+            """
+            SELECT season, pool_week, entry_id, game_id, cbs_event_id, side, cbs_correct
+            FROM pool_picks WHERE season = ? AND pool_week = ? ORDER BY entry_id, game_id
+            """,
+            [season, pool_week],
+        ).fetchall()
+        return [
+            PoolPick(
+                season=r[0], pool_week=r[1], entry_id=r[2], game_id=r[3], cbs_event_id=r[4],
+                side=Side(r[5]) if r[5] is not None else None, cbs_correct=r[6],
+            )
+            for r in rows
+        ]
+
+    def _row_count(self, table: str) -> int:
+        return self._con.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+
+    def append_recommendation_history(self, records: Sequence[RecommendationRecord]) -> int:
+        """Append model decisions and return how many were new.
+
+        An identical (game, time, source) row is ignored, so replaying a
+        backfill or a refresh is safe.
+        """
+        before = self._row_count("recommendation_history")
+        self._executemany(
+            "INSERT OR IGNORE INTO recommendation_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (r.game_id, r.sport.value, r.season, r.week, r.side.value, r.tier.value,
+                 r.edge_points, r.generated_at, r.source)
+                for r in records
+            ],
+        )
+        return self._row_count("recommendation_history") - before
+
+    def recommendation_history(self, game_ids: Sequence[str]) -> list[RecommendationRecord]:
+        if not game_ids:
+            return []
+        rows = self._con.execute(
+            """
+            SELECT game_id, sport, season, week, side, tier, edge_points, generated_at, source
+            FROM recommendation_history WHERE list_contains(?, game_id)
+            ORDER BY game_id, generated_at, source
+            """,
+            [list(game_ids)],
+        ).fetchall()
+        return [_history_from_row(row) for row in rows]
+
+    def games_by_ids(self, game_ids: Sequence[str]) -> list[Game]:
+        if not game_ids:
+            return []
+        rows = self._con.execute(
+            """
+            SELECT game_id, sport, season, week, kickoff_utc, home_team_id, away_team_id,
+                   home_score, away_score
+            FROM games WHERE list_contains(?, game_id) ORDER BY kickoff_utc, game_id
+            """,
+            [list(game_ids)],
+        ).fetchall()
+        return [_game_from_row(row) for row in rows]
+
+    def league_lines_by_ids(self, game_ids: Sequence[str]) -> list[LeagueLine]:
+        if not game_ids:
+            return []
+        rows = self._con.execute(
+            """
+            SELECT game_id, season, week, spread_home, posted_at
+            FROM league_lines WHERE list_contains(?, game_id) ORDER BY game_id
+            """,
+            [list(game_ids)],
+        ).fetchall()
+        return [_league_line_from_row(row) for row in rows]
+
+    def market_lines_by_ids(self, game_ids: Sequence[str]) -> list[MarketLine]:
+        if not game_ids:
+            return []
+        rows = self._con.execute(
+            """
+            SELECT game_id, source, book, spread_home, total, captured_at
+            FROM lines WHERE list_contains(?, game_id) ORDER BY game_id, captured_at, book
+            """,
+            [list(game_ids)],
+        ).fetchall()
+        return [_market_line_from_row(row) for row in rows]
+
+    def league_line_count(self, sport: Sport, season: int, week: int) -> int:
+        return self._con.execute(
+            """
+            SELECT count(*) FROM league_lines l JOIN games g USING (game_id)
+            WHERE g.sport = ? AND l.season = ? AND l.week = ?
+            """,
+            [sport.value, season, week],
+        ).fetchone()[0]
+
+    def games_for_season(self, season: int) -> list[Game]:
+        rows = self._con.execute(
+            """
+            SELECT game_id, sport, season, week, kickoff_utc, home_team_id, away_team_id,
+                   home_score, away_score
+            FROM games WHERE season = ? ORDER BY kickoff_utc, game_id
+            """,
+            [season],
+        ).fetchall()
+        return [_game_from_row(row) for row in rows]
+
+    def pick_batches(self, season: int) -> list[RecommendationRecord]:
+        """Every recorded `report` batch for a season, as history rows."""
+        rows = self._con.execute(
+            """
+            SELECT p.game_id, g.sport, p.season, p.week, p.side, p.tier, p.edge_points,
+                   p.generated_at, ?
+            FROM picks p JOIN games g USING (game_id)
+            WHERE p.season = ? ORDER BY p.generated_at, p.game_id
+            """,
+            [HISTORY_REPORT, season],
+        ).fetchall()
+        return [_history_from_row(row) for row in rows]
 
     def automation_state(self, sport: Sport, season: int, week: int) -> AutomationState:
         row = self._con.execute(
