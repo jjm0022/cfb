@@ -17,6 +17,7 @@ from pickem.discord_bot import (
     PickemBot,
     ScopeStatus,
     _format_recommendations,
+    _format_refresh_results,
     _format_status,
     build_schedule,
     resolve_pickem_scopes,
@@ -492,6 +493,55 @@ def test_status_splits_long_pick_lists_within_discord_field_limits():
     rendered = "\n".join(field.value for field in embed.fields)
 
     assert len(embed.fields) > 2
+    assert all(len(field.value) <= 1024 for field in embed.fields)
+    assert "rationale 0:" in rendered
+    assert "rationale 11:" in rendered
+
+
+def test_refresh_splits_long_pick_lists_within_discord_field_limits():
+    # /refresh --details on a real CFB slate sent one field per scope and
+    # Discord rejected the whole message with "Must be 1024 or fewer in
+    # length", losing the refresh's output entirely.
+    games = tuple(
+        Game(
+            game_id=f"nfl-2026-01-AWAY{index}-at-HOME{index}",
+            sport=Sport.NFL,
+            season=2026,
+            week=1,
+            kickoff_utc=datetime(2026, 9, 10, tzinfo=UTC),
+            home_team_id=f"HOME{index}",
+            away_team_id=f"AWAY{index}",
+        )
+        for index in range(12)
+    )
+    snapshot = RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=1,
+        generated_at=datetime(2026, 9, 1, tzinfo=UTC),
+        edges=tuple(
+            Edge(
+                game_id=game.game_id,
+                side=Side.HOME,
+                delta=3.0,
+                tier=Tier.STRONG,
+                league_spread=-3.0,
+                market_spread=-6.0,
+                rationale=f"rationale {index}: " + "market evidence " * 24,
+            )
+            for index, game in enumerate(games)
+        ),
+    )
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+
+    embed = _format_refresh_results(
+        ((scope, RefreshResult(changed=True, snapshot=snapshot)),),
+        games_by_scope={scope: games},
+        details=True,
+    )
+    rendered = "\n".join(field.value for field in embed.fields)
+
+    assert len(embed.fields) > 1
     assert all(len(field.value) <= 1024 for field in embed.fields)
     assert "rationale 0:" in rendered
     assert "rationale 11:" in rendered

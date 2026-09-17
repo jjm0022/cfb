@@ -661,7 +661,18 @@ def _format_refresh_results(
             if result.changed
             else "The latest odds refresh completed with no recommendation changes."
         )
-        embed.add_field(name=_scope_description(scope), value=value, inline=False)
+        # Split like the status and notification embeds do. `details` prints a
+        # rationale per pick, which clears Discord's 1024-character field limit
+        # on a full board -- and Discord rejects the whole message, so an
+        # unsplit field loses the refresh's output entirely rather than
+        # truncating it.
+        name = _scope_description(scope)
+        for index, chunk in enumerate(_field_value_chunks(value), start=1):
+            embed.add_field(
+                name=name if index == 1 else f"{name} (cont. {index})",
+                value=chunk,
+                inline=False,
+            )
     return embed
 
 
