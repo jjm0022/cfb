@@ -31,6 +31,9 @@ class RefreshResult:
     changed: bool
     snapshot: RecommendationSnapshot | None = None
     error: BaseException | None = None
+    # The games behind `changed`, so a caller can report exactly what moved
+    # instead of re-deriving it or falling back to the whole board.
+    changed_game_ids: tuple[str, ...] = ()
 
 
 class RecommendationChange(str):
@@ -358,7 +361,12 @@ class RecommendationMonitor:
             raise
         except Exception as notification_error:
             self._log_refresh_failure(notification_error, phase="change_notification")
-            return RefreshResult(changed, snapshot=snapshot, error=notification_error)
+            return RefreshResult(
+                changed,
+                snapshot=snapshot,
+                error=notification_error,
+                changed_game_ids=changed_game_ids,
+            )
 
         try:
             await _invoke(self._save_state, self._scope, next_state)
@@ -368,7 +376,12 @@ class RecommendationMonitor:
             raise
         except Exception as error:
             persistence_result = await self._record_persistence_failure(error)
-            return RefreshResult(changed, snapshot=snapshot, error=persistence_result.error)
+            return RefreshResult(
+                changed,
+                snapshot=snapshot,
+                error=persistence_result.error,
+                changed_game_ids=changed_game_ids,
+            )
 
         count = len(snapshot.edges)
         logger.bind(
@@ -381,7 +394,7 @@ class RecommendationMonitor:
             f"{count} edge{'' if count == 1 else 's'}, "
             f"{'recommendations changed' if changed else 'unchanged'}"
         )
-        return RefreshResult(changed, snapshot=snapshot)
+        return RefreshResult(changed, snapshot=snapshot, changed_game_ids=changed_game_ids)
 
     async def _record_history_for(self, snapshot: RecommendationSnapshot) -> None:
         """Keep what the model said before anything else can fail.

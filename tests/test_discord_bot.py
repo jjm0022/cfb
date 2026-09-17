@@ -10,21 +10,37 @@ import discord
 import pytest
 from loguru import logger
 
-from pickem.automation.monitor import MonitorScope, RecommendationMonitor, RefreshResult
+from pickem.automation.monitor import (
+    MonitorScope,
+    RecommendationChange,
+    RecommendationMonitor,
+    RefreshResult,
+)
 from pickem.automation.poll_plan import PollInstant
 from pickem.discord_bot import (
     DiscordSettings,
+    LastChange,
     PickemBot,
     ScopeStatus,
     _format_recommendations,
     _format_refresh_results,
     _format_status,
+    _last_recommendation_change,
     build_schedule,
     resolve_pickem_scopes,
     schedule_kickoff_polls,
     send_dm,
 )
-from pickem.models import Edge, Game, LeagueLine, Side, Sport, Tier
+from pickem.models import (
+    HISTORY_MONITOR,
+    Edge,
+    Game,
+    LeagueLine,
+    RecommendationRecord,
+    Side,
+    Sport,
+    Tier,
+)
 from pickem.operations.recommendations import RecommendationSnapshot
 from pickem.store.db import AutomationState, Store
 
@@ -1844,3 +1860,141 @@ async def test_monitor_refresh_records_recommendation_history(settings, monkeypa
         store.init_schema()
         history = store.recommendation_history(["nfl-2026-01-BUF-at-MIA"])
     assert [(r.side, r.tier, r.source) for r in history] == [(Side.HOME, Tier.STRONG, "monitor")]
+
+
+def test_refresh_embed_shows_only_the_picks_that_changed():
+    # The DM already filters to the changed games; the command's own embed
+    # printed the whole board, so one refresh read as two different answers.
+    changed = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    steady = _nfl_game("DAL", "NYG", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    snapshot = _snapshot_for(
+        _edge(changed.game_id, rationale="market moved two points"),
+        _edge(steady.game_id, rationale="unchanged since Tuesday"),
+    )
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+
+    embed = _format_refresh_results(
+        (
+            (
+                scope,
+                RefreshResult(
+                    changed=True,
+                    snapshot=snapshot,
+                    changed_game_ids=(changed.game_id,),
+                ),
+            ),
+        ),
+        games_by_scope={scope: (changed, steady)},
+    )
+    rendered = "\n".join(field.value for field in embed.fields)
+
+    assert "Miami Dolphins" in rendered
+    assert "Giants" not in rendered
+
+
+def test_refresh_embed_names_the_last_change_when_nothing_changed():
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+
+    embed = _format_refresh_results(
+        ((scope, RefreshResult(changed=False)),),
+        last_change_by_scope={
+            scope: LastChange(
+                at=datetime(2026, 9, 16, 21, 18, tzinfo=UTC),
+                summary="LSU at Ole Miss ✅ Lean → 🔥 Strong",
+            )
+        },
+    )
+
+    assert "LSU at Ole Miss ✅ Lean → 🔥 Strong" in embed.fields[0].value
+    assert "5:18 PM" in embed.fields[0].value
+
+
+def test_refresh_embed_falls_back_when_no_change_was_ever_recorded():
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+
+    embed = _format_refresh_results(((scope, RefreshResult(changed=False)),))
+
+    assert embed.fields[0].value == (
+        "The latest odds refresh completed with no recommendation changes."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_command_refresh_reports_in_its_reply_without_also_dming(settings):
+    # The command's reply already carries the change. A DM as well meant two
+    # messages for one refresh.
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    _store_slate(settings, (game,))
+    snapshot = _snapshot_for(_edge(game.game_id))
+    sent: list[object] = []
+    bot = PickemBot(
+        settings,
+        FakeMonitor(RefreshResult(changed=True, snapshot=snapshot)),
+        scheduler=FakeScheduler(),
+    )
+
+    async def capture_dm(message=None, *, embed=None):
+        sent.append(embed if embed is not None else message)
+
+    bot._send_owner_dm = capture_dm
+    await bot._send_monitor_notification(
+        MonitorScope(Sport.NFL, 2026, 1),
+        RecommendationChange("Recommendations changed: x", snapshot, (game.game_id,)),
+    )
+    assert len(sent) == 1, "a scheduled refresh still DMs"
+
+    async with bot._command_refresh():
+        await bot._send_monitor_notification(
+            MonitorScope(Sport.NFL, 2026, 1),
+            RecommendationChange("Recommendations changed: x", snapshot, (game.game_id,)),
+        )
+
+    assert len(sent) == 1, "a command refresh reports in its reply instead"
+    await bot.close()
+
+
+def test_last_recommendation_change_reads_the_latest_flip_from_history(settings):
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    steady = _nfl_game("DAL", "NYG", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    _store_slate(settings, (game, steady))
+    first = datetime(2026, 9, 11, 14, tzinfo=UTC)
+
+    def record(game_id, side, tier, at):
+        return RecommendationRecord(
+            game_id=game_id,
+            sport=Sport.NFL,
+            season=2026,
+            week=1,
+            side=side,
+            tier=tier,
+            edge_points=1.0,
+            generated_at=at,
+            source=HISTORY_MONITOR,
+        )
+
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.append_recommendation_history(
+            [
+                # A game's first record is a baseline, never a change.
+                record(steady.game_id, Side.HOME, Tier.LEAN, first),
+                record(game.game_id, Side.HOME, Tier.COINFLIP, first),
+                record(game.game_id, Side.HOME, Tier.COINFLIP, first + timedelta(hours=1)),
+                record(game.game_id, Side.HOME, Tier.STRONG, first + timedelta(hours=2)),
+            ]
+        )
+
+    last = _last_recommendation_change(settings, MonitorScope(Sport.NFL, 2026, 1))
+
+    assert last is not None
+    assert last.at == first + timedelta(hours=2)
+    assert last.summary == (
+        "Buffalo Bills at Miami Dolphins went 🪙 Coinflip home → 🔥 Strong Miami Dolphins"
+    )
+
+
+def test_last_recommendation_change_is_none_before_any_flip(settings):
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    _store_slate(settings, (game,))
+
+    assert _last_recommendation_change(settings, MonitorScope(Sport.NFL, 2026, 1)) is None
