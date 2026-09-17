@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -440,6 +441,47 @@ def _stored_week_details(
     return tuple(dataset.games), latest_market
 
 
+def _last_recommendation_change(
+    settings: DiscordSettings, scope: MonitorScope
+) -> LastChange | None:
+    """Return the most recent pick change this week, from stored history.
+
+    Read out of `recommendation_history` rather than tracked in automation
+    state: history already records every recommendation the bot made, so the
+    answer survives a restart and needs no new column. A game's first record
+    is its baseline, not a change.
+    """
+    _ensure_store_parent(settings.db)
+    with Store(settings.db) as store:
+        store.init_schema()
+        dataset = store.load_week(scope.sport, scope.season, scope.week)
+        games = {game.game_id: game for game in dataset.games}
+        records = store.recommendation_history(list(games))
+    latest: tuple[datetime, str] | None = None
+    previous: dict[str, tuple[Side, Tier]] = {}
+    # `recommendation_history` is ordered by game, then time.
+    for record in records:
+        pick = (record.side, record.tier)
+        was = previous.get(record.game_id)
+        previous[record.game_id] = pick
+        if was is None or was == pick:
+            continue
+        if latest is not None and record.generated_at <= latest[0]:
+            continue
+        game = games[record.game_id]
+        resolver = TeamResolver.default()
+        away = resolver.display_name(game.away_team_id, game.sport)
+        home = resolver.display_name(game.home_team_id, game.sport)
+        moved_to = _TIER_BADGES[pick[1]]
+        moved_from = _TIER_BADGES[was[1]]
+        side = away if pick[0] is Side.AWAY else home
+        latest = (
+            record.generated_at,
+            f"{away} at {home} went {moved_from} {was[0].value} → {moved_to} {side}",
+        )
+    return None if latest is None else LastChange(at=latest[0], summary=latest[1])
+
+
 def _format_timestamp(value: datetime | None) -> str:
     if value is None:
         return "never"
@@ -621,11 +663,55 @@ def _format_status(
     )
 
 
+@dataclass(frozen=True)
+class LastChange:
+    """When a scope's picks last moved, and what moved."""
+
+    at: datetime
+    summary: str
+
+
+def _changed_only(
+    snapshot: Any | None, game_ids: tuple[str, ...]
+) -> tuple[Any | None, tuple[str, ...]]:
+    """Narrow a snapshot to the games whose pick actually changed.
+
+    The refresh reply and the change DM answer the same question, so they
+    report the same games. An empty `game_ids` leaves the snapshot alone: an
+    adapter that reports `changed` without naming games still gets a reply.
+    """
+    if snapshot is None or not game_ids:
+        return snapshot, game_ids
+    return replace(
+        snapshot,
+        edges=tuple(edge for edge in snapshot.edges if edge.game_id in set(game_ids)),
+    ), game_ids
+
+
+def _format_changed_picks(
+    result: RefreshResult, games: tuple[Game, ...], *, details: bool
+) -> str:
+    snapshot, changed_ids = _changed_only(result.snapshot, result.changed_game_ids)
+    if changed_ids:
+        games = tuple(game for game in games if game.game_id in set(changed_ids))
+    return _format_recommendations(snapshot, games, details=details)
+
+
+def _format_unchanged(last_change: LastChange | None) -> str:
+    if last_change is None:
+        return "The latest odds refresh completed with no recommendation changes."
+    return (
+        f"No changes since {_format_timestamp(last_change.at)}, "
+        f"when {last_change.summary}."
+    )
+
+
 def _format_refresh_results(
     results: tuple[tuple[MonitorScope, RefreshResult], ...],
     error: BaseException | None = None,
     *,
     games_by_scope: dict[MonitorScope, tuple[Game, ...]] | None = None,
+    last_change_by_scope: dict[MonitorScope, LastChange | None] | None = None,
     details: bool = False,
 ) -> discord.Embed:
     if error is not None:
@@ -653,13 +739,11 @@ def _format_refresh_results(
         value = (
             f"Refresh failed: {result.error}"
             if result.error is not None
-            else _format_recommendations(
-                result.snapshot,
-                (games_by_scope or {}).get(scope, ()),
-                details=details,
+            else _format_changed_picks(
+                result, (games_by_scope or {}).get(scope, ()), details=details
             )
             if result.changed
-            else "The latest odds refresh completed with no recommendation changes."
+            else _format_unchanged((last_change_by_scope or {}).get(scope))
         )
         # Split like the status and notification embeds do. `details` prints a
         # rationale per pick, which clears Discord's 1024-character field limit
@@ -701,6 +785,11 @@ class PickemBot(commands.Bot):
         self._injected_monitor = monitor
         self._monitors: dict[MonitorScope, RecommendationMonitor] = {}
         self._refresh_lock = asyncio.Lock()
+        # Set while a slash command is driving a refresh. The command reports
+        # the change in its own reply, so the monitor's DM would be the same
+        # news twice. Scheduled and kickoff-poll refreshes have no reply, so
+        # they keep DMing.
+        self._reporting_in_reply = False
         command_context = app_commands.AppCommandContext(
             guild=False, dm_channel=True, private_channel=False
         )
@@ -819,9 +908,28 @@ class PickemBot(commands.Bot):
             self._monitors[scope] = monitor
         return monitor
 
+    @asynccontextmanager
+    async def _command_refresh(self) -> AsyncIterator[None]:
+        """Route change notifications into the command's reply, not a DM."""
+        self._reporting_in_reply = True
+        try:
+            yield
+        finally:
+            self._reporting_in_reply = False
+
     async def _send_monitor_notification(self, scope: MonitorScope, message: str) -> None:
         if not message.startswith("Recommendations changed:"):
             await self._send_owner_dm(message)
+            return
+        if self._reporting_in_reply:
+            # The command's reply carries these picks; a DM would repeat them.
+            # Failures still DM above: those are news whatever triggered them.
+            logger.bind(
+                event="change_dm_suppressed",
+                sport=scope.sport.value,
+                season=scope.season,
+                week=scope.week,
+            ).debug("change reported in the command reply instead of a DM")
             return
         games, _ = _stored_week_details(self.settings, scope)
         if isinstance(message, RecommendationChange):
@@ -1004,7 +1112,8 @@ class PickemBot(commands.Bot):
             )
             await interaction.response.defer()
             try:
-                results = await self._refresh_scopes(season, week)
+                async with self._command_refresh():
+                    results = await self._refresh_scopes(season, week)
             except Exception as error:
                 logger.bind(
                     event="refresh_failed",
@@ -1023,6 +1132,11 @@ class PickemBot(commands.Bot):
                         scope: _stored_week_details(self.settings, scope)[0]
                         for scope, result in results
                         if result.changed
+                    },
+                    last_change_by_scope={
+                        scope: _last_recommendation_change(self.settings, scope)
+                        for scope, result in results
+                        if not result.changed and result.error is None
                     },
                     details=details,
                 )
