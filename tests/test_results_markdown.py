@@ -4,7 +4,7 @@ import pytest
 from results_helpers import KICK, imported_store
 
 from pickem.models import HISTORY_MONITOR, Game, RecommendationRecord, Side, Sport, Tier
-from pickem.report.results import build_results_report, findings, grade_game
+from pickem.report.results import BASELINES, Strategy, build_results_report, findings, grade_game
 from pickem.report.results_markdown import render_results_report
 
 
@@ -62,6 +62,7 @@ def test_rendered_report_has_every_section_and_the_game_rows(store):
         "### Closing-line value (our picks)",
         "### Against the field",
         "## What the data says",
+        "## What the terms mean",
     ):
         assert heading in text
     assert "**Jota: 16 pts, rank 17 of 4**" in text
@@ -71,3 +72,12 @@ def test_rendered_report_has_every_section_and_the_game_rows(store):
     assert "TEM (coinflip)" in psu_row
     assert "differs from model" in psu_row
     assert "Games with no recommendation stored before kickoff" in text
+
+
+def test_glossary_defines_every_strategy_the_report_grades(store):
+    report = build_results_report(store, season=2026, pool_week=2, entry_name="Jota")
+    text = render_results_report(report, generated_at=datetime(2026, 9, 15, 12, tzinfo=UTC))
+    glossary = text.split("## What the terms mean", 1)[1]
+
+    for strategy in (Strategy.US, *BASELINES):
+        assert f"**{strategy.value}**" in glossary
