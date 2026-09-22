@@ -13,8 +13,14 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
+# Saved CBS pages and the reports built from them live on the NAS, so a page
+# saved from any machine is readable here without an rsync. The live database
+# stays local on purpose: the share is CIFS, which does not enforce DuckDB's
+# lock — two writers can open it at once and corrupt it with no error.
+NAS_DIR = Path("/mnt/nas/Betting/pickem")
 DEFAULT_DB = Path("data/pickem.duckdb")
-DEFAULT_RESULTS_DIR = Path("data/cbs/results")
+DEFAULT_RESULTS_DIR = NAS_DIR / "results"
+DEFAULT_WEEKS_DIR = NAS_DIR / "weeks"
 # The owner's display name on the CBS standings page.
 DEFAULT_ENTRY_NAME = "Jota"
 

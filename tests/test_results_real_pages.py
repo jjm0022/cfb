@@ -1,18 +1,19 @@
 """Checks against the real saved standings pages.
 
-`data/` is gitignored, so these skip anywhere the pages are not present.
+The pages are not in the repo, so these skip anywhere they are not present.
+``PAGES`` follows the configured results directory rather than naming a path,
+so moving that location cannot silently turn these tests into skips.
 """
-
-from pathlib import Path
 
 import pytest
 
 from pickem.backtest.stats import Result, grade_pick
+from pickem.config import DEFAULT_RESULTS_DIR
 from pickem.ingest.cbs_results import parse_cbs_results_html
 from pickem.models import Side
 from pickem.resolve.resolver import TeamResolver
 
-PAGES = Path("data/cbs/results")
+PAGES = DEFAULT_RESULTS_DIR
 
 pytestmark = pytest.mark.skipif(
     not (PAGES / "week2.html").exists(), reason="real CBS pages are local-only"
