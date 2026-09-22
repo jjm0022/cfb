@@ -1,6 +1,6 @@
 """CBS prints its own team abbreviations on the Weekly Standings page.
 
-Pinned from the saved 2026 pool week 1-2 pages. Several already resolve through
+Pinned from the saved 2026 pool week 1-3 pages. Several already resolve through
 existing spellings; they are pinned too, so a later table edit cannot break them.
 """
 
@@ -37,6 +37,12 @@ CBS_CFB = {
     "TULSA": "TLSA",
     "BAMA": "BAMA",
     "UK": "UK",
+    "MICHST": "MSU",
+    "NCST": "NCSU",
+    "NWEST": "NU",
+    "RUT": "RUTG",
+    "VANDY": "VAN",
+    "VATECH": "VT",
 }
 
 
