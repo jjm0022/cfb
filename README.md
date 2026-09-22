@@ -70,9 +70,16 @@ Optional environment variables:
 | `PICKEM_LOG_LEVEL` | `DEBUG` | Level for the file sinks |
 | `PICKEM_LOG_CONSOLE` | `WARNING` | Level for the terminal; `off` silences it |
 
-The database defaults to `data/pickem.duckdb` and is created on first write.
-Every command takes `--db` if you want a different path (use it for rehearsals —
-see the weekly workflow below).
+Saved CBS pages, the reports built from them, and backups live on the NAS at
+`/mnt/nas/Betting/pickem/` (`results/`, `weeks/`, `backups/`), so a page saved
+from any machine is readable here without an rsync.
+
+The database is the exception: it defaults to `data/pickem.duckdb`, local to
+the repo, and is created on first write. **Do not move it to the NAS.** The
+share is CIFS, which does not enforce DuckDB's lock — two processes can open
+the same file for writing with no error and corrupt it. Every command takes
+`--db` if you want a different path (use it for rehearsals — see the weekly
+workflow below).
 
 ## Verify the install
 
@@ -110,7 +117,8 @@ has a side, not because it is expected to win.
 **Pool week ≠ league week.** The pool runs two boards per week — one CFB, one
 NFL — and their league week numbers differ, because the college season starts
 first. Pool week 2 was CFB week 2 *and* NFL week 1. **CLI flags take the league
-week**; the saved sheets under `data/cbs/weeks/` are named by the pool week.
+week**; the saved sheets under `/mnt/nas/Betting/pickem/weeks/` are named by
+the pool week.
 Translate before you type `--week`.
 
 **`report` writes.** Every `report` run records a pick batch in the `picks`
@@ -132,9 +140,10 @@ row can never be cleaned up.
 
 ```bash
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p data/backups
-cp -n data/pickem.duckdb "data/backups/pickem.${RUN_ID}.duckdb"
-sha256sum data/pickem.duckdb > "data/backups/pickem.${RUN_ID}.sha256"
+BACKUPS=/mnt/nas/Betting/pickem/backups
+mkdir -p "$BACKUPS"
+cp -n data/pickem.duckdb "$BACKUPS/pickem.${RUN_ID}.duckdb"
+sha256sum data/pickem.duckdb > "$BACKUPS/pickem.${RUN_ID}.sha256"
 ```
 
 ### 2. Capture the CBS sheet
@@ -142,7 +151,8 @@ sha256sum data/pickem.duckdb > "data/backups/pickem.${RUN_ID}.sha256"
 Two input paths, both offline — nothing in this tool fetches CBS:
 
 - **Saved page (preferred).** In the browser, save the CBS pick sheet as HTML to
-  e.g. `data/cbs/week2.html`, then pass `--html`. This path also gives real
+  e.g. `/mnt/nas/Betting/pickem/weeks/week2.html`, then pass `--html`. This
+  path also gives real
   kickoff times.
 - **Pasted text.** Copy the game list into a file, one game per line, away team
   first:
@@ -160,12 +170,13 @@ Two input paths, both offline — nothing in this tool fetches CBS:
 
 ```bash
 uv run pickem ingest-cbs --html \
-  --file data/cbs/week2.html \
+  --file /mnt/nas/Betting/pickem/weeks/week2.html \
   --sport cfb --season 2026 --week 2
 ```
 
 For a whole pool week, `scripts/import-cbs-week.sh 3` does both boards from
-`data/cbs/weeks/week3.html`: CFB week 3 and NFL week 2 (`--sport`, `--season`,
+`/mnt/nas/Betting/pickem/weeks/week3.html`: CFB week 3 and NFL week 2
+(`--sport`, `--season`,
 `--file`, `--db` override the defaults).
 
 Omit `--file` to read the pasted block from stdin. Re-ingesting a week is safe:
@@ -198,7 +209,7 @@ uv run pickem preflight \
   --max-age-minutes 60 --min-books 3 \
 && uv run pickem report \
   --sport cfb --season 2026 --week 2 \
-  --out data/cbs/weeks/week2-cfb-v1-picks.md
+  --out /mnt/nas/Betting/pickem/weeks/week2-cfb-v1-picks.md
 ```
 
 `preflight` is read-only. It checks the exact game and league-line counts, that
@@ -237,7 +248,8 @@ will contain more games than your CBS slate — that count mismatch is expected.
 
 After every game in the pool week is final, open CBS **Standings → Weekly**,
 pick the week, let the page finish loading, and save it (Save Page As →
-"Webpage, Complete" or "HTML only") as `data/cbs/results/week<N>.html`, where
+"Webpage, Complete" or "HTML only") as
+`/mnt/nas/Betting/pickem/results/week<N>.html`, where
 N is the **pool** week. Then:
 
 ```bash
@@ -246,7 +258,8 @@ uv run pickem import-results --season 2026 --pool-week 2
 
 It links every game to the stored boards, checks CBS's green and red marks
 against the scores and lines, and refuses the whole page if anything disagrees.
-It then writes `data/cbs/results/week2-report.md` and DMs a summary. Use
+It then writes `/mnt/nas/Betting/pickem/results/week2-report.md` and DMs a
+summary. Use
 `--no-notify` to skip the DM. If the DM fails, the command exits 2 but keeps the
 import and the report; `uv run pickem results-report --season 2026 --notify`
 resends it.

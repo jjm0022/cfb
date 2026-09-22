@@ -13,14 +13,48 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
+# Saved CBS pages and the reports built from them live on the NAS, so a page
+# saved from any machine is readable here without an rsync. The live database
+# stays local on purpose: the share is CIFS, which does not enforce DuckDB's
+# lock — two writers can open it at once and corrupt it with no error.
+NAS_MOUNT = Path("/mnt/nas")
+NAS_DIR = NAS_MOUNT / "Betting" / "pickem"
 DEFAULT_DB = Path("data/pickem.duckdb")
-DEFAULT_RESULTS_DIR = Path("data/cbs/results")
+DEFAULT_RESULTS_DIR = NAS_DIR / "results"
+DEFAULT_WEEKS_DIR = NAS_DIR / "weeks"
 # The owner's display name on the CBS standings page.
 DEFAULT_ENTRY_NAME = "Jota"
 
 # usecwd so the search starts where the command was run, not where this module
 # happens to be installed.
 load_dotenv(find_dotenv(usecwd=True), override=False)
+
+
+def nas_unavailable(path: Path) -> str | None:
+    """Say why a path on the share cannot be used, or ``None`` if it can.
+
+    A missing file on a mounted share is an ordinary missing file and returns
+    ``None`` — the caller's own message is the useful one. This exists for the
+    other case, where the share itself is gone: `mkdir -p` under a cold mount
+    can otherwise build a local tree that shadows the real one, and a report
+    written there disappears from view the moment the share comes back.
+
+    Reads the module globals on each call so a caller can repoint them.
+    """
+    nas_dir = NAS_DIR
+    if path != nas_dir and nas_dir not in path.parents:
+        return None
+    try:
+        if nas_dir.is_dir():
+            return None
+    except OSError:
+        pass  # A stalled share raises rather than answering; treat it as gone.
+    return (
+        f"{nas_dir} is not available — the NAS is offline or not mounted, so "
+        f"reading or writing there would not reach it. Check the mount with "
+        f"`mountpoint {NAS_MOUNT}`, then retry; pass an explicit path to work "
+        f"somewhere else in the meantime."
+    )
 
 
 def _required(name: str) -> str:

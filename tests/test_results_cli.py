@@ -80,6 +80,26 @@ def test_unparseable_page_exits_1(workspace):
     assert "no Weekly Standings table" in result.output
 
 
+def test_an_offline_nas_is_named_as_the_cause_and_writes_nothing(workspace, monkeypatch, tmp_path):
+    db, _ = workspace
+    # A results dir on a share that is not mounted: the parent does not exist.
+    mount = tmp_path / "mnt" / "nas"
+    nas_dir = mount / "Betting" / "pickem"
+    monkeypatch.setattr("pickem.config.NAS_MOUNT", mount)
+    monkeypatch.setattr("pickem.config.NAS_DIR", nas_dir)
+
+    result = runner.invoke(app, [
+        "import-results", "--season", "2026", "--pool-week", "2", "--db", str(db),
+        "--out-dir", str(nas_dir / "results"), "--no-notify",
+    ])
+
+    assert result.exit_code == 1
+    assert "not available" in result.output
+    assert str(mount) in result.output
+    # The guard must run before mkdir -p builds a tree shadowing the real share.
+    assert not nas_dir.exists()
+
+
 def test_non_utf8_page_exits_1_without_writing(workspace):
     db, results = workspace
     (results / "week2.html").write_bytes(b"\xff\xfe\x00bad")

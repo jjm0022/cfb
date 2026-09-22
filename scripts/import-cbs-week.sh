@@ -2,12 +2,13 @@
 # Import a pool week's CBS boards from the saved page into the pick'em database.
 #
 # Pool week N is CFB week N plus NFL week N-1; both boards live on one saved
-# page, data/cbs/weeks/weekN.html. Each league is ingested separately so a
-# board CBS has not posted yet fails alone without blocking the other.
+# page, <weeks-dir>/weekN.html on the NAS. Each league is ingested separately
+# so a board CBS has not posted yet fails alone without blocking the other.
 set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 database="$project_root/data/pickem.duckdb"
+weeks_dir="/mnt/nas/Betting/pickem/weeks"
 sports=(cfb nfl)
 season=""
 page=""
@@ -19,7 +20,7 @@ Usage: $0 POOL_WEEK [--sport cfb|nfl] [--season YEAR] [--file PATH] [--db PATH]
   POOL_WEEK  Pool week number; imports CFB week POOL_WEEK and NFL week POOL_WEEK-1
   --sport    Import only one league's board (default: both)
   --season   Season year (default: current season)
-  --file     Saved CBS page (default: data/cbs/weeks/weekPOOL_WEEK.html)
+  --file     Saved CBS page (default: /mnt/nas/Betting/pickem/weeks/weekPOOL_WEEK.html)
   --db       Database path (default: data/pickem.duckdb)
 EOF
 }
@@ -62,7 +63,7 @@ if [[ -z "$season" ]]; then
 fi
 [[ "$season" =~ ^[0-9]{4}$ ]] || { usage; exit 2; }
 
-page=${page:-"$project_root/data/cbs/weeks/week$pool_week.html"}
+page=${page:-"$weeks_dir/week$pool_week.html"}
 [[ -f "$page" ]] || {
     echo "Saved CBS page not found: $page" >&2
     exit 1
