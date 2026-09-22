@@ -339,6 +339,14 @@ def sync_results(
             typer.echo(f"synced {len(games)} {sport.value} games for {season}")
 
 
+def _require_reachable(path: Path) -> None:
+    """Fail with the share's own diagnosis before touching a path on the NAS."""
+    reason = config.nas_unavailable(path)
+    if reason is not None:
+        typer.secho(reason, fg="red", err=True)
+        raise typer.Exit(code=1)
+
+
 def _write_results_report(
     store: Store, season: int, pool_week: int, entry_name: str, out_dir: Path
 ) -> tuple[ResultsReport, Path]:
@@ -349,6 +357,7 @@ def _write_results_report(
     except ResultsReportError as exc:
         typer.secho(str(exc), fg="red", err=True)
         raise typer.Exit(code=1) from exc
+    _require_reachable(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"week{pool_week}-report.md"
     path.write_text(render_results_report(report, generated_at=datetime.now(tz=UTC)))
@@ -399,6 +408,7 @@ def import_results_cmd(
     """Import a saved Weekly Standings page, write its report, and DM a summary."""
     with run_context("cli:import-results", season=season, pool_week=pool_week, db=str(db)):
         source = file or out_dir / f"week{pool_week}.html"
+        _require_reachable(source)
         try:
             parsed = parse_cbs_results_html(source.read_text(encoding="utf-8"))
         except OSError as exc:
