@@ -42,8 +42,12 @@ uv run pickem results-report --season 2026 --pool-week N
 
 This rewrites `week-N.html` (and the Markdown), and `index.html` only when N
 is the latest imported week. Use it after a `dashboard not written` failure:
-the Tuesday job exits 3 in that case, and its Wednesday retry does not redo an
-imported week.
+the Tuesday job exits 3 in that case and DMs the owner the exact command to
+run, and its Wednesday retry does not redo an imported week (the week is
+already imported, so `pending-results-week` skips it).
+
+`--dashboard-dir` writes elsewhere for a one-off, but the DM link always
+points at `PICKEM_DASHBOARD_URL`, which serves the default directory.
 
 ## Turn serving off
 
