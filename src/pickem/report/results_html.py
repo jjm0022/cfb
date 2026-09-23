@@ -12,13 +12,21 @@ from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo
 
+from pickem.report.charts import RateRow, Series, rate_rows, trend_chart
 from pickem.report.results import (
+    AGAINST_FIELD_SHARE,
+    BACKTEST_TIER_RATES,
+    BASELINES,
+    GLOSSARY_INTRO,
     RESULT_MARKS,
+    STRATEGY_DEFINITIONS,
     WEEK_STRATEGIES,
     GradedGame,
     Record,
     ResultsReport,
     Strategy,
+    clv_summary,
+    findings,
     record_for,
 )
 
@@ -71,6 +79,43 @@ summary:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-of
 .chip-model{background:var(--chip-model)}
 .chip-field{background:var(--chip-field)}
 a{color:var(--accent)}
+figure{margin:12px 0}
+figcaption{margin-bottom:6px}
+.rate-row{display:grid;grid-template-columns:minmax(8.5rem,11rem) 1fr;gap:10px;
+  align-items:center;padding:3px 0}
+.rate-label{font-size:14px;line-height:1.25}
+.rate-label small{display:block;color:var(--muted);font-size:11.5px;
+  font-variant-numeric:tabular-nums}
+.rate-ticks{position:relative;height:1.2em;font-size:12px;color:var(--muted)}
+.rate-ticks span{position:absolute;top:0;white-space:nowrap}
+.rate-ticks .t0{left:1.923%}
+.rate-ticks .t50{left:50%;transform:translateX(-50%)}
+.rate-ticks .t100{right:1.923%}
+.rates svg,.trend svg{display:block;width:100%;height:auto}
+.trend svg{max-width:560px}
+.track{stroke:var(--line);stroke-width:6;stroke-linecap:round}
+.ref{stroke:var(--muted);stroke-dasharray:2 3;stroke-width:1}
+.grid{stroke:var(--line);stroke-width:1}
+.axis{fill:var(--muted);font-size:13px}
+.mark{fill:var(--accent)}
+.whisker,.cap{stroke:var(--ink);stroke-width:1.5}
+.expected{stroke:var(--winner);stroke-width:3}
+.line{fill:none;stroke-width:2.5}
+.dot{stroke:var(--surface);stroke-width:1.5}
+.line.s-us{stroke:var(--accent)}.dot.s-us,.key.s-us{fill:var(--accent);background:var(--accent)}
+.line.s-median{stroke:var(--median)}
+.dot.s-median,.key.s-median{fill:var(--median);background:var(--median)}
+.line.s-winner{stroke:var(--winner)}
+.dot.s-winner,.key.s-winner{fill:var(--winner);background:var(--winner)}
+.legend{list-style:none;display:flex;flex-wrap:wrap;gap:4px 14px;padding:0;margin:6px 0 0;
+  font-size:13px;color:var(--muted)}
+.key{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+.empty{color:var(--muted);font-style:italic}
+.claims li{margin:4px 0}
+dl dt{font-weight:600;margin-top:8px}
+dl dd{margin:0;color:var(--muted)}
+.weeks ul{list-style:none;display:flex;flex-wrap:wrap;gap:6px 14px;padding:0}
+.weeks [aria-current]{font-weight:600}
 """
 
 
@@ -86,6 +131,13 @@ def render_results_dashboard(
         "</p></header>",
         _headline(report),
         _this_week(report),
+        _trend(report),
+        _tiers(report),
+        _baselines(report),
+        _clv_and_field(report),
+        _findings(report),
+        _glossary(),
+        _weeks_nav(report, imported_weeks),
     ]
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -189,3 +241,122 @@ def _game_row(game: GradedGame) -> str:
         "<tr>" + "".join(f"<td>{escape(cell)}</td>" for cell in cells)
         + f"<td>{''.join(chips)}</td></tr>"
     )
+
+
+def _section(section_id: str, heading: str, inner: str) -> str:
+    return f'<section id="{section_id}"><h2>{escape(heading)}</h2>{inner}</section>'
+
+
+def _trend(report: ResultsReport) -> str:
+    weeks = [standing.pool_week for standing in report.standings]
+    points = trend_chart(
+        weeks,
+        [
+            Series("us", "s-us", tuple(s.our_points for s in report.standings)),
+            Series("field median", "s-median", tuple(s.median_points for s in report.standings)),
+            Series("winner", "s-winner", tuple(s.winner_points for s in report.standings)),
+        ],
+        y_max=max(s.winner_points for s in report.standings),
+        fmt=lambda value: f"{value:g}",
+        caption="Points by pool week",
+    )
+    beaten = trend_chart(
+        weeks,
+        [Series("us", "s-us", tuple(s.beat_share for s in report.standings))],
+        y_max=1.0,
+        fmt=lambda value: f"{value:.0%}",
+        caption="Share of the field we beat",
+    )
+    return _section("trend", "Season trend", points + beaten)
+
+
+def _tiers(report: ResultsReport) -> str:
+    rows = []
+    for sport in sorted({game.game.sport for game in report.season_games}):
+        for tier, expected in BACKTEST_TIER_RATES.items():
+            record = record_for(report.season_games, Strategy.MODEL, sport=sport, tier=tier)
+            rows.append(RateRow(
+                f"{sport.value.upper()} {tier.value}",
+                f"{_record(record)} · NFL backtest {expected:.1%}",
+                record.rate,
+                record.interval,
+                expected,
+            ))
+    chart = rate_rows(
+        rows, mark="bar",
+        caption="Model hit rate by tier, season to date. Whisker: 95% interval. "
+        "Tick: NFL backtest, 2020–2025.",
+    )
+    note = (
+        '<p class="note">Games with no recommendation stored before kickoff (excluded from '
+        f"model grading): {escape(str(report.unknown_model_games))}</p>"
+    )
+    return _section("tiers", "Model by tier", chart + note)
+
+
+def _baselines(report: ResultsReport) -> str:
+    rows = []
+    for strategy in (Strategy.US, *BASELINES):
+        record = record_for(report.season_games, strategy)
+        rows.append(RateRow(strategy.value, _record(record), record.rate, record.interval))
+    chart = rate_rows(
+        rows, mark="dot",
+        caption="Every strategy on the same CBS lines, all boards, season to date. "
+        "Whisker: 95% interval.",
+    )
+    return _section("baselines", "Us against baselines", chart)
+
+
+def _clv_and_field(report: ResultsReport) -> str:
+    clv = clv_summary(report.season_games)
+    mean = "—" if clv.mean is None else f"{clv.mean:+.2f} pts"
+    interval = "—" if clv.interval is None else f"{clv.interval[0]:+.2f} to {clv.interval[1]:+.2f}"
+    share = "—" if clv.positive_share is None else f"{clv.positive_share:.0%}"
+    tiles = "".join([
+        _tile(mean, "mean CLV"),
+        _tile(interval, "95% interval"),
+        _tile(share, "picks with CLV > 0"),
+        _tile(str(clv.n), "picks with a close"),
+    ])
+    against = record_for([g for g in report.season_games if g.against_field], Strategy.US)
+    field = (
+        f"<p>Against the field (≤{escape(f'{AGAINST_FIELD_SHARE:.0%}')} of other entrants on "
+        f"our side): {escape(_record(against))}</p>"
+    )
+    return _section(
+        "clv", "Closing-line value and the field", f'<div class="tiles">{tiles}</div>{field}'
+    )
+
+
+def _findings(report: ResultsReport) -> str:
+    result = findings(report.season_games)
+    claims = "".join(f"<li>{escape(claim)}</li>" for claim in result.claims)
+    inner = f'<ul class="claims">{claims or "<li>Nothing is distinguishable yet.</li>"}</ul>'
+    if result.not_yet:
+        lines = "".join(f"<li>{escape(line)}</li>" for line in result.not_yet)
+        inner += (
+            f"<details><summary>Not distinguishable yet ({len(result.not_yet)})</summary>"
+            f"<ul>{lines}</ul></details>"
+        )
+    return _section("findings", "What the data says", inner)
+
+
+def _glossary() -> str:
+    terms = "".join(
+        f"<dt>{escape(strategy.value)}</dt><dd>{escape(text)}</dd>"
+        for strategy, text in STRATEGY_DEFINITIONS.items()
+    )
+    return (
+        '<section id="glossary"><details><summary>What the terms mean</summary>'
+        f"<p>{escape(GLOSSARY_INTRO)}</p><dl>{terms}</dl></details></section>"
+    )
+
+
+def _weeks_nav(report: ResultsReport, imported_weeks: Sequence[int]) -> str:
+    items = "".join(
+        f'<li><span aria-current="page">Week {escape(str(week))}</span></li>'
+        if week == report.pool_week
+        else f'<li><a href="week-{escape(str(week))}.html">Week {escape(str(week))}</a></li>'
+        for week in imported_weeks
+    )
+    return f'<nav class="weeks" aria-label="Pool weeks"><h2>Other weeks</h2><ul>{items}</ul></nav>'

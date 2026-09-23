@@ -1,15 +1,20 @@
 import re
 from datetime import UTC, datetime, timedelta
+from html import escape as html_escape
 
 import pytest
 from results_helpers import KICK, assert_well_formed, imported_store
 
 from pickem.models import HISTORY_MONITOR, Game, RecommendationRecord, Side, Sport, Tier
 from pickem.report.results import (
+    BASELINES,
+    STRATEGY_DEFINITIONS,
     BoardStanding,
     ResultsReport,
+    Strategy,
     WeekStanding,
     build_results_report,
+    findings,
     grade_game,
 )
 from pickem.report.results_html import render_results_dashboard
@@ -142,3 +147,67 @@ def test_text_from_the_data_is_escaped():
     text = render(synthetic_report([synthetic_game(0, home="<H&", away="A\"")]))
     assert "&lt;H&amp;0" in text
     assert "<H&" not in text
+
+
+def test_every_season_section_is_present(report):
+    text = render(report)
+    for heading in (
+        "<h2>Season trend</h2>",
+        "<h2>Model by tier</h2>",
+        "<h2>Us against baselines</h2>",
+        "<h2>Closing-line value and the field</h2>",
+        "<h2>What the data says</h2>",
+        "<summary>What the terms mean</summary>",
+    ):
+        assert heading in text
+    assert_well_formed(text)
+
+
+def test_tier_rows_carry_the_nfl_backtest_ticks(report):
+    tiers = render(report).split("<h2>Model by tier</h2>", 1)[1].split("</section>", 1)[0]
+    for x in ('x1="262.8"', 'x1="224.8"', 'x1="206.0"'):  # 63.7%, 54.2%, 49.5%
+        assert f'class="expected" {x}' in tiers
+    assert "CFB coinflip" in tiers and "NFL strong" in tiers
+    assert "NFL backtest 63.7%" in tiers
+    assert "Games with no recommendation stored before kickoff" in tiers
+
+
+def test_baselines_chart_has_a_row_for_every_strategy(report):
+    section = render(report).split("<h2>Us against baselines</h2>", 1)[1].split("</section>")[0]
+    for strategy in (Strategy.US, *BASELINES):
+        assert f'<div class="rate-label">{html_escape(strategy.value)}<small>' in section
+
+
+def test_trend_uses_every_imported_week(report):
+    trend = render(report).split("<h2>Season trend</h2>", 1)[1].split("</section>", 1)[0]
+    assert trend.count("<figure") == 2
+    assert ">Wk 2<" in trend
+    assert "<polyline" not in trend  # a single week draws points only
+
+
+def test_findings_are_the_shared_findings_text(report):
+    text = render(report)
+    result = findings(report.season_games)
+    for line in (*result.claims, *result.not_yet):
+        assert html_escape(line) in text
+
+
+def test_glossary_defines_every_strategy(report):
+    glossary = render(report).split("<summary>What the terms mean</summary>", 1)[1]
+    for strategy, definition in STRATEGY_DEFINITIONS.items():
+        term = f"<dt>{html_escape(strategy.value)}</dt><dd>{html_escape(definition)}</dd>"
+        assert term in glossary
+
+
+def test_week_links_skip_the_page_being_shown(report):
+    text = render(report, weeks=(1, 2, 3))
+    nav = text.split('<nav class="weeks"', 1)[1].split("</nav>", 1)[0]
+    assert '<a href="week-1.html">Week 1</a>' in nav
+    assert '<span aria-current="page">Week 2</span>' in nav
+    assert '<a href="week-3.html">Week 3</a>' in nav
+
+
+def test_clv_without_closes_prints_dashes():
+    text = render(synthetic_report([synthetic_game(0)]))
+    section = text.split("<h2>Closing-line value and the field</h2>", 1)[1].split("</section>")[0]
+    assert '<span class="value">—</span><span class="label">mean CLV</span>' in section
