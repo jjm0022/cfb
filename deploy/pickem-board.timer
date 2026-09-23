@@ -1,0 +1,12 @@
+[Unit]
+Description=Start the pick'em week once CBS has posted the board
+
+[Timer]
+OnCalendar=Tue *-*-* 17:00:00 America/New_York
+# Retry: does nothing if Tuesday's run started the week.
+OnCalendar=Wed *-*-* 09:00:00 America/New_York
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

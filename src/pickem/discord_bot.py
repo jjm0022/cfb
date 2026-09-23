@@ -39,7 +39,6 @@ from pickem.store.db import AutomationState, Store
 
 EASTERN = ZoneInfo("America/New_York")
 DEFAULT_CONFIG_PATH = Path("config/discord-bot.yaml")
-REMINDER_MESSAGE = "Reminder: submit this week's picks."
 PRIVATE_MESSAGE = "This bot is private."
 
 # Hours before each kickoff that the market is polled, on top of the daily
@@ -59,9 +58,6 @@ class DiscordSettings:
     owner_id: int
     db: Path = config.DEFAULT_DB
     timezone: ZoneInfo = EASTERN
-    reminder_day: str = "tue"
-    reminder_hour: int = 10
-    reminder_minute: int = 0
     refresh_days: str = "wed-sun,mon"
     refresh_hour: int = 10
     refresh_minute: int = 0
@@ -77,7 +73,6 @@ class DiscordSettings:
         try:
             raw = yaml.safe_load(config_path.read_text())
             schedule = raw["schedule"]
-            reminder_hour, reminder_minute = _parse_time(schedule["reminder"]["time"])
             refresh_hour, refresh_minute = _parse_time(schedule["refresh"]["time"])
             refresh_days = ",".join(schedule["refresh"]["days"])
             timezone = ZoneInfo(raw["timezone"])
@@ -100,9 +95,6 @@ class DiscordSettings:
             owner_id=config.discord_owner_id(),
             db=Path(db) if db is not None else Path(raw["database"]),
             timezone=timezone,
-            reminder_day=schedule["reminder"]["day"],
-            reminder_hour=reminder_hour,
-            reminder_minute=reminder_minute,
             refresh_days=refresh_days,
             refresh_hour=refresh_hour,
             refresh_minute=refresh_minute,
@@ -156,20 +148,19 @@ def _scheduled_error_message(settings: DiscordSettings, error: BaseException) ->
 def build_schedule(
     settings: DiscordSettings,
     refresh: Callable[[], Awaitable[Any] | Any] | RecommendationMonitor,
-    send_dm: Callable[[str], Awaitable[None] | None],
     scheduler: Any,
     plan: Callable[[], Awaitable[Any] | Any] | None = None,
 ) -> None:
-    """Register the reminder, the daily refresh, and the poll planner.
+    """Register the daily refresh and the poll planner.
+
+    The Tuesday pick reminder is sent by the board job
+    (scripts/start-week.sh --auto) once the week's board is loaded.
 
     The daily refresh stays: it is the digest, and the fallback for a week
     whose kickoffs are not yet stored. ``plan`` is the callback that turns
     those kickoffs into one-shot poll jobs; without it no planner is
     registered and the bot behaves exactly as it did before.
     """
-
-    async def reminder_job() -> None:
-        await _invoke(send_dm, REMINDER_MESSAGE)
 
     async def refresh_job() -> None:
         with run_context("sched:refresh", db=str(settings.db)):
@@ -180,28 +171,6 @@ def build_schedule(
         with run_context("sched:plan-polls", db=str(settings.db)):
             await _invoke(plan)
 
-    scheduler.add_job(
-        reminder_job,
-        CronTrigger(
-            day_of_week=settings.reminder_day,
-            hour=settings.reminder_hour,
-            minute=settings.reminder_minute,
-            timezone=settings.timezone,
-        ),
-        id="pick-reminder",
-        name="pick reminder",
-        replace_existing=True,
-    )
-    logger.bind(
-        event="job_scheduled",
-        job="pick-reminder",
-        days=settings.reminder_day,
-        at=f"{settings.reminder_hour:02d}:{settings.reminder_minute:02d}",
-        timezone=str(settings.timezone),
-    ).info(
-        f"reminder job scheduled: {settings.reminder_day} at "
-        f"{settings.reminder_hour:02d}:{settings.reminder_minute:02d} {settings.timezone}"
-    )
     scheduler.add_job(
         refresh_job,
         CronTrigger(
@@ -818,7 +787,6 @@ class PickemBot(commands.Bot):
         build_schedule(
             self.settings,
             self._scheduled_refresh,
-            self._send_owner_dm,
             self.scheduler,
             self._plan_kickoff_polls,
         )
@@ -1174,7 +1142,6 @@ __all__ = [
     "EASTERN",
     "POLL_JOB_PREFIX",
     "PickemBot",
-    "REMINDER_MESSAGE",
     "build_schedule",
     "build_bot",
     "create_bot",

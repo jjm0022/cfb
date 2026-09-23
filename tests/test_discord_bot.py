@@ -173,9 +173,6 @@ def settings(monkeypatch, tmp_path: Path):
         "database: pickem.duckdb\n"
         "timezone: America/New_York\n"
         "schedule:\n"
-        "  reminder:\n"
-        "    day: tue\n"
-        "    time: '10:00'\n"
         "  refresh:\n"
         "    days: [wed, thu, fri, sat, sun, mon]\n"
         "    time: '10:00'\n"
@@ -739,21 +736,34 @@ def test_settings_missing_secret_uses_config_required_policy(monkeypatch):
         DiscordSettings.from_env()
 
 
-def test_build_schedule_adds_tuesday_reminder_and_weekday_refreshes(settings):
+def test_build_schedule_adds_weekday_refreshes_and_no_reminder(settings):
     scheduler = FakeScheduler()
-    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler)
+    build_schedule(settings, FakeMonitor(), scheduler)
 
+    assert scheduler.job_ids() == ["recommendation-refresh"]
     assert scheduler.jobs[0].trigger_fields == {
-        "day_of_week": "tue",
-        "hour": "10",
-        "minute": "0",
-    }
-    assert scheduler.jobs[1].trigger_fields == {
         "day_of_week": "wed,thu,fri,sat,sun,mon",
         "hour": "10",
         "minute": "0",
     }
     assert scheduler.jobs[0].timezone.key == "America/New_York"
+
+
+def test_a_config_that_still_names_a_reminder_loads(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_OWNER_ID", "123")
+    path = tmp_path / "discord-bot.yaml"
+    path.write_text(
+        "database: pickem.duckdb\n"
+        "timezone: America/New_York\n"
+        "schedule:\n"
+        "  reminder: {day: tue, time: '10:00'}\n"
+        "  refresh: {days: [wed], time: '10:00'}\n"
+    )
+
+    settings = DiscordSettings.from_env(config_path=path, db=tmp_path / "pickem.duckdb")
+
+    assert settings.refresh_days == "wed"
 
 
 @pytest.mark.asyncio
@@ -770,9 +780,9 @@ async def test_scheduled_refresh_does_not_repeat_a_returned_result_error(setting
         return RefreshResult(changed=False, error=error)
 
     scheduler = FakeScheduler()
-    build_schedule(settings, refresh, lambda _message: None, scheduler)
+    build_schedule(settings, refresh, scheduler)
 
-    await scheduler.jobs[1].func()
+    await scheduler.jobs[0].func()
 
     failures = [record for record in records if record["extra"].get("event") == "refresh_failed"]
     assert len(failures) == 1
@@ -802,9 +812,9 @@ async def test_scheduled_refresh_does_not_repeat_tuple_result_errors(settings, r
         )
 
     scheduler = FakeScheduler()
-    build_schedule(settings, refresh, lambda _message: None, scheduler)
+    build_schedule(settings, refresh, scheduler)
 
-    await scheduler.jobs[1].func()
+    await scheduler.jobs[0].func()
 
     failures = [record for record in records if record["extra"].get("event") == "refresh_failed"]
     assert len(failures) == 1
@@ -816,28 +826,24 @@ async def test_scheduled_refresh_does_not_repeat_tuple_result_errors(settings, r
 
 def test_schedule_emits_one_observable_event_per_registered_job(settings, records):
     scheduler = FakeScheduler()
-    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler)
+    build_schedule(settings, FakeMonitor(), scheduler)
 
     scheduled = [r for r in records if r["extra"].get("event") == "job_scheduled"]
-    assert len(scheduled) == 2
+    assert len(scheduled) == 1
     assert [r["extra"]["job"] for r in scheduled] == [
-        "pick-reminder",
         "recommendation-refresh",
     ]
-    assert scheduled[0]["extra"]["days"] == "tue"
+    assert scheduled[0]["extra"]["days"] == "wed,thu,fri,sat,sun,mon"
     assert scheduled[0]["extra"]["at"] == "10:00"
     assert scheduled[0]["extra"]["timezone"] == "America/New_York"
-    assert scheduled[1]["extra"]["days"] == "wed,thu,fri,sat,sun,mon"
-    assert scheduled[1]["extra"]["at"] == "10:00"
-    assert scheduled[1]["extra"]["timezone"] == "America/New_York"
 
 
 @pytest.mark.asyncio
 async def test_scheduled_refresh_runs_inside_a_context_with_database_fact(settings, records):
     scheduler = FakeScheduler()
-    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler)
+    build_schedule(settings, FakeMonitor(), scheduler)
 
-    await scheduler.jobs[1].func()
+    await scheduler.jobs[0].func()
 
     started = next(r for r in records if r["extra"].get("event") == "run_started")
     assert started["extra"]["entry"] == "sched:refresh"
@@ -1498,10 +1504,10 @@ def test_settings_default_kickoff_polls_when_the_block_is_absent(settings):
 def test_build_schedule_adds_a_poll_planner_alongside_the_daily_jobs(settings):
     scheduler = FakeScheduler()
 
-    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler, plan=lambda: None)
+    build_schedule(settings, FakeMonitor(), scheduler, plan=lambda: None)
 
-    assert scheduler.job_ids() == ["pick-reminder", "recommendation-refresh", "poll-planner"]
-    assert scheduler.jobs[2].trigger_fields["hour"] == "*/6"
+    assert scheduler.job_ids() == ["recommendation-refresh", "poll-planner"]
+    assert scheduler.jobs[1].trigger_fields["hour"] == "*/6"
 
 
 def test_planner_registers_one_job_per_planned_instant():
@@ -1563,12 +1569,12 @@ def test_planner_drops_jobs_for_instants_that_left_the_plan():
 
 def test_planner_leaves_the_daily_jobs_alone(settings):
     scheduler = FakeScheduler()
-    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler, plan=lambda: None)
+    build_schedule(settings, FakeMonitor(), scheduler, plan=lambda: None)
 
     schedule_kickoff_polls({NFL_SCOPE: (_instant(13, 5),)}, lambda _s, _i: None, scheduler)
     schedule_kickoff_polls({}, lambda _s, _i: None, scheduler)
 
-    assert scheduler.job_ids() == ["pick-reminder", "recommendation-refresh", "poll-planner"]
+    assert scheduler.job_ids() == ["recommendation-refresh", "poll-planner"]
 
 
 @pytest.mark.asyncio
@@ -1729,7 +1735,6 @@ def test_planning_honours_the_configured_offsets(tmp_path, monkeypatch):
         "database: pickem.duckdb\n"
         "timezone: America/New_York\n"
         "schedule:\n"
-        "  reminder: {day: tue, time: '10:00'}\n"
         "  refresh: {days: [wed], time: '10:00'}\n"
         "  kickoff_polls: {offsets_hours: [2]}\n"
     )
@@ -1773,13 +1778,12 @@ def test_every_job_is_named_for_its_work_not_its_callable(settings):
     times.
     """
     scheduler = FakeScheduler()
-    build_schedule(settings, FakeMonitor(), lambda _message: None, scheduler, plan=lambda: None)
+    build_schedule(settings, FakeMonitor(), scheduler, plan=lambda: None)
     schedule_kickoff_polls(
         {NFL_SCOPE: (_instant(13, 16),)}, lambda _s, _i: None, scheduler
     )
 
     assert [job.name for job in scheduler.jobs] == [
-        "pick reminder",
         "recommendation refresh",
         "kickoff poll planner",
         "poll nfl/2026/wk1 T-1h before 2026-09-13T17:00:00+00:00",

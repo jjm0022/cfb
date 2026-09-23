@@ -7,7 +7,9 @@ import asyncio
 import hashlib
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
 import duckdb
@@ -46,14 +48,22 @@ from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.edge.divergence import suppress_decision_logging
 from pickem.edge.pipeline import MissingGameError
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
+from pickem.ingest.cbs_fetch import (
+    CbsFetchError,
+    fetch_board,
+    fetch_current_week,
+    fetch_standings,
+)
+from pickem.ingest.cbs_fetch import open_session as open_cbs_session
 from pickem.ingest.cbs_html import parse_cbs_html
 from pickem.ingest.cbs_results import parse_cbs_results_html
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
 from pickem.models import HISTORY_REPORT, Game, Sport
-from pickem.notify.discord_dm import build_results_embed, send_owner_dm
+from pickem.notify.discord_dm import build_message_embed, build_results_embed, send_owner_dm
 from pickem.obs.log import configure_logging, run_context
+from pickem.operations.pool_weeks import pending_results_week, pool_week_status
 from pickem.operations.preflight import evaluate_preflight, render_preflight
 from pickem.operations.recommendation_history import (
     backfill_history as backfill_recommendation_history,
@@ -345,6 +355,102 @@ def _require_reachable(path: Path) -> None:
     if reason is not None:
         typer.secho(reason, fg="red", err=True)
         raise typer.Exit(code=1)
+
+
+class CbsPage(StrEnum):
+    BOARD = "board"
+    STANDINGS = "standings"
+
+
+def _run_cbs[T](work: Callable[[], Awaitable[T]], **facts: object) -> T:
+    """Run one CBS fetch and turn every failure into a one-line reason, exit 1.
+
+    The reason is the last line on stderr so the scheduled scripts can forward
+    it in a DM without the surrounding log noise. Each branch logs for itself —
+    a traceback is worth keeping only for the unexpected, generic failure, not
+    for CBS's own typed refusals — then `logger.complete()` drains the queued
+    sinks before that reason is printed, so this failure's own record cannot
+    land after it.
+    """
+    try:
+        return asyncio.run(work())
+    except (CbsFetchError, CbsParseError, FileExistsError) as exc:
+        failure, reason = type(exc).__name__, str(exc)
+        logger.bind(event="cbs_fetch_failed", failure=failure, **facts).error(reason)
+    except Exception as exc:  # Chrome, CDP or network: already retried once
+        failure, reason = type(exc).__name__, f"CBS fetch failed ({type(exc).__name__}): {exc}"
+        logger.bind(event="cbs_fetch_failed", failure=failure, **facts).opt(
+            exception=True
+        ).error(reason)
+    logger.complete()
+    typer.secho(reason, fg="red", err=True)
+    raise typer.Exit(code=1)
+
+
+@app.command("fetch-cbs")
+def fetch_cbs_cmd(
+    page: CbsPage = typer.Option(..., help="board or standings"),
+    pool_week: int = typer.Option(..., help="Pool week, not league week: CFB N + NFL N-1"),
+    out: Path = typer.Option(
+        None, help="Default: <weeks dir>/week<N>.html (board) or <results dir>/week<N>.html"
+    ),
+    force: bool = typer.Option(False, "--force", help="Replace an already saved page"),
+) -> None:
+    """Fetch a CBS page with the dedicated Chrome profile and save it."""
+    with run_context("cli:fetch-cbs", page=page.value, pool_week=pool_week):
+        folder = config.DEFAULT_WEEKS_DIR if page is CbsPage.BOARD else config.DEFAULT_RESULTS_DIR
+        target = out or folder / f"week{pool_week}.html"
+        _require_reachable(target)
+        fetch = fetch_board if page is CbsPage.BOARD else fetch_standings
+
+        async def work():
+            async with open_cbs_session(
+                profile=config.CBS_CHROME_PROFILE, chrome=config.CHROME_BINARY
+            ) as session:
+                return await fetch(
+                    session, pool_url=config.CBS_POOL_URL, pool_week=pool_week,
+                    out=target, force=force,
+                )
+
+        saved = _run_cbs(work, page=page.value, pool_week=pool_week)
+        typer.echo(f"saved CBS {page.value} for pool week {pool_week} to {saved.path}")
+
+
+@app.command("cbs-current-week")
+def cbs_current_week_cmd() -> None:
+    """Print the pool week CBS marks current, and nothing else."""
+    with run_context("cli:cbs-current-week"):
+
+        async def work():
+            async with open_cbs_session(
+                profile=config.CBS_CHROME_PROFILE, chrome=config.CHROME_BINARY
+            ) as session:
+                return await fetch_current_week(session, pool_url=config.CBS_POOL_URL)
+
+        typer.echo(_run_cbs(work, page="current-week"))
+
+
+@app.command("notify-owner")
+def notify_owner_cmd(
+    message: str = typer.Argument(..., help="Text of the DM"),
+    title: str = typer.Option("Pick'em", help="Title of the DM"),
+) -> None:
+    """DM the owner one message; how the scheduled scripts reach a person."""
+    with run_context("cli:notify-owner", title=title):
+        try:
+            asyncio.run(
+                send_owner_dm(
+                    build_message_embed(title, message),
+                    token=config.discord_bot_token(),
+                    owner_id=config.discord_owner_id(),
+                )
+            )
+        except Exception as exc:
+            logger.bind(
+                event="owner_dm_failed", error_type=type(exc).__name__, error_detail=str(exc)
+            ).error(f"owner DM not sent: {exc}")
+            typer.secho(f"Discord DM failed: {exc}", fg="red", err=True)
+            raise typer.Exit(code=2) from exc
 
 
 def _write_results_report(
@@ -921,6 +1027,35 @@ def evaluate_coinflip_residual_cmd(
             return _evaluate_coinflip_residual_command_body(*args)
         with suppress_decision_logging():
             _evaluate_coinflip_residual_command_body(*args)
+
+
+@app.command("pool-week-status")
+def pool_week_status_cmd(
+    season: int = typer.Option(...),
+    pool_week: int = typer.Option(..., help="Pool week, not league week: CFB N + NFL N-1"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Print new, partial, started or finished for a pool week."""
+    with run_context("cli:pool-week-status", season=season, pool_week=pool_week, db=str(db)):
+        with Store(db, read_only=True) as store:
+            typer.echo(pool_week_status(store, season, pool_week).value)
+
+
+@app.command("pending-results-week")
+def pending_results_week_cmd(
+    season: int = typer.Option(...),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Print the pool week whose results are due, or nothing if none is."""
+    with run_context("cli:pending-results-week", season=season, db=str(db)):
+        with Store(db, read_only=True) as store:
+            week = pending_results_week(
+                store.pool_week_last_kickoffs(season),
+                store.pool_weeks(season),
+                datetime.now(tz=UTC),
+            )
+        if week is not None:
+            typer.echo(week)
 
 
 if __name__ == "__main__":

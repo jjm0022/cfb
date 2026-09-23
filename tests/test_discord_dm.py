@@ -5,7 +5,7 @@ import discord
 import pytest
 from results_helpers import imported_store
 
-from pickem.notify.discord_dm import _cap, build_results_embed, send_owner_dm
+from pickem.notify.discord_dm import _cap, build_message_embed, build_results_embed, send_owner_dm
 from pickem.report.results import build_results_report
 
 
@@ -78,3 +78,16 @@ def test_send_owner_dm_closes_the_session_when_sending_fails():
         asyncio.run(send_owner_dm(discord.Embed(title="t"), token="tok", owner_id=123,
                                   client_factory=lambda: client))
     assert client.calls[-1] == ("close",)
+
+
+def test_message_embed_carries_title_and_text():
+    embed = build_message_embed("Pick'em week start", "Pool week 5 board loaded.")
+
+    assert (embed.title, embed.description) == ("Pick'em week start", "Pool week 5 board loaded.")
+
+
+def test_message_embed_caps_long_text_at_discords_limit():
+    embed = build_message_embed("t", "x" * 5000)
+
+    assert len(embed.description) == 4096
+    assert embed.description.endswith("…")
