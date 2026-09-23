@@ -1,9 +1,11 @@
 # Discord pick reminder operations
 
 This runbook installs the owner-only Discord bot as a user `systemd` service.
-The bot sends the configured owner a Tuesday reminder and monitors the active
-week on the other days. It does not submit picks to CBS. Commands and refreshes
-use the project database and the API keys already required by Pickem.
+The bot monitors the active week and DMs the owner when a recommendation
+changes. It does not submit picks to CBS. Commands and refreshes use the
+project database and the API keys already required by Pickem. The Tuesday
+reminder now comes from `pickem-board.timer` (see `docs/runbooks/cbs-fetch.md`),
+sent after the week's board is loaded.
 
 The service unit assumes the canonical checkout is
 `/home/jmiller/cfb`; if the checkout moves, update both the unit and the
