@@ -62,14 +62,11 @@ def rate_rows(rows: Sequence[RateRow], *, mark: str, caption: str) -> str:
 
 
 def _rate_axis() -> str:
-    ticks = (
-        f'<text x="{_n(rate_x(0))}" y="14" text-anchor="start">0%</text>'
-        f'<text x="{_n(rate_x(0.5))}" y="14" text-anchor="middle">50%</text>'
-        f'<text x="{_n(rate_x(1))}" y="14" text-anchor="end">100%</text>'
-    )
     return (
         '<div class="rate-row rate-axis"><div></div>'
-        f'<svg viewBox="0 0 {_n(_VIEW_W)} 20" aria-hidden="true">{ticks}</svg></div>'
+        '<div class="rate-ticks" aria-hidden="true">'
+        '<span class="t0">0%</span><span class="t50">50%</span><span class="t100">100%</span>'
+        "</div></div>"
     )
 
 

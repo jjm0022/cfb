@@ -47,6 +47,12 @@ def test_rate_labels_are_escaped_html_not_svg_text():
     assert "<b>" not in html
 
 
+def test_rate_axis_ticks_are_html_not_svg_text():
+    html = rate_rows([RateRow("us", "d", 0.5, None)], mark="dot", caption="c")
+    assert '<span class="t50">50%</span>' in html
+    assert "<text" not in html
+
+
 def test_no_rows_and_no_weeks_say_no_games_yet():
     assert rate_rows([], mark="dot", caption="c") == EMPTY
     assert trend_chart([], [], y_max=1, fmt=str, caption="c") == EMPTY
