@@ -87,9 +87,23 @@ variable. The Chrome binary path is likewise a setting.
 
 `pickem fetch-cbs --page board|standings --pool-week N [--out PATH] [--force]`
 
-`--pool-week current` (board) resolves
-the week from CBS's period list, for the timer. Default `--out` is
+`--pool-week` accepts integers only. Default `--out` is
 `DEFAULT_WEEKS_DIR/weekN.html` or `DEFAULT_RESULTS_DIR/weekN.html`.
+
+Resolving "the current week" is a separate command, `pickem cbs-current-week`,
+which prints only the pool week CBS marks current. `scripts/start-week.sh
+--auto` calls it first and passes the integer it prints to `fetch-cbs
+--pool-week N`; `fetch-cbs` itself never resolves "current" on its own.
+
+Other small commands the scripts use to decide what to do, each printing a
+single value and nothing else:
+
+- `pickem pool-week-status --season Y --pool-week N` — `new`, `partial`,
+  `started`, or `finished`, read from what is stored for that pool week.
+- `pickem pending-results-week --season Y` — the earliest stored pool week
+  that is over but has no imported results, or nothing if none is.
+- `pickem notify-owner MESSAGE [--title TITLE]` — DMs the owner one message;
+  how the scheduled scripts reach a person.
 
 ### Dependency
 
