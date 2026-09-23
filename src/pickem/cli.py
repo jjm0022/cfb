@@ -63,6 +63,7 @@ from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
 from pickem.models import HISTORY_REPORT, Game, Sport
 from pickem.notify.discord_dm import build_results_embed, send_owner_dm
 from pickem.obs.log import configure_logging, run_context
+from pickem.operations.pool_weeks import pending_results_week, pool_week_status
 from pickem.operations.preflight import evaluate_preflight, render_preflight
 from pickem.operations.recommendation_history import (
     backfill_history as backfill_recommendation_history,
@@ -1003,6 +1004,35 @@ def evaluate_coinflip_residual_cmd(
             return _evaluate_coinflip_residual_command_body(*args)
         with suppress_decision_logging():
             _evaluate_coinflip_residual_command_body(*args)
+
+
+@app.command("pool-week-status")
+def pool_week_status_cmd(
+    season: int = typer.Option(...),
+    pool_week: int = typer.Option(..., help="Pool week, not league week: CFB N + NFL N-1"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Print new, partial, started or finished for a pool week."""
+    with run_context("cli:pool-week-status", season=season, pool_week=pool_week, db=str(db)):
+        with Store(db, read_only=True) as store:
+            typer.echo(pool_week_status(store, season, pool_week).value)
+
+
+@app.command("pending-results-week")
+def pending_results_week_cmd(
+    season: int = typer.Option(...),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Print the pool week whose results are due, or nothing if none is."""
+    with run_context("cli:pending-results-week", season=season, db=str(db)):
+        with Store(db, read_only=True) as store:
+            week = pending_results_week(
+                store.pool_week_last_kickoffs(season),
+                store.pool_weeks(season),
+                datetime.now(tz=UTC),
+            )
+        if week is not None:
+            typer.echo(week)
 
 
 if __name__ == "__main__":

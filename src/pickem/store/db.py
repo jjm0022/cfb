@@ -594,6 +594,25 @@ class Store:
             [sport.value, season, week],
         ).fetchone()[0]
 
+    def pool_week_last_kickoffs(self, season: int) -> dict[int, datetime]:
+        """Latest kickoff of each pool week that has stored league lines.
+
+        Pool week N is CFB week N plus NFL week N-1, so an NFL line counts
+        toward the pool week after its league week.
+        """
+        rows = self._con.execute(
+            """
+            SELECT CASE WHEN g.sport = ? THEN l.week + 1 ELSE l.week END AS pool_week,
+                   max(g.kickoff_utc)
+            FROM league_lines l JOIN games g USING (game_id)
+            WHERE l.season = ?
+            GROUP BY pool_week
+            ORDER BY pool_week
+            """,
+            [Sport.NFL.value, season],
+        ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
     def games_for_season(self, season: int) -> list[Game]:
         rows = self._con.execute(
             """
