@@ -92,7 +92,7 @@ figcaption{margin-bottom:6px}
 .rate-ticks .t50{left:50%;transform:translateX(-50%)}
 .rate-ticks .t100{right:1.923%}
 .rates svg,.trend svg{display:block;width:100%;height:auto}
-.trend svg{max-width:560px}
+.trend svg{max-width:560px;overflow:visible}
 .track{stroke:var(--line);stroke-width:6;stroke-linecap:round}
 .ref{stroke:var(--muted);stroke-dasharray:2 3;stroke-width:1}
 .grid{stroke:var(--line);stroke-width:1}
@@ -335,7 +335,8 @@ def _findings(report: ResultsReport) -> str:
     if result.not_yet:
         lines = "".join(f"<li>{escape(line)}</li>" for line in result.not_yet)
         inner += (
-            f"<details><summary>Not distinguishable yet ({len(result.not_yet)})</summary>"
+            "<details><summary>Not distinguishable yet "
+            f"({escape(str(len(result.not_yet)))})</summary>"
             f"<ul>{lines}</ul></details>"
         )
     return _section("findings", "What the data says", inner)

@@ -90,3 +90,17 @@ def test_trend_has_a_legend_and_week_labels():
     )
     assert re.search(r'class="key s-winner".*winner', html)
     assert ">Wk 1<" in html and ">Wk 2<" in html
+
+
+def test_the_first_series_is_drawn_on_top_when_values_tie():
+    html = trend_chart(
+        [1], [Series("us", "s-us", (5,)), Series("median", "s-median", (5,))],
+        y_max=10, fmt=str, caption="c",
+    )
+    us_dot = html.index('<circle class="dot s-us"')
+    median_dot = html.index('<circle class="dot s-median"')
+    assert median_dot < us_dot  # median painted first, so us sits on top
+
+    us_legend = html.index('<span class="key s-us">')
+    median_legend = html.index('<span class="key s-median">')
+    assert us_legend < median_legend  # legend keeps the given order regardless

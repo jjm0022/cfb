@@ -126,7 +126,12 @@ def trend_chart(
     fmt: Callable[[float], str],
     caption: str,
 ) -> str:
-    """Values by pool week: a point per week, joined once there are two."""
+    """Values by pool week: a point per week, joined once there are two.
+
+    Series are painted in reverse of the given order, so the first series is
+    drawn on top when two lines share a value; the legend keeps the given
+    order regardless.
+    """
     if not weeks:
         return EMPTY
     count = len(weeks)
@@ -148,7 +153,7 @@ def trend_chart(
             f'<text class="axis" x="{_n(trend_x(index, count))}" y="{_n(_TREND_H - 8)}" '
             f'text-anchor="middle">Wk {week}</text>'
         )
-    for line in series:
+    for line in reversed(series):
         points = [
             (trend_x(i, count), trend_y(v, top)) for i, v in enumerate(line.values)
         ]
