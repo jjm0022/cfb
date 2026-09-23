@@ -7,7 +7,9 @@ import asyncio
 import hashlib
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
 import duckdb
@@ -46,6 +48,13 @@ from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.edge.divergence import suppress_decision_logging
 from pickem.edge.pipeline import MissingGameError
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
+from pickem.ingest.cbs_fetch import (
+    CbsFetchError,
+    fetch_board,
+    fetch_current_week,
+    fetch_standings,
+)
+from pickem.ingest.cbs_fetch import open_session as open_cbs_session
 from pickem.ingest.cbs_html import parse_cbs_html
 from pickem.ingest.cbs_results import parse_cbs_results_html
 from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
@@ -345,6 +354,71 @@ def _require_reachable(path: Path) -> None:
     if reason is not None:
         typer.secho(reason, fg="red", err=True)
         raise typer.Exit(code=1)
+
+
+class CbsPage(StrEnum):
+    BOARD = "board"
+    STANDINGS = "standings"
+
+
+def _run_cbs[T](work: Callable[[], Awaitable[T]], **facts: object) -> T:
+    """Run one CBS fetch and turn every failure into a one-line reason, exit 1.
+
+    The reason is the last line on stderr so the scheduled scripts can forward
+    it in a DM without the surrounding log noise.
+    """
+    try:
+        return asyncio.run(work())
+    except (CbsFetchError, CbsParseError, FileExistsError) as exc:
+        failure, reason = type(exc).__name__, str(exc)
+    except Exception as exc:  # Chrome, CDP or network: already retried once
+        failure, reason = type(exc).__name__, f"CBS fetch failed ({type(exc).__name__}): {exc}"
+    logger.bind(event="cbs_fetch_failed", failure=failure, **facts).error(reason)
+    typer.secho(reason, fg="red", err=True)
+    raise typer.Exit(code=1)
+
+
+@app.command("fetch-cbs")
+def fetch_cbs_cmd(
+    page: CbsPage = typer.Option(..., help="board or standings"),
+    pool_week: int = typer.Option(..., help="Pool week, not league week: CFB N + NFL N-1"),
+    out: Path = typer.Option(
+        None, help="Default: <weeks dir>/week<N>.html (board) or <results dir>/week<N>.html"
+    ),
+    force: bool = typer.Option(False, "--force", help="Replace an already saved page"),
+) -> None:
+    """Fetch a CBS page with the dedicated Chrome profile and save it."""
+    with run_context("cli:fetch-cbs", page=page.value, pool_week=pool_week):
+        folder = config.DEFAULT_WEEKS_DIR if page is CbsPage.BOARD else config.DEFAULT_RESULTS_DIR
+        target = out or folder / f"week{pool_week}.html"
+        _require_reachable(target)
+        fetch = fetch_board if page is CbsPage.BOARD else fetch_standings
+
+        async def work():
+            async with open_cbs_session(
+                profile=config.CBS_CHROME_PROFILE, chrome=config.CHROME_BINARY
+            ) as session:
+                return await fetch(
+                    session, pool_url=config.CBS_POOL_URL, pool_week=pool_week,
+                    out=target, force=force,
+                )
+
+        saved = _run_cbs(work, page=page.value, pool_week=pool_week)
+        typer.echo(f"saved CBS {page.value} for pool week {pool_week} to {saved.path}")
+
+
+@app.command("cbs-current-week")
+def cbs_current_week_cmd() -> None:
+    """Print the pool week CBS marks current, and nothing else."""
+    with run_context("cli:cbs-current-week"):
+
+        async def work():
+            async with open_cbs_session(
+                profile=config.CBS_CHROME_PROFILE, chrome=config.CHROME_BINARY
+            ) as session:
+                return await fetch_current_week(session, pool_url=config.CBS_POOL_URL)
+
+        typer.echo(_run_cbs(work, page="current-week"))
 
 
 def _write_results_report(
