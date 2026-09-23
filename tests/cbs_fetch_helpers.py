@@ -8,6 +8,9 @@ current. The shape matches the logged-in pages captured on 2026-09-22.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+from pickem.ingest.cbs_fetch import FetchedPage
 
 POOL = "https://cbs.test/football/pickem/pools/POOL"
 
@@ -52,3 +55,34 @@ def pool_page(weeks: int, shown: int, current: int, *, conflicting: bool = False
 
 # What the pool URL serves after CBS redirects a logged-out visitor to /join.
 JOIN_PAGE = "<html><body>" + _blob({"currentUser": None}) + "</body></html>"
+
+RESULTS_FIXTURE = Path("tests/fixtures/cbs_results_page.html")
+
+
+def standings_page(weeks: int, shown: int, current: int, *, final: bool = True) -> str:
+    """The real trimmed standings table plus a period blob for ``shown``."""
+    table = RESULTS_FIXTURE.read_text(encoding="utf-8")
+    if not final:
+        table = table.replace(">FINAL</span>", ">Thu 8:15 PM</span>", 1)
+    return table + pool_page(weeks=weeks, shown=shown, current=current)
+
+
+class StubSession:
+    """Serves canned pages by URL; an Exception value is raised instead.
+
+    A list value is consumed one entry per fetch, to script a failure followed
+    by a success.
+    """
+
+    def __init__(self, pages: dict[str, object]) -> None:
+        self.pages = pages
+        self.requested: list[str] = []
+
+    async def fetch(self, url: str) -> FetchedPage:
+        self.requested.append(url)
+        page = self.pages[url]
+        if isinstance(page, list):
+            page = page.pop(0)
+        if isinstance(page, Exception):
+            raise page
+        return page if isinstance(page, FetchedPage) else FetchedPage(url, page)
