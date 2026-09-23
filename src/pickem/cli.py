@@ -613,6 +613,8 @@ def import_results_cmd(
             dashboard = _write_dashboard(store, report, dashboard_dir or config.dashboard_dir())
         if notify:
             _notify_results(report, path, dashboard_written=dashboard is not None)
+        # A DM failure above raises Exit(2) first, so it wins over the exit 3 here
+        # when both the dashboard and the DM fail.
         if dashboard is None:
             raise typer.Exit(code=3)
 
@@ -645,6 +647,8 @@ def results_report_cmd(
             dashboard = _write_dashboard(store, report, dashboard_dir or config.dashboard_dir())
         if notify:
             _notify_results(report, path, dashboard_written=dashboard is not None)
+        # A DM failure above raises Exit(2) first, so it wins over the exit 3 here
+        # when both the dashboard and the DM fail.
         if dashboard is None:
             raise typer.Exit(code=3)
 

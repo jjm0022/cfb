@@ -251,6 +251,23 @@ def test_a_render_failure_keeps_the_report_sends_the_dm_and_exits_3(
         assert store.pool_weeks(2026) == [2]
 
 
+def test_a_dm_failure_takes_precedence_over_a_dashboard_failure(
+    workspace, sent, monkeypatch
+):
+    db, results = workspace
+    monkeypatch.delenv("DISCORD_BOT_TOKEN")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("render broke")
+
+    monkeypatch.setattr("pickem.cli.render_results_dashboard", boom)
+    result = invoke_import(db, results)
+    assert result.exit_code == 2, result.output
+    assert "the Discord DM failed" in result.output
+    assert "dashboard not written" in result.output
+    assert (results / "week2-report.md").exists()
+
+
 def test_an_unwritable_dashboard_dir_exits_3_and_keeps_the_report(workspace, tmp_path):
     db, results = workspace
     blocker = tmp_path / "not-a-dir"
