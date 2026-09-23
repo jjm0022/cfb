@@ -29,6 +29,19 @@ DEFAULT_ENTRY_NAME = "Jota"
 # happens to be installed.
 load_dotenv(find_dotenv(usecwd=True), override=False)
 
+# The pool's CBS page, and the Chrome profile logged in to it. The profile is
+# dedicated to the scheduled fetch: Chrome locks a profile in use and refuses
+# remote debugging on the everyday default one. Log in again with
+# scripts/cbs-login.sh.
+CBS_POOL_URL = os.environ.get(
+    "PICKEM_CBS_POOL_URL",
+    "https://picks.cbssports.com/football/pickem/pools/kbxw63b2ge3dkobtge2tq===",
+)
+CBS_CHROME_PROFILE = Path(
+    os.environ.get("PICKEM_CBS_CHROME_PROFILE", "~/.local/share/pickem/cbs-chrome")
+).expanduser()
+CHROME_BINARY = Path(os.environ.get("PICKEM_CHROME_BINARY", "/opt/google/chrome/chrome"))
+
 
 def nas_unavailable(path: Path) -> str | None:
     """Say why a path on the share cannot be used, or ``None`` if it can.
