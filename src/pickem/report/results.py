@@ -59,6 +59,14 @@ BASELINES = (
     Strategy.FIELD,
 )
 
+# The strategies graded in the "this week" boards: Markdown, HTML and the
+# Discord DM all show exactly this set, in this order.
+WEEK_STRATEGIES = (Strategy.US, Strategy.MODEL, Strategy.FIELD, Strategy.CLOSE_DIVERGENCE)
+
+# How each renderer marks a graded result; shared so Markdown, HTML and the
+# Discord DM stay in lockstep.
+RESULT_MARKS = {Result.WIN: "✓", Result.LOSS: "✗", Result.PUSH: "push"}
+
 GLOSSARY_INTRO = (
     "Each line above grades one way of choosing a side. All of them are scored "
     "against the same CBS line, so their records compare directly. A strategy "
@@ -156,6 +164,20 @@ class GradedGame:
         if side is None:
             return None
         return grade_pick(side, self.game.home_score - self.game.away_score, self.league_spread)
+
+    def team(self, side: Side | None) -> str:
+        """The team id on ``side``, or an em dash when no side was picked."""
+        if side is None:
+            return "—"
+        return self.game.home_team_id if side is Side.HOME else self.game.away_team_id
+
+    @property
+    def covered(self) -> str:
+        """"push", or the id of the team that covered ``league_spread``."""
+        home_result = self.result(Strategy.HOME)
+        if home_result is Result.PUSH:
+            return "push"
+        return self.team(Side.HOME if home_result is Result.WIN else Side.AWAY)
 
     @property
     def clv(self) -> float | None:

@@ -12,9 +12,9 @@ from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo
 
-from pickem.backtest.stats import Result
-from pickem.models import Side
 from pickem.report.results import (
+    RESULT_MARKS,
+    WEEK_STRATEGIES,
     GradedGame,
     Record,
     ResultsReport,
@@ -23,8 +23,6 @@ from pickem.report.results import (
 )
 
 EASTERN = ZoneInfo("America/New_York")
-_MARKS = {Result.WIN: "✓", Result.LOSS: "✗", Result.PUSH: "push"}
-_WEEK_STRATEGIES = (Strategy.US, Strategy.MODEL, Strategy.FIELD, Strategy.CLOSE_DIVERGENCE)
 
 _CSS = """
 :root{
@@ -99,7 +97,7 @@ def render_results_dashboard(
 
 
 def _record(record: Record) -> str:
-    """Record text as the Markdown prints it, with a dash when nothing was decided."""
+    """Record text, with a dash for n=0 — this page's own rule, not Record's own "n/a"."""
     if not record.decided:
         return f"{record.wins}–{record.losses} ({record.pushes}) = —, n=0"
     return str(record)
@@ -123,14 +121,16 @@ def _headline(report: ResultsReport) -> str:
         _tile(gap, "gap to winner"),
     ])
     boards = "".join(
-        f"<li><strong>{board.sport.value.upper()}</strong> {board.our_points} pts · "
-        f"median {board.median_points:g} · best {board.best_points}</li>"
+        f"<li><strong>{escape(board.sport.value.upper())}</strong> "
+        f"{escape(str(board.our_points))} pts · "
+        f"median {escape(f'{board.median_points:g}')} · "
+        f"best {escape(str(board.best_points))}</li>"
         for board in week.boards
     )
     return (
         f'<section id="headline"><div class="tiles">{tiles}</div>'
         f'<ul class="boards">{boards}</ul>'
-        f'<p class="note">Beat {week.beat_share:.0%} of the field.</p></section>'
+        f'<p class="note">Beat {escape(f"{week.beat_share:.0%}")} of the field.</p></section>'
     )
 
 
@@ -140,10 +140,10 @@ def _this_week(report: ResultsReport) -> str:
         games = [game for game in report.week_games if game.game.sport is sport]
         records = "".join(
             f"<tr><th>{escape(st.value)}</th><td>{escape(_record(record_for(games, st)))}</td></tr>"
-            for st in _WEEK_STRATEGIES
+            for st in WEEK_STRATEGIES
         )
         parts.append(
-            f"<h3>{sport.value.upper()} board</h3>"
+            f"<h3>{escape(sport.value.upper())} board</h3>"
             f'<table class="records">{records}</table>'
             f'<details class="games"><summary>All {len(games)} games</summary>'
             '<div class="scroll"><table class="game-table"><thead><tr>'
@@ -156,26 +156,17 @@ def _this_week(report: ResultsReport) -> str:
     return "".join(parts)
 
 
-def _team(game: GradedGame, side: Side | None) -> str:
-    if side is None:
-        return "—"
-    return game.game.home_team_id if side is Side.HOME else game.game.away_team_id
-
-
 def _game_row(game: GradedGame) -> str:
     g = game.game
-    home_result = game.result(Strategy.HOME)
-    covered = "push" if home_result is Result.PUSH else _team(
-        game, Side.HOME if home_result is Result.WIN else Side.AWAY
-    )
+    covered = game.covered
     ours = game.picks[Strategy.US]
-    us = "blank" if ours is None else f"{_team(game, ours)} {_MARKS[game.result(Strategy.US)]}"
+    us = "blank" if ours is None else f"{game.team(ours)} {RESULT_MARKS[game.result(Strategy.US)]}"
     if game.model is None:
         model = "—"
     else:
         model = (
-            f"{_team(game, game.model.side)} ({game.model.tier.value}) "
-            f"{_MARKS[game.result(Strategy.MODEL)]}"
+            f"{game.team(game.model.side)} ({game.model.tier.value}) "
+            f"{RESULT_MARKS[game.result(Strategy.MODEL)]}"
         )
     total = game.field_home + game.field_away
     field = "—" if not total else f"{game.field_home / total:.0%} home"

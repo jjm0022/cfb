@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pickem.backtest.stats import Result
-from pickem.models import Side, Sport
+from pickem.models import Sport
 from pickem.report.results import (
     AGAINST_FIELD_SHARE,
     BACKTEST_TIER_RATES,
     BASELINES,
     GLOSSARY_INTRO,
+    RESULT_MARKS,
     STRATEGY_DEFINITIONS,
+    WEEK_STRATEGIES,
     GradedGame,
     ResultsReport,
     Strategy,
@@ -19,9 +20,6 @@ from pickem.report.results import (
     findings,
     record_for,
 )
-
-_MARKS = {Result.WIN: "✓", Result.LOSS: "✗", Result.PUSH: "push"}
-_WEEK_STRATEGIES = (Strategy.US, Strategy.MODEL, Strategy.FIELD, Strategy.CLOSE_DIVERGENCE)
 
 
 def render_results_report(report: ResultsReport, *, generated_at: datetime) -> str:
@@ -39,7 +37,7 @@ def render_results_report(report: ResultsReport, *, generated_at: datetime) -> s
     for sport in week_sports:
         games = [game for game in report.week_games if game.game.sport is sport]
         lines += [f"### {sport.value.upper()} board", "", "| Strategy | Record |", "|---|---|"]
-        lines += [f"| {st.value} | {record_for(games, st)} |" for st in _WEEK_STRATEGIES]
+        lines += [f"| {st.value} | {record_for(games, st)} |" for st in WEEK_STRATEGIES]
         lines += [
             "",
             "| Kickoff (UTC) | Matchup | Line | Final | Covered | Us | Model | Field home % "
@@ -163,23 +161,14 @@ def _glossary() -> list[str]:
     ]
 
 
-def _team(game: GradedGame, side: Side | None) -> str:
-    if side is None:
-        return "—"
-    return game.game.home_team_id if side is Side.HOME else game.game.away_team_id
-
-
 def _game_row(game: GradedGame) -> str:
     g = game.game
-    home_result = game.result(Strategy.HOME)
-    covered = "push" if home_result is Result.PUSH else _team(
-        game, Side.HOME if home_result is Result.WIN else Side.AWAY
-    )
+    covered = game.covered
     ours = game.picks[Strategy.US]
-    us = "blank" if ours is None else f"{_team(game, ours)} {_MARKS[game.result(Strategy.US)]}"
+    us = "blank" if ours is None else f"{game.team(ours)} {RESULT_MARKS[game.result(Strategy.US)]}"
     model = (
         "—" if game.model is None
-        else f"{_team(game, game.model.side)} ({game.model.tier.value})"
+        else f"{game.team(game.model.side)} ({game.model.tier.value})"
     )
     total = game.field_home + game.field_away
     field = "—" if not total else f"{game.field_home / total:.0%}"

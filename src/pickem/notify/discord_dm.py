@@ -16,6 +16,7 @@ import discord
 
 from pickem.report.results import (
     BACKTEST_TIER_RATES,
+    WEEK_STRATEGIES,
     ResultsReport,
     Strategy,
     clv_summary,
@@ -23,7 +24,6 @@ from pickem.report.results import (
 )
 
 _FIELD_VALUE_LIMIT = 1024
-_BOARD_STRATEGIES = (Strategy.US, Strategy.MODEL, Strategy.FIELD, Strategy.CLOSE_DIVERGENCE)
 
 
 def _cap(text: str) -> str:
@@ -55,7 +55,7 @@ def build_results_embed(report: ResultsReport, report_path: Path) -> discord.Emb
     )
     for board in week.boards:
         games = [game for game in report.week_games if game.game.sport is board.sport]
-        value = "\n".join(f"{st.value}: {record_for(games, st)}" for st in _BOARD_STRATEGIES)
+        value = "\n".join(f"{st.value}: {record_for(games, st)}" for st in WEEK_STRATEGIES)
         embed.add_field(
             name=(
                 f"{board.sport.value.upper()} board — {board.our_points} pts "
