@@ -10,6 +10,8 @@ from pickem.report.results import (
     AGAINST_FIELD_SHARE,
     BACKTEST_TIER_RATES,
     BASELINES,
+    GLOSSARY_INTRO,
+    STRATEGY_DEFINITIONS,
     GradedGame,
     ResultsReport,
     Strategy,
@@ -152,32 +154,13 @@ def _glossary() -> list[str]:
         "",
         "## What the terms mean",
         "",
-        "Each line above grades one way of choosing a side. All of them are scored "
-        "against the same CBS line, so their records compare directly. A strategy "
-        "with no side on a game is not graded on it — that is why some carry a "
-        "smaller n.",
+        GLOSSARY_INTRO,
         "",
-        *(f"- {definition}" for definition in _DEFINITIONS),
+        *(
+            f"- **{strategy.value}** — {text}"
+            for strategy, text in STRATEGY_DEFINITIONS.items()
+        ),
     ]
-
-
-_DEFINITIONS = (
-    "**us** — the pick actually submitted on our CBS sheet. This is the only row "
-    "that cost us anything; the rest are yardsticks.",
-    "**model** — the last recommendation the model produced before kickoff. This is "
-    "the advice we could still have acted on, so it is the fair measure of the model.",
-    "**first sheet** — the model's earliest recommendation for that game, before any "
-    "later revision. Compared against `model`, it shows whether reworking the sheet "
-    "through the week actually helps.",
-    "**close divergence** — take whichever side the closing market rates higher than "
-    "the CBS line did. CBS freezes its number early; when the market closes on a "
-    "different one, this bets that the market's later number is the better one. It "
-    "sits out any game where the close matches the board or no close was captured.",
-    "**favorites** — always take the side the CBS line favors.",
-    "**home** — always take the home team.",
-    "**field consensus** — the side most other entrants in the pool picked. Beating "
-    "it is what moves us up the standings; a tie is not graded.",
-)
 
 
 def _team(game: GradedGame, side: Side | None) -> str:
