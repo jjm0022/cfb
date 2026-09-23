@@ -16,9 +16,13 @@ tailnet.
 ## Turn serving on (once)
 
 ```
-tailscale serve --bg --set-path /pickem ~/.local/share/pickem/dashboard
+sudo tailscale serve --bg --set-path /pickem /home/jmiller/.local/share/pickem/dashboard
 tailscale serve status
 ```
+
+Serving a directory needs root even for the operator user (`tailscale set
+--operator` is not enough), and `tailscaled` resolves the path itself, so give
+it absolute.
 
 Tailscale keeps this across reboots. Never use `tailscale funnel` for this
 directory: Funnel publishes to the internet, and the page carries every
@@ -52,7 +56,7 @@ points at `PICKEM_DASHBOARD_URL`, which serves the default directory.
 ## Turn serving off
 
 ```
-tailscale serve --set-path /pickem off
+sudo tailscale serve --set-path /pickem off
 ```
 
 ## When the page does not load
