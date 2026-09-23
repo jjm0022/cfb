@@ -174,10 +174,12 @@ uv run pickem ingest-cbs --html \
   --sport cfb --season 2026 --week 2
 ```
 
-For a whole pool week, `scripts/import-cbs-week.sh 3` does both boards from
-`/mnt/nas/Betting/pickem/weeks/week3.html`: CFB week 3 and NFL week 2
-(`--sport`, `--season`,
-`--file`, `--db` override the defaults).
+For a whole pool week, `scripts/start-week.sh 3` starts both boards from
+`/mnt/nas/Betting/pickem/weeks/week3.html`: it ingests CFB week 3 and NFL week 2,
+then takes each league's first market snapshot (step 3) with an 11-day window.
+A league whose ingest fails is not polled, and never blocks the other league.
+`--sport`, `--season`, `--days`, `--file` and `--db` override the defaults.
+Preflight and the report (step 4) remain manual.
 
 Omit `--file` to read the pasted block from stdin. Re-ingesting a week is safe:
 it will not erase scores a later `sync-results` wrote.
