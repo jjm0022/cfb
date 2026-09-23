@@ -85,7 +85,17 @@ def test_a_failed_import_is_reported(tmp_path):
     result, commands, _ = _run(tmp_path, fail_on=("import-results",))
 
     assert result.returncode == 1
-    assert any("notify-owner" in c for c in commands)
+    [dm] = [c for c in commands if "notify-owner" in c]
+    assert "Wednesday 09:00" in dm
+
+
+def test_a_non_numeric_pending_week_is_reported(tmp_path):
+    result, commands, _ = _run(tmp_path, pending="garbage")
+
+    assert result.returncode == 1
+    dms = [c for c in commands if "notify-owner" in c]
+    assert len(dms) == 1
+    assert not any("fetch-cbs" in c or "import-results" in c for c in commands)
 
 
 def test_a_failed_pending_lookup_is_reported(tmp_path):

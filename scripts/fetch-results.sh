@@ -57,6 +57,10 @@ if [[ -z "$pool_week" ]]; then
     echo "No finished pool week is waiting for results"
     exit 0
 fi
+if [[ ! "$pool_week" =~ ^[1-9][0-9]*$ ]]; then
+    notify "Could not tell which pool week's results are due; see the log. $retry_note"
+    exit 1
+fi
 
 page="$results_dir/week$pool_week.html"
 if [[ ! -f "$page" ]]; then
@@ -72,6 +76,6 @@ fi
 
 if ! uv run pickem import-results --season "$season" --pool-week "$pool_week" \
     --file "$page" --out-dir "$results_dir" --db "$database"; then
-    notify "Pool week $pool_week standings are saved but import-results failed; see the log."
+    notify "Pool week $pool_week standings are saved but import-results failed; see the log. $retry_note"
     exit 1
 fi
