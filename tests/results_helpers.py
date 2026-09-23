@@ -1,6 +1,7 @@
 """Seed a store that matches tests/fixtures/cbs_results_page.html (pool week 2)."""
 
 from datetime import UTC, datetime, timedelta
+from html.parser import HTMLParser
 from pathlib import Path
 
 from pickem.ingest.cbs_results import ParsedStandings, parse_cbs_results_html
@@ -53,3 +54,32 @@ def imported_store() -> Store:
         resolver=TeamResolver.default(), imported_at=IMPORTED_AT,
     )
     return store
+
+
+_VOID = {"meta", "br", "hr", "img", "input", "link", "wbr"}
+
+
+class _Balance(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stack: list[str] = []
+        self.errors: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in _VOID:
+            self.stack.append(tag)
+
+    def handle_endtag(self, tag):
+        if not self.stack or self.stack[-1] != tag:
+            self.errors.append(f"</{tag}> closes {self.stack[-1:] or 'nothing'}")
+        else:
+            self.stack.pop()
+
+
+def assert_well_formed(text: str) -> None:
+    """Every element the page opens is closed, in order (SVG uses self-closing tags)."""
+    checker = _Balance()
+    checker.feed(text)
+    checker.close()
+    assert not checker.errors, checker.errors[:5]
+    assert not checker.stack, f"unclosed: {checker.stack}"

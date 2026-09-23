@@ -89,6 +89,29 @@ def test_closing_spread_uses_live_quotes_before_kickoff_only():
     assert closing_spread([], KICK) is None
 
 
+def test_team_names_a_side_and_dashes_none():
+    game = Game(game_id=PSU_TEM, sport=Sport.CFB, season=2026, week=2, kickoff_utc=KICK,
+                home_team_id="TEM", away_team_id="PSU", home_score=9, away_score=27)
+    graded = grade_game(game=game, pool_week=2, league_spread=24.5, close_spread=None,
+                        our_side=None, field_home=0, field_away=0, history=[])
+    assert graded.team(None) == "—"
+    assert graded.team(Side.HOME) == "TEM"
+    assert graded.team(Side.AWAY) == "PSU"
+
+
+def test_covered_names_the_team_that_covered_or_push():
+    def graded(home_score, away_score, league_spread):
+        game = Game(game_id=PSU_TEM, sport=Sport.CFB, season=2026, week=2, kickoff_utc=KICK,
+                    home_team_id="TEM", away_team_id="PSU", home_score=home_score,
+                    away_score=away_score)
+        return grade_game(game=game, pool_week=2, league_spread=league_spread, close_spread=None,
+                          our_side=None, field_home=0, field_away=0, history=[])
+
+    assert graded(20, 10, 3.5).covered == "TEM"
+    assert graded(10, 20, 3.5).covered == "PSU"
+    assert graded(10, 13, 3.0).covered == "push"
+
+
 def test_grade_game_grades_every_strategy():
     game = Game(game_id=PSU_TEM, sport=Sport.CFB, season=2026, week=2, kickoff_utc=KICK,
                 home_team_id="TEM", away_team_id="PSU", home_score=9, away_score=27)

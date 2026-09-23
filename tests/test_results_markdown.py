@@ -4,7 +4,15 @@ import pytest
 from results_helpers import KICK, imported_store
 
 from pickem.models import HISTORY_MONITOR, Game, RecommendationRecord, Side, Sport, Tier
-from pickem.report.results import BASELINES, Strategy, build_results_report, findings, grade_game
+from pickem.report.results import (
+    BASELINES,
+    GLOSSARY_INTRO,
+    STRATEGY_DEFINITIONS,
+    Strategy,
+    build_results_report,
+    findings,
+    grade_game,
+)
 from pickem.report.results_markdown import render_results_report
 
 
@@ -81,3 +89,9 @@ def test_glossary_defines_every_strategy_the_report_grades(store):
 
     for strategy in (Strategy.US, *BASELINES):
         assert f"**{strategy.value}**" in glossary
+
+
+def test_every_strategy_has_a_plain_text_definition():
+    assert list(STRATEGY_DEFINITIONS) == list(Strategy)
+    for text in (GLOSSARY_INTRO, *STRATEGY_DEFINITIONS.values()):
+        assert "*" not in text and "`" not in text

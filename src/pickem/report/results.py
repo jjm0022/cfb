@@ -59,6 +59,40 @@ BASELINES = (
     Strategy.FIELD,
 )
 
+# The strategies graded in the "this week" boards: Markdown, HTML and the
+# Discord DM all show exactly this set, in this order.
+WEEK_STRATEGIES = (Strategy.US, Strategy.MODEL, Strategy.FIELD, Strategy.CLOSE_DIVERGENCE)
+
+# How each renderer marks a graded result; shared so Markdown, HTML and the
+# Discord DM stay in lockstep.
+RESULT_MARKS = {Result.WIN: "✓", Result.LOSS: "✗", Result.PUSH: "push"}
+
+GLOSSARY_INTRO = (
+    "Each line above grades one way of choosing a side. All of them are scored "
+    "against the same CBS line, so their records compare directly. A strategy "
+    "with no side on a game is not graded on it — that is why some carry a "
+    "smaller n."
+)
+
+# Plain text: each renderer adds its own emphasis to the term.
+STRATEGY_DEFINITIONS: dict[Strategy, str] = {
+    Strategy.US: "the pick actually submitted on our CBS sheet. This is the only row "
+    "that cost us anything; the rest are yardsticks.",
+    Strategy.MODEL: "the last recommendation the model produced before kickoff. This is "
+    "the advice we could still have acted on, so it is the fair measure of the model.",
+    Strategy.FIRST_SHEET: "the model's earliest recommendation for that game, before any "
+    "later revision. Compared against model, it shows whether reworking the sheet "
+    "through the week actually helps.",
+    Strategy.CLOSE_DIVERGENCE: "take whichever side the closing market rates higher than "
+    "the CBS line did. CBS freezes its number early; when the market closes on a "
+    "different one, this bets that the market's later number is the better one. It "
+    "sits out any game where the close matches the board or no close was captured.",
+    Strategy.FAVORITES: "always take the side the CBS line favors.",
+    Strategy.HOME: "always take the home team.",
+    Strategy.FIELD: "the side most other entrants in the pool picked. Beating "
+    "it is what moves us up the standings; a tie is not graded.",
+}
+
 
 def close_divergence_side(league_spread: float, close_spread: float | None) -> Side | None:
     """The side the closing market favors against the frozen CBS line.
@@ -130,6 +164,20 @@ class GradedGame:
         if side is None:
             return None
         return grade_pick(side, self.game.home_score - self.game.away_score, self.league_spread)
+
+    def team(self, side: Side | None) -> str:
+        """The team id on ``side``, or an em dash when no side was picked."""
+        if side is None:
+            return "—"
+        return self.game.home_team_id if side is Side.HOME else self.game.away_team_id
+
+    @property
+    def covered(self) -> str:
+        """"push", or the id of the team that covered ``league_spread``."""
+        home_result = self.result(Strategy.HOME)
+        if home_result is Result.PUSH:
+            return "push"
+        return self.team(Side.HOME if home_result is Result.WIN else Side.AWAY)
 
     @property
     def clv(self) -> float | None:

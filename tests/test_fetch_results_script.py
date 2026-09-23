@@ -8,7 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "fetch-results.sh"
 
 
-def _run(tmp_path: Path, *, pending: str = "4", fail_on: tuple[str, ...] = ()):
+def _run(
+    tmp_path: Path, *, pending: str = "4", fail_on: tuple[str, ...] = (), fail_exit: int = 1
+):
     log = tmp_path / "commands.log"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
@@ -18,7 +20,8 @@ def _run(tmp_path: Path, *, pending: str = "4", fail_on: tuple[str, ...] = ()):
         'printf "%s\\n" "$*" >> "$RESULTS_LOG"\n'
         'while IFS= read -r pattern; do\n'
         '    if [[ -n "$pattern" && "$*" == *"$pattern"* ]]; then\n'
-        '        echo "noise line" >&2; echo "game 501: status is Thu, not final" >&2; exit 1\n'
+        '        echo "noise line" >&2; echo "game 501: status is Thu, not final" >&2\n'
+        '        exit "$RESULTS_FAIL_EXIT"\n'
         '    fi\n'
         'done <<< "$RESULTS_FAIL_ON"\n'
         'if [[ "$*" == *pending-results-week* ]]; then printf "%s" "$RESULTS_PENDING"; fi\n'
@@ -32,6 +35,7 @@ def _run(tmp_path: Path, *, pending: str = "4", fail_on: tuple[str, ...] = ()):
         "RESULTS_LOG": str(log),
         "RESULTS_FAIL_ON": "\n".join(fail_on),
         "RESULTS_PENDING": pending,
+        "RESULTS_FAIL_EXIT": str(fail_exit),
     }
     result = subprocess.run(
         ["bash", str(SCRIPT), "--season", "2026", "--results-dir", str(results),
@@ -87,6 +91,28 @@ def test_a_failed_import_is_reported(tmp_path):
     assert result.returncode == 1
     [dm] = [c for c in commands if "notify-owner" in c]
     assert "Wednesday 09:00" in dm
+
+
+def test_a_dashboard_write_failure_tells_the_owner_the_week_is_imported(tmp_path):
+    result, commands, _ = _run(tmp_path, fail_on=("import-results",), fail_exit=3)
+
+    assert result.returncode == 3
+    [dm] = [c for c in commands if "notify-owner" in c]
+    assert "Pool week 4 imported and reported" in dm
+    assert "dashboard page was not written" in dm
+    assert "results-report --season 2026 --pool-week 4" in dm
+    assert "Wednesday 09:00" not in dm
+
+
+def test_a_dm_failure_tells_the_owner_where_the_report_is(tmp_path):
+    result, commands, results = _run(tmp_path, fail_on=("import-results",), fail_exit=2)
+
+    assert result.returncode == 2
+    [dm] = [c for c in commands if "notify-owner" in c]
+    assert "Pool week 4 imported and the report written" in dm
+    assert "results DM failed" in dm
+    assert f"{results}/week4-report.md" in dm
+    assert "Wednesday 09:00" not in dm
 
 
 def test_a_non_numeric_pending_week_is_reported(tmp_path):
