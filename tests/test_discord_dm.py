@@ -91,3 +91,17 @@ def test_message_embed_caps_long_text_at_discords_limit():
 
     assert len(embed.description) == 4096
     assert embed.description.endswith("…")
+
+
+def test_embed_links_the_weeks_dashboard_page_when_given_a_url(report):
+    embed = build_results_embed(
+        report, Path("r.md"), dashboard_url="https://sandbox.tail750bff.ts.net/pickem/"
+    )
+    fields = {field.name: field.value for field in embed.fields}
+    assert fields["Dashboard"] == "https://sandbox.tail750bff.ts.net/pickem/week-2.html"
+    assert embed.fields[-1].name == "Full report"
+
+
+def test_embed_has_no_dashboard_field_without_a_url(report):
+    embed = build_results_embed(report, Path("r.md"))
+    assert "Dashboard" not in [field.name for field in embed.fields]

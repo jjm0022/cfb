@@ -42,7 +42,9 @@ def build_message_embed(title: str, message: str) -> discord.Embed:
     return discord.Embed(title=title, description=message)
 
 
-def build_results_embed(report: ResultsReport, report_path: Path) -> discord.Embed:
+def build_results_embed(
+    report: ResultsReport, report_path: Path, *, dashboard_url: str | None = None
+) -> discord.Embed:
     week = report.current
     embed = discord.Embed(
         title=f"🏈 Pool week {report.pool_week} results",
@@ -77,6 +79,12 @@ def build_results_embed(report: ResultsReport, report_path: Path) -> discord.Emb
         else f"mean {clv.mean:+.2f} pts over {clv.n} picks, {clv.positive_share:.0%} positive"
     )
     embed.add_field(name="Closing-line value (season)", value=_cap(clv_text), inline=False)
+    if dashboard_url is not None:
+        embed.add_field(
+            name="Dashboard",
+            value=_cap(f"{dashboard_url}week-{report.pool_week}.html"),
+            inline=False,
+        )
     embed.add_field(name="Full report", value=_cap(str(report_path)), inline=False)
     return embed
 
