@@ -13,6 +13,11 @@ chrome=${PICKEM_CHROME_BINARY:-/opt/google/chrome/chrome}
 pool_url=${PICKEM_CBS_POOL_URL:-https://picks.cbssports.com/football/pickem/pools/kbxw63b2ge3dkobtge2tq===}
 runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 
+if [[ ! -x "$chrome" ]]; then
+    echo "Chrome binary not found or not executable: $chrome" >&2
+    exit 1
+fi
+
 mkdir -p "$profile"
 WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0} XDG_RUNTIME_DIR=$runtime_dir DISPLAY=${DISPLAY:-:0} \
     setsid -f "$chrome" --user-data-dir="$profile" --password-store=basic \
