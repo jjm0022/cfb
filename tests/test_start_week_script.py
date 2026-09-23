@@ -317,6 +317,20 @@ def test_auto_dm_names_the_league_that_failed_and_still_reminds(tmp_path):
     assert "Loaded: cfb week 4" in dm and "submit this week's picks" in dm
 
 
+def test_auto_dm_omits_the_parenthetical_when_nothing_loaded(tmp_path):
+    weeks, db = tmp_path / "weeks", tmp_path / "pickem.duckdb"
+
+    result, commands = _run(
+        tmp_path, "--auto", "--sport", "nfl", "--season", "2026",
+        "--weeks-dir", str(weeks), "--db", str(db), current_week=1,
+    )
+
+    assert result.returncode == 0, result.stderr
+    [dm] = _dms(commands)
+    assert "()" not in dm
+    assert "Pool week 1 board loaded." in dm and "submit this week's picks" in dm
+
+
 def test_auto_reports_a_failed_week_lookup(tmp_path):
     result, commands = _run(
         tmp_path, "--auto", "--season", "2026", "--weeks-dir", str(tmp_path),

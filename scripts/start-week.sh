@@ -184,5 +184,9 @@ if ((${#failed[@]})); then
     exit 1
 fi
 
-loaded_list=$(printf '%s, ' "${loaded[@]}")
-notify "Pool week $pool_week board loaded (${loaded_list%, }). $reminder"
+if ((${#loaded[@]})); then
+    loaded_list=$(printf '%s, ' "${loaded[@]}")
+    notify "Pool week $pool_week board loaded (${loaded_list%, }). $reminder"
+else
+    notify "Pool week $pool_week board loaded. $reminder"
+fi
