@@ -44,6 +44,7 @@ class RateRow:
     rate: float | None
     interval: tuple[float, float] | None
     expected: float | None = None
+    value: str = ""
 
 
 def rate_rows(rows: Sequence[RateRow], *, mark: str, caption: str) -> str:
@@ -54,11 +55,16 @@ def rate_rows(rows: Sequence[RateRow], *, mark: str, caption: str) -> str:
     for row in rows:
         parts.append(
             '<div class="rate-row">'
-            f'<div class="rate-label">{escape(row.label)}<small>{escape(row.detail)}</small></div>'
+            f'<div class="rate-label">{escape(row.label)}{_value(row.value)}'
+            f"<small>{escape(row.detail)}</small></div>"
             f"{_rate_svg(row, mark)}</div>"
         )
     parts.append("</figure>")
     return "".join(parts)
+
+
+def _value(value: str) -> str:
+    return f'<strong class="rate-value">{escape(value)}</strong>' if value else ""
 
 
 def _rate_axis() -> str:

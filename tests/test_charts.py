@@ -104,3 +104,13 @@ def test_the_first_series_is_drawn_on_top_when_values_tie():
     us_legend = html.index('<span class="key s-us">')
     median_legend = html.index('<span class="key s-median">')
     assert us_legend < median_legend  # legend keeps the given order regardless
+
+
+def test_a_row_value_is_set_apart_from_its_label():
+    html = rate_rows([RateRow("us", "1–1", 0.5, None, value="50%")], mark="bar", caption="c")
+    assert (
+        '<div class="rate-label">us<strong class="rate-value">50%</strong><small>1–1</small>'
+        in html
+    )
+    plain = rate_rows([RateRow("us", "1–1", 0.5, None)], mark="bar", caption="c")
+    assert "rate-value" not in plain

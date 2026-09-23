@@ -10,6 +10,7 @@ from pickem.report.results import (
     BASELINES,
     STRATEGY_DEFINITIONS,
     BoardStanding,
+    Record,
     ResultsReport,
     Strategy,
     WeekStanding,
@@ -17,7 +18,7 @@ from pickem.report.results import (
     findings,
     grade_game,
 )
-from pickem.report.results_html import render_results_dashboard
+from pickem.report.results_html import describe_record, render_results_dashboard
 
 GENERATED = datetime(2026, 9, 15, 13, tzinfo=UTC)
 
@@ -137,10 +138,40 @@ def test_kickoffs_show_in_eastern_time(report):
     assert "Sat 12:00 PM" in row(render(report), "PSU at TEM")
 
 
-def test_a_board_with_no_decided_model_games_prints_a_dash():
-    text = render(synthetic_report([synthetic_game(0)]))
-    records = text.split("<h3>CFB board</h3>", 1)[1].split("</table>", 1)[0]
-    assert "model</th><td>0–0 (0) = —, n=0</td>" in records
+def board_rows(text, board="CFB"):
+    return text.split(f"<h3>{board} board</h3>", 1)[1].split("</figure>", 1)[0]
+
+
+def test_a_board_with_no_decided_model_games_says_so():
+    rows = board_rows(render(synthetic_report([synthetic_game(0)])))
+    assert (
+        'model<strong class="rate-value">—</strong><small>no decided games</small>' in rows
+    )
+
+
+def test_each_board_draws_its_records_as_rate_rows():
+    rows = board_rows(render(synthetic_report([synthetic_game(0)])))
+    assert rows.count('<div class="rate-row">') == 4
+    # Home covered, we took home: 1–0.
+    assert (
+        'us<strong class="rate-value">100%</strong>'
+        "<small>1–0 · likely 21–100% · 1 game</small>" in rows
+    )
+    assert ", n=" not in rows and ") = " not in rows  # no raw Record formula
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        (Record(1, 1, 0), ("50%", "1–1 · likely 9–91% · 2 games")),
+        (Record(1, 1, 1), ("50%", "1–1 · likely 9–91% · 2 games · 1 push")),
+        (Record(12, 7, 2), ("63%", "12–7 · likely 41–81% · 19 games · 2 pushes")),
+        (Record(0, 0, 0), ("—", "no decided games")),
+        (Record(0, 0, 1), ("—", "no decided games · 1 push")),
+    ],
+)
+def test_records_read_as_a_rate_and_a_plain_summary(record, expected):
+    assert describe_record(record) == expected
 
 
 def test_text_from_the_data_is_escaped():
@@ -169,13 +200,14 @@ def test_tier_rows_carry_the_nfl_backtest_ticks(report):
         assert f'class="expected" {x}' in tiers
     assert "CFB coinflip" in tiers and "NFL strong" in tiers
     assert "NFL backtest 63.7%" in tiers
+    assert ", n=" not in tiers
     assert "Games with no recommendation stored before kickoff" in tiers
 
 
 def test_baselines_chart_has_a_row_for_every_strategy(report):
     section = render(report).split("<h2>Us against baselines</h2>", 1)[1].split("</section>")[0]
     for strategy in (Strategy.US, *BASELINES):
-        assert f'<div class="rate-label">{html_escape(strategy.value)}<small>' in section
+        assert f'<div class="rate-label">{html_escape(strategy.value)}<strong' in section
 
 
 def test_trend_uses_every_imported_week(report):

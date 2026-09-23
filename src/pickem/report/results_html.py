@@ -64,8 +64,6 @@ h3{margin:18px 0 6px;font-size:16px}
 .boards{list-style:none;padding:0;margin:0}
 .boards strong{color:var(--ink)}
 table{border-collapse:collapse;font-variant-numeric:tabular-nums}
-.records th{text-align:left;font-weight:500;padding:2px 14px 2px 0;color:var(--muted)}
-.records td{padding:2px 0}
 details{margin:8px 0}
 summary{cursor:pointer;color:var(--accent);font-weight:500}
 summary:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -84,6 +82,7 @@ figcaption{margin-bottom:6px}
 .rate-row{display:grid;grid-template-columns:minmax(8.5rem,11rem) 1fr;gap:10px;
   align-items:center;padding:3px 0}
 .rate-label{font-size:14px;line-height:1.25}
+.rate-value{margin-left:6px;font-size:15px;font-variant-numeric:tabular-nums}
 .rate-label small{display:block;color:var(--muted);font-size:11.5px;
   font-variant-numeric:tabular-nums}
 .rate-ticks{position:relative;height:1.2em;font-size:12px;color:var(--muted)}
@@ -148,11 +147,39 @@ def render_results_dashboard(
     )
 
 
-def _record(record: Record) -> str:
-    """Record text, with a dash for n=0 — this page's own rule, not Record's own "n/a"."""
+def describe_record(record: Record) -> tuple[str, str]:
+    """The hit rate, and the record in words: wins–losses, the likely range, games, pushes.
+
+    The page's own reading of ``Record``: the Markdown keeps ``str(Record)``. The
+    likely range is the 95% Wilson interval; a dash stands in for a rate with no
+    decided games.
+    """
+    pushes = (
+        [f"{record.pushes} push" + ("es" if record.pushes > 1 else "")] if record.pushes else []
+    )
     if not record.decided:
-        return f"{record.wins}–{record.losses} ({record.pushes}) = —, n=0"
-    return str(record)
+        return "—", " · ".join(["no decided games", *pushes])
+    low, high = record.interval
+    games = f"{record.decided} game" + ("s" if record.decided > 1 else "")
+    parts = [
+        f"{record.wins}–{record.losses}",
+        f"likely {low * 100:.0f}–{high:.0%}",
+        games,
+        *pushes,
+    ]
+    return f"{record.rate:.0%}", " · ".join(parts)
+
+
+def _record_row(label: str, record: Record, *, expected: float | None = None) -> RateRow:
+    value, detail = describe_record(record)
+    if expected is not None:
+        detail += f" · NFL backtest {expected:.1%}"
+    return RateRow(label, detail, record.rate, record.interval, expected, value=value)
+
+
+def _record_text(record: Record) -> str:
+    value, detail = describe_record(record)
+    return detail if not record.decided else f"{value} · {detail}"
 
 
 def _tile(value: str, label: str) -> str:
@@ -190,13 +217,15 @@ def _this_week(report: ResultsReport) -> str:
     parts = ['<section id="this-week"><h2>This week</h2>']
     for sport in sorted({game.game.sport for game in report.week_games}):
         games = [game for game in report.week_games if game.game.sport is sport]
-        records = "".join(
-            f"<tr><th>{escape(st.value)}</th><td>{escape(_record(record_for(games, st)))}</td></tr>"
-            for st in WEEK_STRATEGIES
+        records = rate_rows(
+            [_record_row(st.value, record_for(games, st)) for st in WEEK_STRATEGIES],
+            mark="bar",
+            caption="Hit rate this week. Whisker: the likely range (95% interval); "
+            "dashed line: 50%.",
         )
         parts.append(
             f"<h3>{escape(sport.value.upper())} board</h3>"
-            f'<table class="records">{records}</table>'
+            f"{records}"
             f'<details class="games"><summary>All {len(games)} games</summary>'
             '<div class="scroll"><table class="game-table"><thead><tr>'
             "<th>Kickoff (ET)</th><th>Matchup</th><th>Line (home)</th><th>Final</th>"
@@ -275,13 +304,9 @@ def _tiers(report: ResultsReport) -> str:
     for sport in sorted({game.game.sport for game in report.season_games}):
         for tier, expected in BACKTEST_TIER_RATES.items():
             record = record_for(report.season_games, Strategy.MODEL, sport=sport, tier=tier)
-            rows.append(RateRow(
-                f"{sport.value.upper()} {tier.value}",
-                f"{_record(record)} · NFL backtest {expected:.1%}",
-                record.rate,
-                record.interval,
-                expected,
-            ))
+            rows.append(
+                _record_row(f"{sport.value.upper()} {tier.value}", record, expected=expected)
+            )
     chart = rate_rows(
         rows, mark="bar",
         caption="Model hit rate by tier, season to date. Whisker: 95% interval. "
@@ -298,7 +323,7 @@ def _baselines(report: ResultsReport) -> str:
     rows = []
     for strategy in (Strategy.US, *BASELINES):
         record = record_for(report.season_games, strategy)
-        rows.append(RateRow(strategy.value, _record(record), record.rate, record.interval))
+        rows.append(_record_row(strategy.value, record))
     chart = rate_rows(
         rows, mark="dot",
         caption="Every strategy on the same CBS lines, all boards, season to date. "
@@ -321,7 +346,7 @@ def _clv_and_field(report: ResultsReport) -> str:
     against = record_for([g for g in report.season_games if g.against_field], Strategy.US)
     field = (
         f"<p>Against the field (≤{escape(f'{AGAINST_FIELD_SHARE:.0%}')} of other entrants on "
-        f"our side): {escape(_record(against))}</p>"
+        f"our side): {escape(_record_text(against))}</p>"
     )
     return _section(
         "clv", "Closing-line value and the field", f'<div class="tiles">{tiles}</div>{field}'
