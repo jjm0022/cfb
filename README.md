@@ -266,6 +266,10 @@ summary. Use
 import and the report; `uv run pickem results-report --season 2026 --notify`
 resends it.
 
+Each import also writes a visual dashboard page, served privately to the
+owner's devices over Tailscale at `https://sandbox.tail750bff.ts.net/pickem/`.
+Setup, rebuilding and troubleshooting are in `docs/runbooks/dashboard.md`.
+
 The report grades four things side by side: your submitted picks, the model's
 last recommendation before each kickoff, the field's consensus, and simple
 baselines (favorites, home teams, the closing market). A comparison is called a
