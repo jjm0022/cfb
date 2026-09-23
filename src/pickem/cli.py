@@ -79,6 +79,7 @@ from pickem.operations.recommendations import (
 )
 from pickem.operations.results_import import ResultsImportError, import_results
 from pickem.report.results import ResultsReport, ResultsReportError, build_results_report
+from pickem.report.results_html import render_results_dashboard
 from pickem.report.results_markdown import render_results_report
 from pickem.report.sheet import render_sheet
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
@@ -474,12 +475,60 @@ def _write_results_report(
     return report, path
 
 
-def _notify_results(report: ResultsReport, path: Path) -> None:
+def _write_atomic(path: Path, text: str) -> None:
+    """Write beside the target, then rename, so a reader never sees half a page."""
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _write_dashboard(store: Store, report: ResultsReport, dashboard_dir: Path) -> Path | None:
+    """Write week-N.html, and index.html when N is the latest week; ``None`` on failure.
+
+    The import and the Markdown are already saved, so a failure here is logged
+    and reported, never raised: the DM still goes out before the command exits 3.
+    """
+    try:
+        weeks = store.pool_weeks(report.season)
+        page = render_results_dashboard(
+            report, generated_at=datetime.now(tz=UTC), imported_weeks=weeks
+        )
+        dashboard_dir.mkdir(parents=True, exist_ok=True)
+        path = dashboard_dir / f"week-{report.pool_week}.html"
+        _write_atomic(path, page)
+        index_updated = report.pool_week == weeks[-1]
+        if index_updated:
+            _write_atomic(dashboard_dir / "index.html", page)
+    except Exception as exc:  # a render bug or a filesystem error alike must not stop the DM
+        logger.bind(
+            event="dashboard_write_failed",
+            pool_week=report.pool_week,
+            error_type=type(exc).__name__,
+            error_detail=str(exc),
+        ).error(f"dashboard not written: {exc}")
+        typer.secho(f"dashboard not written: {exc}", fg="red", err=True)
+        return None
+    logger.bind(
+        event="dashboard_written",
+        pool_week=report.pool_week,
+        path=str(path),
+        bytes=len(page.encode("utf-8")),
+        index_updated=index_updated,
+    ).info(f"dashboard written to {path}")
+    typer.echo(f"dashboard written to {path}")
+    return path
+
+
+def _notify_results(report: ResultsReport, path: Path, *, dashboard_written: bool) -> None:
     """Send the DM; on failure keep everything and exit 2 so the miss is visible."""
     try:
         asyncio.run(
             send_owner_dm(
-                build_results_embed(report, path),
+                build_results_embed(
+                    report,
+                    path,
+                    dashboard_url=config.dashboard_url() if dashboard_written else None,
+                ),
                 token=config.discord_bot_token(),
                 owner_id=config.discord_owner_id(),
             )
@@ -508,6 +557,9 @@ def import_results_cmd(
     ),
     entry_name: str = typer.Option(config.DEFAULT_ENTRY_NAME),
     out_dir: Path = typer.Option(config.DEFAULT_RESULTS_DIR),
+    dashboard_dir: Path = typer.Option(
+        None, help="Default: $PICKEM_DASHBOARD_DIR or ~/.local/share/pickem/dashboard"
+    ),
     notify: bool = typer.Option(True, "--notify/--no-notify"),
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
@@ -548,8 +600,11 @@ def import_results_cmd(
                 f"{summary.picks} picks ({summary.blank_picks} blank)"
             )
             report, path = _write_results_report(store, season, pool_week, entry_name, out_dir)
+            dashboard = _write_dashboard(store, report, dashboard_dir or config.dashboard_dir())
         if notify:
-            _notify_results(report, path)
+            _notify_results(report, path, dashboard_written=dashboard is not None)
+        if dashboard is None:
+            raise typer.Exit(code=3)
 
 
 @app.command("results-report")
@@ -558,6 +613,9 @@ def results_report_cmd(
     pool_week: int = typer.Option(None, help="Default: the latest imported pool week"),
     entry_name: str = typer.Option(config.DEFAULT_ENTRY_NAME),
     out_dir: Path = typer.Option(config.DEFAULT_RESULTS_DIR),
+    dashboard_dir: Path = typer.Option(
+        None, help="Default: $PICKEM_DASHBOARD_DIR or ~/.local/share/pickem/dashboard"
+    ),
     notify: bool = typer.Option(False, "--notify/--no-notify"),
     db: Path = typer.Option(config.DEFAULT_DB),
 ) -> None:
@@ -574,8 +632,11 @@ def results_report_cmd(
                 raise typer.Exit(code=1)
             week = pool_week if pool_week is not None else weeks[-1]
             report, path = _write_results_report(store, season, week, entry_name, out_dir)
+            dashboard = _write_dashboard(store, report, dashboard_dir or config.dashboard_dir())
         if notify:
-            _notify_results(report, path)
+            _notify_results(report, path, dashboard_written=dashboard is not None)
+        if dashboard is None:
+            raise typer.Exit(code=3)
 
 
 @app.command("backfill-recommendations")
