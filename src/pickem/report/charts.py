@@ -67,6 +67,12 @@ def _value(value: str) -> str:
     return f'<strong class="rate-value">{escape(value)}</strong>' if value else ""
 
 
+def _rate_tip(row: RateRow) -> str:
+    """What the page's pop-up shows for a row: its label, value and summary."""
+    head = f"{row.label}: {row.value}" if row.value else row.label
+    return f"{head} · {row.detail}" if row.detail else head
+
+
 def _rate_axis() -> str:
     return (
         '<div class="rate-row rate-axis"><div></div>'
@@ -80,7 +86,8 @@ def _rate_svg(row: RateRow, mark: str) -> str:
     mid = _n(_ROW_H / 2)
     aria = f"{row.label}: " + ("no decided games" if row.rate is None else f"{row.rate:.1%}")
     parts = [
-        f'<svg viewBox="0 0 {_n(_VIEW_W)} {_n(_ROW_H)}" role="img" aria-label="{escape(aria)}">',
+        f'<svg viewBox="0 0 {_n(_VIEW_W)} {_n(_ROW_H)}" role="img" aria-label="{escape(aria)}" '
+        f'data-tip="{escape(_rate_tip(row))}">',
         f'<line class="track" x1="{_n(rate_x(0))}" y1="{mid}" x2="{_n(rate_x(1))}" y2="{mid}"/>',
         f'<line class="ref" x1="{_n(rate_x(0.5))}" y1="2.0" x2="{_n(rate_x(0.5))}" '
         f'y2="{_n(_ROW_H - 2)}"/>',
@@ -163,12 +170,19 @@ def trend_chart(
         points = [
             (trend_x(i, count), trend_y(v, top)) for i, v in enumerate(line.values)
         ]
+        tips = [
+            f"Wk {week} · {line.label}: {fmt(v)}"
+            for week, v in zip(weeks, line.values, strict=True)
+        ]
         if len(points) >= 2:
             joined = " ".join(f"{_n(x)},{_n(y)}" for x, y in points)
             parts.append(f'<polyline class="line {line.css_class}" points="{joined}"/>')
-        for x, y in points:
+        for (x, y), tip in zip(points, tips, strict=True):
+            # A wider invisible circle makes each point easy to tap on a phone.
             parts.append(
-                f'<circle class="dot {line.css_class}" cx="{_n(x)}" cy="{_n(y)}" r="4.0"/>'
+                f'<g data-tip="{escape(tip)}">'
+                f'<circle class="hit" cx="{_n(x)}" cy="{_n(y)}" r="12.0"/>'
+                f'<circle class="dot {line.css_class}" cx="{_n(x)}" cy="{_n(y)}" r="4.0"/></g>'
             )
     parts.append("</svg>")
     keys = "".join(

@@ -110,6 +110,11 @@ figcaption{margin-bottom:6px}
   font-size:13px;color:var(--muted)}
 .key{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
 .empty{color:var(--muted);font-style:italic}
+.hit{fill:transparent}
+[data-tip]{cursor:pointer}
+.tip{position:fixed;z-index:10;pointer-events:none;background:var(--ink);color:var(--bg);
+  font-size:12.5px;line-height:1.3;padding:5px 9px;border-radius:6px;
+  max-width:calc(100vw - 16px);box-shadow:0 2px 8px rgba(0,0,0,.25)}
 .claims li{margin:4px 0}
 dl dt{font-weight:600;margin-top:8px}
 dl dd{margin:0;color:var(--muted)}
@@ -143,8 +148,41 @@ def render_results_dashboard(
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<meta name="color-scheme" content="light dark">'
         f"<title>{escape(title)}</title><style>{_CSS}</style></head>"
-        f"<body><main>{''.join(body)}</main></body></html>\n"
+        f"<body><main>{''.join(body)}</main><script>{_TIP_JS}</script></body></html>\n"
     )
+
+
+# The one script on the page: a pop-up that shows an element's data-tip on
+# mouse hover or on tap, kept inside the viewport. Inline, so nothing loads.
+_TIP_JS = """
+(function () {
+  var tip = document.createElement("div");
+  tip.className = "tip";
+  tip.hidden = true;
+  document.body.appendChild(tip);
+  function target(e) { return e.target.closest ? e.target.closest("[data-tip]") : null; }
+  function show(el, x, y) {
+    tip.textContent = el.getAttribute("data-tip");
+    tip.hidden = false;
+    var box = tip.getBoundingClientRect();
+    var left = Math.min(Math.max(8, x - box.width / 2), window.innerWidth - box.width - 8);
+    var top = y - box.height - 12;
+    if (top < 8) top = y + 16;
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  }
+  document.addEventListener("pointermove", function (e) {
+    if (e.pointerType !== "mouse") return;
+    var el = target(e);
+    if (el) show(el, e.clientX, e.clientY); else tip.hidden = true;
+  });
+  document.addEventListener("click", function (e) {
+    var el = target(e);
+    if (el) show(el, e.clientX, e.clientY); else tip.hidden = true;
+  });
+  window.addEventListener("scroll", function () { tip.hidden = true; }, { passive: true });
+})();
+"""
 
 
 def describe_record(record: Record) -> tuple[str, str]:

@@ -72,8 +72,11 @@ scales the drawing down.
 - All CSS is inline and the page makes no external requests: no fonts,
   scripts, or images from any host. It renders offline and identically on
   every load.
-- Charts are inline SVG generated in Python. There is no JavaScript. The
-  folded game table and glossary use native `<details>`.
+- Charts are inline SVG generated in Python. Each bar and trend point
+  carries its value in a `data-tip` attribute; one small inline script
+  shows it in a pop-up on hover (mouse) or tap (touch). Without the
+  script, every number is still printed on the page. The folded game table
+  and glossary use native `<details>`.
 - Every value interpolated into the page is HTML-escaped.
 
 ### Sections, top to bottom

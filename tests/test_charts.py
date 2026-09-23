@@ -80,7 +80,7 @@ def test_several_weeks_draw_a_line_through_every_point():
 
 def test_an_all_zero_trend_does_not_divide_by_zero():
     html = trend_chart([1, 2], [Series("us", "s-us", (0, 0))], y_max=0, fmt=str, caption="c")
-    assert html.count('cy="150.0"') == 2
+    assert len(re.findall(r'class="dot [^"]*" cx="[\d.]+" cy="150.0"', html)) == 2
 
 
 def test_trend_has_a_legend_and_week_labels():

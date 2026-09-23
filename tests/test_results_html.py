@@ -86,7 +86,9 @@ def test_page_is_a_complete_well_formed_document(report):
 
 def test_page_is_self_contained(report):
     text = render(report, weeks=(1, 2, 3))
-    assert "<script" not in text and "<link" not in text and " src=" not in text
+    # One inline script (the hover pop-up); nothing is loaded from anywhere.
+    assert text.count("<script") == 1 and "<script>" in text
+    assert "<link" not in text and " src=" not in text
     assert set(re.findall(r'href="([^"]*)"', text)) == {"week-1.html", "week-3.html"}
 
 
