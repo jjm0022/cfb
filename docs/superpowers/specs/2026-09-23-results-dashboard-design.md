@@ -118,8 +118,7 @@ Every figure comes from a field or function `ResultsReport` already exposes
   charts run 0–100% with a 50% reference line.
 - Chart text and marks take their colors from the page's CSS tokens, so they
   read in light and dark themes.
-- A chart with nothing to draw (for example, the NFL board in pool week 1)
-  shows "No games yet" instead of an empty axis.
+- A chart with nothing to draw shows "No games yet" instead of an empty axis.
 - A rate with n = 0 prints "—", never 0%.
 
 ### Presentation
@@ -244,8 +243,9 @@ Built test-first, reusing `tests/results_helpers.py` to build reports.
 - Charts are drawn to scale: a known rate's mark sits at its expected x
   coordinate; whiskers span the Wilson bounds; backtest ticks sit at 63.7,
   54.2 and 49.5%.
-- Sparse data: a pool week with one board shows "No games yet" for the other;
-  n = 0 prints "—"; a one-week season draws a trend without lines.
+- Sparse data: a board with no games this week is left out of "This week"; a
+  chart with no rows shows "No games yet"; n = 0 prints "—"; a one-week season
+  draws a trend without lines.
 - Team names and other text are HTML-escaped.
 - Self-contained: no `src` attribute and no `<script>` or `<link>` element;
   the only `href` values are relative `week-{N}.html` links.
