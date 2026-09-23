@@ -60,3 +60,27 @@ def test_an_unreachable_share_names_the_mount_and_how_to_check_it(monkeypatch, t
 def test_the_share_root_itself_is_checked(monkeypatch, tmp_path):
     nas_dir = nas_at(monkeypatch, tmp_path, mounted=False)
     assert config.nas_unavailable(nas_dir) is not None
+
+
+def test_dashboard_dir_defaults_under_local_share(monkeypatch):
+    monkeypatch.delenv("PICKEM_DASHBOARD_DIR", raising=False)
+    assert config.dashboard_dir() == Path.home() / ".local/share/pickem/dashboard"
+
+
+def test_dashboard_dir_follows_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("PICKEM_DASHBOARD_DIR", str(tmp_path / "dash"))
+    assert config.dashboard_dir() == tmp_path / "dash"
+
+
+def test_dashboard_url_is_none_when_unset_or_blank(monkeypatch):
+    monkeypatch.delenv("PICKEM_DASHBOARD_URL", raising=False)
+    assert config.dashboard_url() is None
+    monkeypatch.setenv("PICKEM_DASHBOARD_URL", "  ")
+    assert config.dashboard_url() is None
+
+
+def test_dashboard_url_always_ends_in_a_slash(monkeypatch):
+    monkeypatch.setenv("PICKEM_DASHBOARD_URL", "https://sandbox.tail750bff.ts.net/pickem")
+    assert config.dashboard_url() == "https://sandbox.tail750bff.ts.net/pickem/"
+    monkeypatch.setenv("PICKEM_DASHBOARD_URL", "https://sandbox.tail750bff.ts.net/pickem/")
+    assert config.dashboard_url() == "https://sandbox.tail750bff.ts.net/pickem/"

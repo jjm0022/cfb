@@ -93,3 +93,21 @@ def discord_bot_token() -> str:
 def discord_owner_id() -> int:
     """Return the configured Discord owner ID."""
     return int(_required("DISCORD_OWNER_ID"))
+
+
+def dashboard_dir() -> Path:
+    """Where the results dashboard pages are written.
+
+    Local, not on the NAS, so the page stays reachable when the share is
+    offline. Read on each call so tests and one-off runs can repoint it.
+    """
+    value = os.environ.get("PICKEM_DASHBOARD_DIR") or "~/.local/share/pickem/dashboard"
+    return Path(value).expanduser()
+
+
+def dashboard_url() -> str | None:
+    """The dashboard's base address for the results DM, or ``None`` to omit the link."""
+    value = (os.environ.get("PICKEM_DASHBOARD_URL") or "").strip()
+    if not value:
+        return None
+    return value if value.endswith("/") else value + "/"
