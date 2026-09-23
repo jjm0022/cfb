@@ -365,15 +365,23 @@ def _run_cbs[T](work: Callable[[], Awaitable[T]], **facts: object) -> T:
     """Run one CBS fetch and turn every failure into a one-line reason, exit 1.
 
     The reason is the last line on stderr so the scheduled scripts can forward
-    it in a DM without the surrounding log noise.
+    it in a DM without the surrounding log noise. Each branch logs for itself —
+    a traceback is worth keeping only for the unexpected, generic failure, not
+    for CBS's own typed refusals — then `logger.complete()` drains the queued
+    sinks before that reason is printed, so this failure's own record cannot
+    land after it.
     """
     try:
         return asyncio.run(work())
     except (CbsFetchError, CbsParseError, FileExistsError) as exc:
         failure, reason = type(exc).__name__, str(exc)
+        logger.bind(event="cbs_fetch_failed", failure=failure, **facts).error(reason)
     except Exception as exc:  # Chrome, CDP or network: already retried once
         failure, reason = type(exc).__name__, f"CBS fetch failed ({type(exc).__name__}): {exc}"
-    logger.bind(event="cbs_fetch_failed", failure=failure, **facts).error(reason)
+        logger.bind(event="cbs_fetch_failed", failure=failure, **facts).opt(
+            exception=True
+        ).error(reason)
+    logger.complete()
     typer.secho(reason, fg="red", err=True)
     raise typer.Exit(code=1)
 

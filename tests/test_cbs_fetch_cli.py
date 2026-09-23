@@ -1,12 +1,15 @@
-from contextlib import asynccontextmanager
+import time
+from contextlib import asynccontextmanager, contextmanager
 
 import pytest
 from cbs_fetch_helpers import JOIN_PAGE, POOL, StubSession, pool_page
+from loguru import logger
 from typer.testing import CliRunner
 
 from pickem import config
 from pickem.cli import app
-from pickem.ingest.cbs_fetch import FetchedPage
+from pickem.ingest.cbs_fetch import LOGIN_HINT, FetchedPage
+from pickem.obs.log import configure_logging as _configure_logging
 
 runner = CliRunner()
 
@@ -49,6 +52,49 @@ def test_fetch_reports_an_expired_session_with_the_login_hint(cbs, tmp_path):
 
     assert result.exit_code == 1
     assert "cbs-login.sh" in result.output
+
+
+def test_the_reason_is_the_last_line_of_output_on_failure(cbs, tmp_path, monkeypatch):
+    """Ruling F: logger.complete() drains the queued cbs_fetch_failed record
+    before the reason is printed, so it cannot land after the reason and
+    break the scheduled scripts' "forward the last stderr line" contract.
+
+    A slow custom sink stands in for a queued write still in flight: without
+    `logger.complete()`, `_run_cbs` returns (and `invoke` with it) long before
+    this sink's 50ms write finishes, so `written` would still be empty right
+    after `invoke` returns. `run_context` is stubbed out so its own separate
+    `run_failed` record — logged, unsynced, after `_run_cbs` has already
+    raised `typer.Exit` — cannot also land in `written` or `result.output`
+    and mask what this test checks.
+    """
+    written = []
+
+    def slow_sink(message):
+        time.sleep(0.05)
+        written.append(message.record["message"])
+
+    def configure_then_add_slow_sink(*args, **kwargs):
+        directory = _configure_logging(*args, **kwargs)
+        logger.add(slow_sink, level="ERROR", enqueue=True)
+        return directory
+
+    @contextmanager
+    def passthrough_run_context(entry, **facts):
+        yield "test-run"
+
+    monkeypatch.setattr("pickem.cli.configure_logging", configure_then_add_slow_sink)
+    monkeypatch.setattr("pickem.cli.run_context", passthrough_run_context)
+    cbs["pages"][POOL] = FetchedPage(f"{POOL}/join", JOIN_PAGE)
+
+    result = runner.invoke(
+        app, ["fetch-cbs", "--page", "board", "--pool-week", "4", "--out", str(tmp_path / "w.html")]
+    )
+
+    assert result.exit_code == 1
+    # The slow sink already has the record: logger.complete() blocked for it.
+    assert written and LOGIN_HINT in written[-1]
+    lines = [line for line in result.output.splitlines() if line.strip()]
+    assert lines[-1].endswith(LOGIN_HINT)
 
 
 def test_fetch_refuses_to_replace_a_saved_page(cbs, tmp_path):
