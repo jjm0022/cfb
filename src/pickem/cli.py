@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import os
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -476,10 +477,19 @@ def _write_results_report(
 
 
 def _write_atomic(path: Path, text: str) -> None:
-    """Write beside the target, then rename, so a reader never sees half a page."""
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(text, encoding="utf-8")
-    temporary.replace(path)
+    """Write to a unique temp file beside the target, then rename, so a reader
+    never sees half a page and concurrent writers never collide on one temp name."""
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.",
+        suffix=".tmp", delete=False,
+    )
+    try:
+        with tmp:
+            tmp.write(text)
+        Path(tmp.name).replace(path)
+    except Exception:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
 
 
 def _write_dashboard(store: Store, report: ResultsReport, dashboard_dir: Path) -> Path | None:

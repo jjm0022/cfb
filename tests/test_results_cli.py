@@ -1,5 +1,6 @@
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 from loguru import logger
@@ -179,6 +180,20 @@ def test_import_writes_the_week_page_and_the_index(workspace, tmp_path):
     assert (dash / "index.html").read_text() == page
     assert not list(dash.glob(".*.tmp"))
     assert "dashboard written to" in result.output
+
+
+def test_a_failed_atomic_write_leaves_no_temp_file(workspace, tmp_path, monkeypatch):
+    db, results = workspace
+    dash = tmp_path / "dash"
+
+    def boom(self, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", boom)
+    result = invoke_import(db, results, "--no-notify", "--dashboard-dir", str(dash))
+    assert result.exit_code == 3, result.output
+    assert "dashboard not written" in result.output
+    assert not list(dash.glob(".*.tmp"))
 
 
 def test_dashboard_defaults_to_the_configured_directory(workspace, tmp_path):
