@@ -74,8 +74,20 @@ if [[ ! -f "$page" ]]; then
     echo "$output"
 fi
 
-if ! uv run pickem import-results --season "$season" --pool-week "$pool_week" \
-    --file "$page" --out-dir "$results_dir" --db "$database"; then
+rc=0
+uv run pickem import-results --season "$season" --pool-week "$pool_week" \
+    --file "$page" --out-dir "$results_dir" --db "$database" || rc=$?
+if [[ $rc -eq 3 ]]; then
+    # Imported, reported and DMed; only the dashboard page write failed.
+    notify "Pool week $pool_week imported and reported, but the dashboard page was not \
+written; see the log, then run: uv run pickem results-report --season $season --pool-week $pool_week"
+    exit 3
+elif [[ $rc -eq 2 ]]; then
+    # Imported and reported; only the Discord DM failed.
+    notify "Pool week $pool_week imported and the report written, but the results DM \
+failed; see the log. The report is at $results_dir/week${pool_week}-report.md"
+    exit 2
+elif [[ $rc -ne 0 ]]; then
     notify "Pool week $pool_week standings are saved but import-results failed; see the log. $retry_note"
     exit 1
 fi
