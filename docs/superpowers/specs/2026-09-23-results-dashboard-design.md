@@ -54,13 +54,18 @@ def render_results_dashboard(
     report: ResultsReport,
     *,
     generated_at: datetime,
-    other_weeks: Sequence[int],
+    imported_weeks: Sequence[int],
 ) -> str
 ```
 
-A pure function that returns one self-contained HTML document. `other_weeks`
-is the list of imported pool weeks, used for the links at the foot of the
-page.
+A pure function that returns one self-contained HTML document.
+`imported_weeks` is every imported pool week of the season, used for the
+links at the foot of the page; the page's own week is shown but not linked.
+
+The SVG geometry lives in a sibling module, `src/pickem/report/charts.py`, so
+the scale can be tested on its own. Chart labels and record text are HTML
+beside each small SVG, not SVG text, so they stay readable when a phone
+scales the drawing down.
 
 ### Self-contained
 
@@ -104,7 +109,8 @@ Every figure comes from a field or function `ResultsReport` already exposes
 7. **What the data says.** The claims and "not distinguishable yet" lines from
    `findings(report.season_games)`, the same function the Markdown uses.
 8. **What the terms mean.** The strategy glossary, folded.
-9. **Other weeks.** Links to `week-{N}.html` for every entry in `other_weeks`.
+9. **Other weeks.** Links to `week-{N}.html` for every entry in
+   `imported_weeks` other than this page's week.
 
 ### Charts
 
@@ -135,8 +141,9 @@ the backticks around `model` in the first-sheet definition.
 
 ### Location
 
-The dashboard directory is `config.DASHBOARD_DIR`, from the environment
-variable `PICKEM_DASHBOARD_DIR`, defaulting to
+The dashboard directory is `config.dashboard_dir()`, read on each call from
+the environment variable `PICKEM_DASHBOARD_DIR` (so tests can repoint it),
+defaulting to
 `~/.local/share/pickem/dashboard`. It is local, not on the NAS, so the page
 stays reachable when the NAS is offline. It is created on first write.
 
@@ -169,7 +176,7 @@ imported week. This is accepted: the index is the entry point.
 The import and the Markdown are written before the dashboard, so a dashboard
 failure never loses them. On a render or write failure the command logs
 `dashboard_write_failed` with the error type and detail, prints the reason,
-and exits nonzero, as a failed DM does today. The DM is still sent first:
+and exits 3 (a failed DM exits 2). The DM is still sent first:
 `_write_results_report` returns the dashboard failure instead of exiting, the
 command sends the DM (which then omits the dashboard link), and only then
 exits nonzero. `fetch-results.sh` already DMs the owner when the import step
@@ -242,7 +249,8 @@ Built test-first, reusing `tests/results_helpers.py` to build reports.
 - Team names and other text are HTML-escaped.
 - Self-contained: no `src` attribute and no `<script>` or `<link>` element;
   the only `href` values are relative `week-{N}.html` links.
-- The "other weeks" links match `other_weeks`.
+- Kickoff times show in Eastern time.
+- The "other weeks" links match `imported_weeks`, without this page's week.
 - Findings text on the page equals the text `findings()` produces, the same
   source the Markdown uses.
 
