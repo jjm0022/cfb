@@ -1,0 +1,12 @@
+[Unit]
+Description=Pick'em week start: fetch the CBS board, ingest, poll, DM the reminder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jmiller/cfb
+EnvironmentFile=/home/jmiller/cfb/.env
+Environment=PATH=/home/jmiller/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/jmiller/cfb/scripts/start-week.sh --auto
+TimeoutStartSec=900

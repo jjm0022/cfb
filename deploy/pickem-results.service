@@ -1,0 +1,12 @@
+[Unit]
+Description=Pick'em results: fetch the finished week's CBS standings and import them
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jmiller/cfb
+EnvironmentFile=/home/jmiller/cfb/.env
+Environment=PATH=/home/jmiller/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/jmiller/cfb/scripts/fetch-results.sh
+TimeoutStartSec=900

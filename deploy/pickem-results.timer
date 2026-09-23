@@ -1,0 +1,12 @@
+[Unit]
+Description=Import the finished pick'em week after Monday night's game
+
+[Timer]
+OnCalendar=Tue *-*-* 09:00:00 America/New_York
+# Retry for a week with a late or postponed game; a no-op once imported.
+OnCalendar=Wed *-*-* 09:00:00 America/New_York
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
