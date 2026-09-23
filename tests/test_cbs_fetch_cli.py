@@ -148,3 +148,37 @@ def test_current_week_prints_only_the_number(cbs):
 
     assert result.exit_code == 0, result.output
     assert result.stdout.strip() == "5"
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    calls = []
+
+    async def fake_send(embed, *, token, owner_id):
+        calls.append((embed.title, embed.description))
+
+    monkeypatch.setattr("pickem.cli.send_owner_dm", fake_send)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_OWNER_ID", "123")
+    return calls
+
+
+def test_notify_owner_sends_one_dm(sent):
+    result = runner.invoke(app, ["notify-owner", "--title", "Week start", "board loaded"])
+
+    assert result.exit_code == 0, result.output
+    assert sent == [("Week start", "board loaded")]
+
+
+def test_notify_owner_exits_2_when_the_dm_fails(monkeypatch):
+    async def broken(embed, *, token, owner_id):
+        raise RuntimeError("discord down")
+
+    monkeypatch.setattr("pickem.cli.send_owner_dm", broken)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_OWNER_ID", "123")
+
+    result = runner.invoke(app, ["notify-owner", "hello"])
+
+    assert result.exit_code == 2
+    assert "discord down" in result.output

@@ -61,7 +61,7 @@ from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cf
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
 from pickem.models import HISTORY_REPORT, Game, Sport
-from pickem.notify.discord_dm import build_results_embed, send_owner_dm
+from pickem.notify.discord_dm import build_message_embed, build_results_embed, send_owner_dm
 from pickem.obs.log import configure_logging, run_context
 from pickem.operations.pool_weeks import pending_results_week, pool_week_status
 from pickem.operations.preflight import evaluate_preflight, render_preflight
@@ -428,6 +428,29 @@ def cbs_current_week_cmd() -> None:
                 return await fetch_current_week(session, pool_url=config.CBS_POOL_URL)
 
         typer.echo(_run_cbs(work, page="current-week"))
+
+
+@app.command("notify-owner")
+def notify_owner_cmd(
+    message: str = typer.Argument(..., help="Text of the DM"),
+    title: str = typer.Option("Pick'em", help="Title of the DM"),
+) -> None:
+    """DM the owner one message; how the scheduled scripts reach a person."""
+    with run_context("cli:notify-owner", title=title):
+        try:
+            asyncio.run(
+                send_owner_dm(
+                    build_message_embed(title, message),
+                    token=config.discord_bot_token(),
+                    owner_id=config.discord_owner_id(),
+                )
+            )
+        except Exception as exc:
+            logger.bind(
+                event="owner_dm_failed", error_type=type(exc).__name__, error_detail=str(exc)
+            ).error(f"owner DM not sent: {exc}")
+            typer.secho(f"Discord DM failed: {exc}", fg="red", err=True)
+            raise typer.Exit(code=2) from exc
 
 
 def _write_results_report(

@@ -32,6 +32,16 @@ def _cap(text: str) -> str:
     return text[: _FIELD_VALUE_LIMIT - 1] + "…"
 
 
+_DESCRIPTION_LIMIT = 4096
+
+
+def build_message_embed(title: str, message: str) -> discord.Embed:
+    """A plain notice for the scheduled scripts: a title and one message."""
+    if len(message) > _DESCRIPTION_LIMIT:
+        message = message[: _DESCRIPTION_LIMIT - 1] + "…"
+    return discord.Embed(title=title, description=message)
+
+
 def build_results_embed(report: ResultsReport, report_path: Path) -> discord.Embed:
     week = report.current
     embed = discord.Embed(
