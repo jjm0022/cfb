@@ -231,17 +231,27 @@ def _save(out: Path, html: str, pool_week: int, period_id: str) -> SavedPage:
     return saved
 
 
-async def fetch_board(
-    session: PageSession, *, pool_url: str, pool_week: int, out: Path, force: bool = False
-) -> SavedPage:
-    """Save the board for ``pool_week``; CBS must be showing that week."""
-    _refuse_overwrite(out, force)
+async def fetch_board_html(session: PageSession, *, pool_url: str, pool_week: int) -> str:
+    """The board for ``pool_week`` as page text, saved nowhere.
+
+    The pick check reads it fresh before each kickoff; a saved copy would be
+    the Tuesday page, taken before any picks were entered.
+    """
     logger.bind(event="cbs_fetch_started", page="board", pool_week=pool_week).info(
         f"fetching the CBS board for pool week {pool_week}"
     )
     page = await _fetch_logged_in(session, pool_url)
     require_week(page.html, pool_week)
-    return _save(out, page.html, pool_week, pool_periods(page.html)[pool_week])
+    return page.html
+
+
+async def fetch_board(
+    session: PageSession, *, pool_url: str, pool_week: int, out: Path, force: bool = False
+) -> SavedPage:
+    """Save the board for ``pool_week``; CBS must be showing that week."""
+    _refuse_overwrite(out, force)
+    html = await fetch_board_html(session, pool_url=pool_url, pool_week=pool_week)
+    return _save(out, html, pool_week, pool_periods(html)[pool_week])
 
 
 async def fetch_standings(

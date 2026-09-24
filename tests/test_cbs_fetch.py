@@ -21,6 +21,7 @@ from pickem.ingest.cbs_fetch import (
     FetchedPage,
     current_pool_week,
     fetch_board,
+    fetch_board_html,
     fetch_current_week,
     fetch_standings,
     pool_periods,
@@ -250,3 +251,27 @@ def test_chrome_session_without_a_profile_asks_for_a_login(tmp_path):
 
     with pytest.raises(CbsSessionExpired, match="cbs-login.sh"):
         asyncio.run(enter())
+
+
+def test_board_html_is_returned_without_saving_anything(tmp_path):
+    page = pool_page(weeks=4, shown=4, current=4)
+    session = StubSession({POOL: page})
+
+    html = asyncio.run(fetch_board_html(session, pool_url=POOL, pool_week=4))
+
+    assert html == page
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_board_html_for_a_week_cbs_is_not_showing_is_refused():
+    session = StubSession({POOL: pool_page(weeks=5, shown=5, current=5)})
+
+    with pytest.raises(CbsWeekNotReady):
+        asyncio.run(fetch_board_html(session, pool_url=POOL, pool_week=4))
+
+
+def test_board_html_when_logged_out_is_refused():
+    session = StubSession({POOL: FetchedPage(f"{POOL}/join", JOIN_PAGE)})
+
+    with pytest.raises(CbsSessionExpired):
+        asyncio.run(fetch_board_html(session, pool_url=POOL, pool_week=4))
