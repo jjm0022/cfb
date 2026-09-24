@@ -128,6 +128,19 @@ The database defaults to `data/pickem.duckdb` under the project directory.
 Run the normal data-ingest and preflight workflow before asking the bot to
 refresh a week.
 
+### Pre-kickoff pick check
+
+Right after the last kickoff-anchored poll (the smallest offset, 1 hour), the
+bot reads the CBS board with the same Chrome profile as `fetch-cbs` and
+compares the owner's entered picks for the games starting at that kickoff with
+the model's pick. It DMs only when a pick differs, is missing, a game can't be
+found on CBS, the model pick could not be refreshed, or the check could not
+run. A quiet kickoff means every pick matched. Nothing is changed on CBS.
+
+Run the same comparison for the whole week by hand:
+
+    uv run pickem check-picks --season 2026 --pool-week N
+
 ## 3. Start interactively once
 
 Run the bot in the foreground first. This verifies that the environment file,

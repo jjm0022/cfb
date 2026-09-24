@@ -14,6 +14,10 @@ where they used to be saved by hand: `weeks/weekN.html` and
 
 Both are no-ops once their week is done, so the retries are harmless.
 
+The Discord bot also reads the board, without saving it, an hour before each
+kickoff to check the entered picks (`discord-pick-reminder.md`, "Pre-kickoff
+pick check"). Leaving the login window open blocks that check too.
+
 ## Install or update
 
     cp deploy/pickem-board.* deploy/pickem-results.* ~/.config/systemd/user/
@@ -49,6 +53,7 @@ Both are no-ops once their week is done, so the retries are harmless.
 | has not posted pool week N / still shows pool week N | CBS not ready | Nothing; Wednesday retry |
 | status is ..., not final | late or postponed game | Nothing; Wednesday retry |
 | CBS fetch failed (…) | Chrome or network | Check `~/LOGS/pickem` for `cbs_fetch_failed`; re-run |
+| Pick check didn't run — … | the pre-kickoff check couldn't read CBS | Follow the reason; the next kickoff's check runs on its own |
 
 Logs: `event` values `cbs_fetch_started`, `cbs_fetch_saved`, `cbs_fetch_retry`,
 `cbs_fetch_failed` in `~/LOGS/pickem` (see `verifying-from-logs.md`).

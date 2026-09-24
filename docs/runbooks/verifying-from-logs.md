@@ -64,6 +64,21 @@ scheduled run's replay or join. Inspect it with:
 jq -r 'select(.event=="apscheduler_log" and (.message | contains("Running job"))) | "\(.ts)  \(.message)"' "$L"
 ```
 
+### Did the pick check run?
+
+Each T-1h kickoff poll ends with one pick-check event: `pick_check_completed`
+(with `checked`, `matched`, `different_side`, `no_pick`, `unmatched`, `stale`,
+`dm_sent`) or `pick_check_failed` (with `reason`, `unchecked`).
+
+```bash
+jq -r 'select(.event=="pick_check_completed" or .event=="pick_check_failed")
+  | [.ts, .event, .sport, .kickoff, (.checked // .unchecked), (.reason // "")] | @tsv' "$L"
+```
+
+A kickoff with a `kickoff_poll_fired` at `offset_hours` 1 and no pick-check
+event after it means the check itself crashed; look for a traceback in that
+run.
+
 ### Why was this pick made?
 
 The exact supported predicate is
