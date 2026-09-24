@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 
 import discord
 import pytest
+from cbs_entry_helpers import ATL, ATL_GB, GB, KICKOFF_MS, entry, entry_page
 from loguru import logger
 
 from pickem.automation.monitor import (
@@ -31,6 +33,7 @@ from pickem.discord_bot import (
     schedule_kickoff_polls,
     send_dm,
 )
+from pickem.ingest.cbs_fetch import CbsSessionExpired
 from pickem.models import (
     HISTORY_MONITOR,
     Edge,
@@ -2002,3 +2005,212 @@ def test_last_recommendation_change_is_none_before_any_flip(settings):
     _store_slate(settings, (game,))
 
     assert _last_recommendation_change(settings, MonitorScope(Sport.NFL, 2026, 1)) is None
+
+
+CHECK_KICKOFF = datetime.fromtimestamp(KICKOFF_MS / 1000, tz=UTC)
+ATL_AT_GB = Game(
+    game_id="nfl-2026-03-ATL-at-GB",
+    sport=Sport.NFL,
+    season=2026,
+    week=3,
+    kickoff_utc=CHECK_KICKOFF,
+    home_team_id="GB",
+    away_team_id="ATL",
+)
+CHECK_SCOPE = MonitorScope(Sport.NFL, 2026, 3)
+
+
+def _seed_check_game(settings) -> None:
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.upsert_games([ATL_AT_GB])
+        store.upsert_league_lines(
+            [
+                LeagueLine(
+                    game_id=ATL_AT_GB.game_id,
+                    season=2026,
+                    week=3,
+                    spread_home=-6.5,
+                    posted_at=CHECK_KICKOFF,
+                )
+            ]
+        )
+
+
+def _gb_snapshot() -> RecommendationSnapshot:
+    return RecommendationSnapshot(
+        sport=Sport.NFL,
+        season=2026,
+        week=3,
+        generated_at=CHECK_KICKOFF,
+        edges=(
+            Edge(
+                game_id=ATL_AT_GB.game_id,
+                side=Side.HOME,
+                delta=1.0,
+                tier=Tier.LEAN,
+                league_spread=-6.5,
+                market_spread=-7.5,
+                rationale="t",
+            ),
+        ),
+    )
+
+
+def _check_instant(offset: float) -> PollInstant:
+    return PollInstant(
+        at=CHECK_KICKOFF - timedelta(hours=offset),
+        offset_hours=offset,
+        kickoff_utc=CHECK_KICKOFF,
+    )
+
+
+def _check_bot(
+    settings,
+    *,
+    picked: int | None = ATL,
+    error: Exception | None = None,
+    result: RefreshResult | None = None,
+):
+    _seed_check_game(settings)
+    fetched: list[int] = []
+    dms: list = []
+
+    async def fetch(pool_week: int) -> str:
+        fetched.append(pool_week)
+        if error is not None:
+            raise error
+        picks = {} if picked is None else {ATL_GB["cbsEventId"]: picked}
+        return entry_page(entry(picks), events=(ATL_GB,))
+
+    bot = PickemBot(
+        settings,
+        monitor=FakeMonitor(result or RefreshResult(changed=False, snapshot=_gb_snapshot())),
+        scheduler=FakeScheduler(),
+        fetch_board_html=fetch,
+    )
+
+    async def dm(message=None, *, embed=None):
+        dms.append(embed)
+
+    bot._send_owner_dm = dm
+    return bot, fetched, dms
+
+
+@pytest.mark.asyncio
+async def test_the_last_poll_before_kickoff_flags_a_differing_pick(settings):
+    bot, fetched, dms = _check_bot(settings, picked=ATL)
+
+    await bot._run_kickoff_poll(CHECK_SCOPE, _check_instant(min(settings.poll_offsets_hours)))
+
+    assert fetched == [4]  # NFL week 3 is pool week 4
+    (embed,) = dms
+    assert embed.title.startswith("⚠️ Pick check — 1 game")
+    assert "model says **" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_matching_picks_send_nothing(settings):
+    bot, fetched, dms = _check_bot(settings, picked=GB)
+
+    await bot._run_kickoff_poll(CHECK_SCOPE, _check_instant(min(settings.poll_offsets_hours)))
+
+    assert fetched == [4]
+    assert dms == []
+
+
+@pytest.mark.asyncio
+async def test_earlier_polls_do_not_check(settings):
+    bot, fetched, dms = _check_bot(settings, picked=ATL)
+
+    await bot._run_kickoff_poll(CHECK_SCOPE, _check_instant(max(settings.poll_offsets_hours)))
+
+    assert fetched == []
+    assert dms == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fetch_dms_the_reason_and_the_unchecked_games(settings, records):
+    bot, _, dms = _check_bot(settings, error=CbsSessionExpired("gone"))
+
+    await bot._run_kickoff_poll(CHECK_SCOPE, _check_instant(min(settings.poll_offsets_hours)))
+
+    (embed,) = dms
+    assert embed.title.startswith("⚠️ Pick check didn't run")
+    assert "cbs-login.sh" in embed.description
+    assert "Not checked:" in embed.description
+    assert any(r["extra"].get("event") == "pick_check_failed" for r in records)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_poll_checks_against_the_stored_pick_and_says_so(settings, monkeypatch):
+    bot, fetched, dms = _check_bot(
+        settings, picked=GB, result=RefreshResult(changed=False, error=RuntimeError("odds down"))
+    )
+    monkeypatch.setattr(
+        "pickem.discord_bot.generate_recommendations", lambda *a, **k: _gb_snapshot()
+    )
+
+    await bot._run_kickoff_poll(CHECK_SCOPE, _check_instant(min(settings.poll_offsets_hours)))
+
+    assert fetched == [4]
+    (embed,) = dms
+    assert "could not be refreshed" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_a_kickoff_with_no_stored_games_fetches_nothing(settings):
+    bot, fetched, dms = _check_bot(settings, picked=ATL)
+    moved = PollInstant(
+        at=CHECK_KICKOFF,
+        offset_hours=min(settings.poll_offsets_hours),
+        kickoff_utc=CHECK_KICKOFF + timedelta(hours=1),
+    )
+
+    await bot._check_picks(CHECK_SCOPE, moved, ())
+
+    assert fetched == []
+    assert dms == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_checks_never_open_chrome_at_once(settings):
+    bot, _, _ = _check_bot(settings, picked=GB)
+    active = 0
+    peak = 0
+
+    async def slow_fetch(pool_week: int) -> str:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return entry_page(entry({ATL_GB["cbsEventId"]: GB}), events=(ATL_GB,))
+
+    bot._fetch_board_html = slow_fetch
+    results = ((CHECK_SCOPE, RefreshResult(changed=False, snapshot=_gb_snapshot())),)
+    instant = _check_instant(min(settings.poll_offsets_hours))
+
+    await asyncio.gather(
+        bot._check_picks(CHECK_SCOPE, instant, results),
+        bot._check_picks(CHECK_SCOPE, instant, results),
+    )
+
+    assert peak == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_dm_is_logged_and_does_not_break_the_poll(settings, records):
+    bot, _, _ = _check_bot(settings, picked=ATL)
+
+    async def broken_dm(message=None, *, embed=None):
+        raise RuntimeError("discord down")
+
+    bot._send_owner_dm = broken_dm
+
+    await bot._run_kickoff_poll(CHECK_SCOPE, _check_instant(min(settings.poll_offsets_hours)))
+
+    events = [r["extra"].get("event") for r in records]
+    assert "owner_dm_failed" in events
+    (done,) = [r for r in records if r["extra"].get("event") == "pick_check_completed"]
+    assert done["extra"]["dm_sent"] is False

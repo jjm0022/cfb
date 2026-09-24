@@ -30,8 +30,20 @@ from pickem.automation.monitor import (
     RefreshResult,
 )
 from pickem.automation.poll_plan import PollInstant, plan_polls
+from pickem.ingest.cbs_entry import parse_entry_picks
+from pickem.ingest.cbs_fetch import fetch_board_html as fetch_cbs_board_html
+from pickem.ingest.cbs_fetch import open_session as open_cbs_session
 from pickem.models import HISTORY_MONITOR, Game, Side, Sport, Tier
+from pickem.notify.discord_dm import build_message_embed
 from pickem.obs.log import configure_logging, run_context
+from pickem.operations.pick_check import (
+    compare_picks,
+    failure_reason,
+    format_failure,
+    format_pick_check,
+    log_pick_check,
+    log_pick_check_failed,
+)
 from pickem.operations.recommendation_history import record_snapshot_history
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
 from pickem.resolve.resolver import TeamResolver
@@ -737,6 +749,8 @@ class PickemBot(commands.Bot):
         settings: DiscordSettings,
         monitor: RecommendationMonitor | Any | None = None,
         scheduler: Any | None = None,
+        *,
+        fetch_board_html: Callable[[int], Awaitable[str]] | None = None,
     ) -> None:
         super().__init__(
             command_prefix=commands.when_mentioned,
@@ -754,6 +768,10 @@ class PickemBot(commands.Bot):
         self._injected_monitor = monitor
         self._monitors: dict[MonitorScope, RecommendationMonitor] = {}
         self._refresh_lock = asyncio.Lock()
+        # One Chrome profile serves every CBS fetch; two scopes' checks at the
+        # same kickoff would otherwise collide and report a false "busy".
+        self._cbs_lock = asyncio.Lock()
+        self._fetch_board_html = fetch_board_html or self._fetch_cbs_board
         # Set while a slash command is driving a refresh. The command reports
         # the change in its own reply, so the monitor's DM would be the same
         # news twice. Scheduled and kickoff-poll refreshes have no reply, so
@@ -1004,12 +1022,106 @@ class PickemBot(commands.Bot):
                 f"polling {scope.sport.value} {instant.offset_hours:g}h before "
                 f"{instant.kickoff_utc.isoformat()}"
             )
-            return await self._refresh_scopes(
+            results = await self._refresh_scopes(
                 scope.season,
                 scope.week,
                 sport=scope.sport,
                 window_start=instant.at,
             )
+            # The last poll is the model's final word before the pick locks,
+            # so that is when CBS is compared against it.
+            if instant.offset_hours == min(self.settings.poll_offsets_hours, default=None):
+                await self._check_picks(scope, instant, results)
+            return results
+
+    async def _fetch_cbs_board(self, pool_week: int) -> str:
+        async with open_cbs_session(
+            profile=config.CBS_CHROME_PROFILE, chrome=config.CHROME_BINARY
+        ) as session:
+            return await fetch_cbs_board_html(
+                session, pool_url=config.CBS_POOL_URL, pool_week=pool_week
+            )
+
+    async def _dm_pick_check(self, title: str, body: str) -> bool:
+        try:
+            await self._send_owner_dm(embed=build_message_embed(title, body))
+        except Exception as error:
+            logger.bind(
+                event="owner_dm_failed",
+                purpose="pick_check",
+                error_type=type(error).__name__,
+                error_detail=str(error),
+            ).error(f"pick-check DM failed: {error}")
+            return False
+        return True
+
+    async def _check_picks(
+        self,
+        scope: MonitorScope,
+        instant: PollInstant,
+        results: tuple[tuple[MonitorScope, RefreshResult], ...],
+    ) -> None:
+        """Compare CBS with the model for the games starting at this kickoff.
+
+        Silent when everything matches on a fresh pick. Anything else -- a
+        pick to fix, a game CBS doesn't show, a stale model pick, a check that
+        could not run -- DMs the owner, because silence is read as "fine".
+        """
+        kickoff = instant.kickoff_utc
+        where: dict[str, Any] = {
+            "sport": scope.sport,
+            "season": scope.season,
+            "week": scope.week,
+            "kickoff_utc": kickoff,
+        }
+        games = tuple(
+            game
+            for game in _stored_week_details(self.settings, scope)[0]
+            if game.kickoff_utc == kickoff
+        )
+        if not games:
+            log_pick_check(**where, checks=(), dm_sent=False, stale=False)
+            return
+        resolver = TeamResolver.default()
+        snapshot = next(
+            (r.snapshot for s, r in results if s == scope and r.snapshot is not None), None
+        )
+        stale = snapshot is None
+        try:
+            if snapshot is None:
+                now = datetime.now(UTC)
+                snapshot = await asyncio.to_thread(
+                    generate_recommendations,
+                    self.settings.db,
+                    scope.sport,
+                    scope.season,
+                    scope.week,
+                    now,
+                    pending_as_of=now,
+                )
+            pool_week = scope.week if scope.sport is Sport.CFB else scope.week + 1
+            async with self._cbs_lock:
+                html = await self._fetch_board_html(pool_week)
+            board = parse_entry_picks(
+                html, resolver=resolver, season=scope.season, pool_week=pool_week
+            )
+        except Exception as error:
+            reason = failure_reason(error)
+            log_pick_check_failed(**where, reason=reason, error=error, unchecked=len(games))
+            await self._dm_pick_check(
+                *format_failure(reason, games, kickoff_utc=kickoff, resolver=resolver)
+            )
+            return
+        checks = compare_picks(board, snapshot.edges, games)
+        message = format_pick_check(
+            checks,
+            kickoff_utc=kickoff,
+            stale=stale,
+            pool_url=config.CBS_POOL_URL,
+            resolver=resolver,
+        )
+        sent = message is not None and await self._dm_pick_check(*message)
+        log_pick_check(**where, checks=checks, dm_sent=sent, stale=stale)
 
     async def status(
         self,
