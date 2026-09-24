@@ -49,9 +49,11 @@ from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.edge.divergence import suppress_decision_logging
 from pickem.edge.pipeline import MissingGameError
 from pickem.ingest.cbs import CbsParseError, parse_cbs_block
+from pickem.ingest.cbs_entry import parse_entry_picks
 from pickem.ingest.cbs_fetch import (
     CbsFetchError,
     fetch_board,
+    fetch_board_html,
     fetch_current_week,
     fetch_standings,
 )
@@ -64,6 +66,12 @@ from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
 from pickem.models import HISTORY_REPORT, Game, Sport
 from pickem.notify.discord_dm import build_message_embed, build_results_embed, send_owner_dm
 from pickem.obs.log import configure_logging, run_context
+from pickem.operations.pick_check import (
+    Outcome,
+    compare_picks,
+    format_check_line,
+    log_pick_check,
+)
 from pickem.operations.pool_weeks import pending_results_week, pool_week_status
 from pickem.operations.preflight import evaluate_preflight, render_preflight
 from pickem.operations.recommendation_history import (
@@ -78,7 +86,7 @@ from pickem.operations.recommendations import (
     generate_recommendations,
     poll_odds_snapshot,
 )
-from pickem.operations.results_import import ResultsImportError, import_results
+from pickem.operations.results_import import ResultsImportError, import_results, league_week
 from pickem.report.results import ResultsReport, ResultsReportError, build_results_report
 from pickem.report.results_html import render_results_dashboard
 from pickem.report.results_markdown import render_results_report
@@ -416,6 +424,64 @@ def fetch_cbs_cmd(
 
         saved = _run_cbs(work, page=page.value, pool_week=pool_week)
         typer.echo(f"saved CBS {page.value} for pool week {pool_week} to {saved.path}")
+
+
+@app.command("check-picks")
+def check_picks_cmd(
+    season: int = typer.Option(...),
+    pool_week: int = typer.Option(..., help="Pool week, not league week: CFB N + NFL N-1"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Compare the picks entered on CBS with the model's, for games not yet started."""
+    with run_context("cli:check-picks", season=season, pool_week=pool_week, db=str(db)):
+
+        async def work():
+            async with open_cbs_session(
+                profile=config.CBS_CHROME_PROFILE, chrome=config.CHROME_BINARY
+            ) as session:
+                html = await fetch_board_html(
+                    session, pool_url=config.CBS_POOL_URL, pool_week=pool_week
+                )
+            # Parsed inside the CBS run so a page it cannot read fails the same
+            # way a fetch does: one reason line, exit 1.
+            return parse_entry_picks(
+                html, resolver=TeamResolver.default(), season=season, pool_week=pool_week
+            )
+
+        board = _run_cbs(work, page="board", pool_week=pool_week)
+        resolver = TeamResolver.default()
+        now = datetime.now(UTC)
+        totals: dict[Outcome, int] = dict.fromkeys(Outcome, 0)
+        leagues = [Sport.CFB] + ([Sport.NFL] if pool_week > 1 else [])
+        for sport in leagues:
+            week = league_week(sport, pool_week)
+            with Store(db, read_only=True) as store:
+                games = [
+                    game
+                    for game in store.load_week(sport, season, week).games
+                    if game.kickoff_utc > now
+                ]
+            if not games:
+                continue
+            snapshot = generate_recommendations(db, sport, season, week, now, pending_as_of=now)
+            checks = compare_picks(board, snapshot.edges, games)
+            for check in checks:
+                typer.echo(format_check_line(check, resolver))
+                totals[check.outcome] += 1
+            log_pick_check(
+                sport=sport,
+                season=season,
+                week=week,
+                kickoff_utc=None,
+                checks=checks,
+                dm_sent=False,
+                stale=False,
+            )
+        typer.echo(
+            f"{sum(totals.values())} checked: {totals[Outcome.MATCH]} match, "
+            f"{totals[Outcome.DIFFERENT_SIDE]} differ, {totals[Outcome.NO_PICK]} unpicked, "
+            f"{totals[Outcome.UNMATCHED]} unmatched"
+        )
 
 
 @app.command("cbs-current-week")
