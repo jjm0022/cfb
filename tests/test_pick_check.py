@@ -259,3 +259,9 @@ def test_failed_log_names_the_reason(records):
     assert row["extra"]["reason"] == "CBS login has expired"
     assert row["extra"]["unchecked"] == 3
     assert row["extra"]["error_type"] == "CbsSessionExpired"
+
+
+def test_failure_message_without_known_games_says_every_game():
+    _, body = format_failure("it crashed", [], kickoff_utc=KICKOFF, resolver=RESOLVER)
+
+    assert body.endswith("Not checked: every game at this kickoff")

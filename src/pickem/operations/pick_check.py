@@ -159,7 +159,7 @@ def format_failure(
 ) -> tuple[str, str]:
     title = f"⚠️ Pick check didn't run — {_when(kickoff_utc)} kickoff"
     unchecked = ", ".join(_matchup(game, resolver) for game in games)
-    return title, f"{reason}\nNot checked: {unchecked}"
+    return title, f"{reason}\nNot checked: {unchecked or 'every game at this kickoff'}"
 
 
 _MARKS = {
@@ -235,8 +235,9 @@ def log_pick_check_failed(
     reason: str,
     error: BaseException,
     unchecked: int,
+    traceback: bool = False,
 ) -> None:
-    logger.bind(
+    logger.opt(exception=error if traceback else None).bind(
         event="pick_check_failed",
         **_scope(sport, season, week, kickoff_utc),
         reason=reason,

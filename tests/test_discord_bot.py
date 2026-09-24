@@ -2214,3 +2214,54 @@ async def test_a_failed_dm_is_logged_and_does_not_break_the_poll(settings, recor
     assert "owner_dm_failed" in events
     (done,) = [r for r in records if r["extra"].get("event") == "pick_check_completed"]
     assert done["extra"]["dm_sent"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_hung_cbs_fetch_times_out_releases_the_lock_and_says_so(settings, monkeypatch):
+    monkeypatch.setattr("pickem.discord_bot.CBS_CHECK_TIMEOUT_SECONDS", 0.05)
+    bot, _, dms = _check_bot(settings, picked=GB)
+    release = asyncio.Event()
+    calls = 0
+
+    async def hung_then_fine(pool_week: int) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # A wedged Chrome: ignores cancellation until released.
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    continue
+        return entry_page(entry({ATL_GB["cbsEventId"]: GB}), events=(ATL_GB,))
+
+    bot._fetch_board_html = hung_then_fine
+    results = ((CHECK_SCOPE, RefreshResult(changed=False, snapshot=_gb_snapshot())),)
+    instant = _check_instant(min(settings.poll_offsets_hours))
+
+    await asyncio.wait_for(bot._check_picks(CHECK_SCOPE, instant, results), 2)
+    await asyncio.wait_for(bot._check_picks(CHECK_SCOPE, instant, results), 2)
+    release.set()
+
+    assert calls == 2
+    (embed,) = dms
+    assert embed.title.startswith("⚠️ Pick check didn't run")
+    assert "TimeoutError" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_crash_still_dms_and_logs(settings, monkeypatch, records):
+    bot, fetched, dms = _check_bot(settings, picked=ATL)
+
+    def broken_store(*args, **kwargs):
+        raise RuntimeError("database locked")
+
+    monkeypatch.setattr("pickem.discord_bot._stored_week_details", broken_store)
+    results = ((CHECK_SCOPE, RefreshResult(changed=False, snapshot=_gb_snapshot())),)
+
+    await bot._check_picks(CHECK_SCOPE, _check_instant(min(settings.poll_offsets_hours)), results)
+
+    (embed,) = dms
+    assert "crashed" in embed.description
+    assert "database locked" in embed.description
+    assert any(r["extra"].get("event") == "pick_check_failed" for r in records)

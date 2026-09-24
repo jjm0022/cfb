@@ -57,6 +57,10 @@ PRIVATE_MESSAGE = "This bot is private."
 # refresh. A fixed wall-clock time cannot be close to kickoff for a slate that
 # runs twelve hours; these are anchored to the kickoffs themselves.
 DEFAULT_POLL_OFFSETS_HOURS = (12.0, 6.0, 2.0, 1.0)
+# The whole CBS read, Chrome start and shutdown included. Only the page load
+# has its own timeout; a Chrome wedged at start or stop would otherwise hold
+# the CBS lock and silence every later check.
+CBS_CHECK_TIMEOUT_SECONDS = 180.0
 DEFAULT_POLL_PLAN_EVERY_HOURS = 6
 DEFAULT_POLL_HORIZON_DAYS = 10
 POLL_JOB_PREFIX = "poll:"
@@ -1061,6 +1065,51 @@ class PickemBot(commands.Bot):
         instant: PollInstant,
         results: tuple[tuple[MonitorScope, RefreshResult], ...],
     ) -> None:
+        """Run the check; a crash anywhere in it still reaches the owner."""
+        try:
+            await self._run_pick_check(scope, instant, results)
+        except Exception as error:
+            reason = f"the pick check crashed ({type(error).__name__}: {error})"
+            log_pick_check_failed(
+                sport=scope.sport,
+                season=scope.season,
+                week=scope.week,
+                kickoff_utc=instant.kickoff_utc,
+                reason=reason,
+                error=error,
+                unchecked=0,
+                traceback=True,
+            )
+            await self._dm_pick_check(
+                *format_failure(
+                    reason, (), kickoff_utc=instant.kickoff_utc, resolver=TeamResolver.default()
+                )
+            )
+
+    async def _read_cbs_board(self, pool_week: int) -> str:
+        """Fetch under the CBS lock, giving up on a hung Chrome.
+
+        The fetch is abandoned rather than awaited on timeout: a Chrome that
+        ignores cancellation would otherwise hold the lock anyway. A leftover
+        Chrome still holding the profile makes the next check fail loudly as
+        "busy", which is the point.
+        """
+        async with self._cbs_lock:
+            task = asyncio.ensure_future(self._fetch_board_html(pool_week))
+            done, _ = await asyncio.wait({task}, timeout=CBS_CHECK_TIMEOUT_SECONDS)
+            if not done:
+                task.cancel()
+                raise TimeoutError(
+                    f"reading CBS took longer than {CBS_CHECK_TIMEOUT_SECONDS:g}s"
+                )
+            return task.result()
+
+    async def _run_pick_check(
+        self,
+        scope: MonitorScope,
+        instant: PollInstant,
+        results: tuple[tuple[MonitorScope, RefreshResult], ...],
+    ) -> None:
         """Compare CBS with the model for the games starting at this kickoff.
 
         Silent when everything matches on a fresh pick. Anything else -- a
@@ -1100,8 +1149,7 @@ class PickemBot(commands.Bot):
                     pending_as_of=now,
                 )
             pool_week = scope.week if scope.sport is Sport.CFB else scope.week + 1
-            async with self._cbs_lock:
-                html = await self._fetch_board_html(pool_week)
+            html = await self._read_cbs_board(pool_week)
             board = parse_entry_picks(
                 html, resolver=resolver, season=scope.season, pool_week=pool_week
             )
