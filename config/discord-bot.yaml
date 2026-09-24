@@ -7,7 +7,8 @@ schedule:
     time: "10:00"
   # Polls anchored to each kickoff, on top of the daily refresh above. One
   # poll covers every game in the sport, so cost scales with distinct
-  # instants, not games: roughly 60 credits per pool week at these offsets.
+  # instants, not games: roughly 60 polls per pool week at these offsets,
+  # each costing 2 credits (US books, then Pinnacle alone).
   kickoff_polls:
     offsets_hours: [12, 6, 2, 1]
     plan_every_hours: 6

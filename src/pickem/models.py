@@ -74,6 +74,10 @@ class LeagueLine(BaseModel):
 LIVE_SOURCE = "oddsapi"
 FROZEN_SOURCE = "oddsapi:frozen"
 SUBMISSION_SOURCE = "oddsapi:submit"
+# Pinnacle alone, polled beside the US books and recorded for a later
+# sharp-book comparison. Kept out of the consensus until that comparison
+# says otherwise.
+PINNACLE_SOURCE = "oddsapi:pinnacle"
 
 
 class MarketLine(BaseModel):

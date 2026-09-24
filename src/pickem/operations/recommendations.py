@@ -17,8 +17,15 @@ from loguru import logger
 from pickem import config
 from pickem.edge.divergence import rank_edges
 from pickem.edge.pipeline import decide_edges
-from pickem.ingest.odds import CFB_KEY, NFL_KEY, OddsApiError, OddsClient, QuotaExhausted
-from pickem.models import Edge, MarketLinesResult, Sport, Tier
+from pickem.ingest.odds import (
+    CFB_KEY,
+    NFL_KEY,
+    OddsApiError,
+    OddsClient,
+    QuotaExhausted,
+    _safe_error_detail,
+)
+from pickem.models import PINNACLE_SOURCE, Edge, MarketLinesResult, Sport, Tier
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
 
@@ -102,7 +109,9 @@ def generate_recommendations(
         dataset = store.load_week(sport, season, week)
         edges = decide_edges(
             _still_pending(dataset, pending_as_of),
-            dataset.market_lines,
+            # Pinnacle is recorded for a later comparison, not used: the
+            # consensus stays the US books' median until a backtest says so.
+            [line for line in dataset.market_lines if line.source != PINNACLE_SOURCE],
             dataset.games,
             store.games_before(sport, season, week),
         )
@@ -157,22 +166,46 @@ def poll_odds_snapshot(
             )
 
         factory = client_factory or OddsClient
+        request = {
+            "resolver": TeamResolver.default(),
+            "sport": sport,
+            "season": season,
+            "week": week,
+            "now": now,
+            "slate": slate,
+            "window": (
+                window_start if window_start is not None else now - timedelta(hours=12),
+                now + timedelta(days=days),
+            ),
+        }
         with factory(config.odds_api_key()) as client:
-            result = client.fetch_spreads(
-                key,
-                resolver=TeamResolver.default(),
-                sport=sport,
-                season=season,
-                week=week,
-                now=now,
-                slate=slate,
-                window=(
-                    window_start if window_start is not None else now - timedelta(hours=12),
-                    now + timedelta(days=days),
-                ),
-            )
-        store.append_market_lines(result.lines)
+            result = client.fetch_spreads(key, **request)
+            store.append_market_lines(result.lines)
+            _poll_pinnacle(client, store, key, request)
     return result
+
+
+def _poll_pinnacle(client: OddsClient, store: Store, key: str, request: dict) -> None:
+    """Record Pinnacle alone, for a later sharp-book comparison.
+
+    One extra credit per poll. Never allowed to fail the poll it rides on:
+    the US books are what the picks use.
+    """
+    try:
+        pinnacle = client.fetch_spreads(
+            key, **request, bookmakers="pinnacle", source=PINNACLE_SOURCE
+        )
+        store.append_market_lines(pinnacle.lines)
+    except Exception as error:
+        # The final "unreachable" error embeds the last transport error's text.
+        detail = _safe_error_detail(error, config.odds_api_key())
+        logger.bind(
+            event="pinnacle_poll_failed",
+            sport=request["sport"].value,
+            week=request["week"],
+            error_type=type(error).__name__,
+            error_detail=detail,
+        ).warning(f"Pinnacle poll failed; US books were stored: {detail}")
 
 
 def refresh_recommendations(

@@ -13,7 +13,7 @@ from pickem.ingest.odds import (
     QuotaExhausted,
     _parse_events,
 )
-from pickem.models import FROZEN_SOURCE, SUBMISSION_SOURCE, Sport
+from pickem.models import FROZEN_SOURCE, PINNACLE_SOURCE, SUBMISSION_SOURCE, Sport
 from pickem.resolve.resolver import TeamResolver
 
 NOW = datetime(2025, 9, 21, 12, 0, tzinfo=UTC)
@@ -703,3 +703,44 @@ def test_missing_quota_headers_do_not_break_the_line(records):
     [quota] = [r for r in records if r["extra"].get("event") == "odds_quota"]
     assert quota["extra"]["remaining"] is None
     assert quota["message"] == "odds api quota: unknown remaining, unknown used"
+
+
+def test_a_single_book_request_asks_for_that_book_and_labels_its_lines():
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=PAYLOAD)
+
+    client = OddsClient("key", transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    result = client.fetch_spreads(
+        NFL_KEY,
+        resolver=TeamResolver.default(),
+        sport=Sport.NFL,
+        season=2025,
+        week=3,
+        now=NOW,
+        slate=SLATE,
+        window=WINDOW,
+        bookmakers="pinnacle",
+        source=PINNACLE_SOURCE,
+    )
+
+    assert seen["params"]["bookmakers"] == "pinnacle"
+    assert "regions" not in seen["params"]
+    assert {line.source for line in result.lines} == {PINNACLE_SOURCE}
+
+
+def test_the_default_request_still_asks_for_us_books_as_live_lines():
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=PAYLOAD)
+
+    client = OddsClient("key", transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    result = fetch(client)
+
+    assert seen["params"]["regions"] == "us"
+    assert "bookmakers" not in seen["params"]
+    assert {line.source for line in result.lines} == {LIVE_SOURCE}

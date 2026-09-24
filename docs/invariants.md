@@ -85,6 +85,13 @@ Split out of `HANDOFF.md` on 2026-09-09; content unchanged.
   last while the other end took a median, manufacturing and erasing edges
   silently. A regression test pins this: books at -1.0/-3.0/-9.0 against a
   -3.0 submission line is a COINFLIP, not a 6-point STRONG edge.
+- **Pinnacle is recorded, never used.** Each live poll also asks for Pinnacle
+  alone (one more credit) and stores it as `oddsapi:pinnacle`.
+  `generate_recommendations` drops that source before the consensus, so the
+  market line stays the US books' median. A 2026-09-24 spike over 2021–2025
+  found no US book sharper than that median; Pinnacle is being collected so
+  the same comparison can include it. Using it needs that comparison first,
+  and a fallback for the college games Pinnacle does not price.
 - **Proxies are classified by `source`, never by book name.** Both carry real
   bookmaker keys. `oddsapi:frozen` and `oddsapi:submit` are the two proxies;
   anything else — an in-season `oddsapi` poll, an `nflverse` closer — lands in

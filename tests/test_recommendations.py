@@ -2,7 +2,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from pickem.models import Game, LeagueLine, MarketLine, MarketLinesResult, Sport, Tier
+from pickem.ingest.odds import OddsApiError
+from pickem.models import (
+    LIVE_SOURCE,
+    PINNACLE_SOURCE,
+    Game,
+    LeagueLine,
+    MarketLine,
+    MarketLinesResult,
+    Sport,
+    Tier,
+)
 from pickem.operations.recommendations import (
     generate_recommendations,
     poll_odds_snapshot,
@@ -98,6 +108,8 @@ def test_refresh_recommendations_appends_live_snapshot_before_generating(
 
         def fetch_spreads(self, _key, **kwargs):
             assert kwargs["now"] == now
+            if "bookmakers" in kwargs:
+                return MarketLinesResult(lines=[], skipped=[])
             return MarketLinesResult(
                 lines=[
                     MarketLine(
@@ -279,3 +291,106 @@ def test_nothing_is_logged_when_no_game_has_kicked_off(records, db):
     )
 
     assert not any(r["extra"]["event"] == "locked_games_excluded" for r in records)
+
+
+def _line(source: str, book: str, spread: float, at: datetime) -> MarketLine:
+    return MarketLine(
+        game_id="nfl:away:home", source=source, book=book, spread_home=spread, captured_at=at
+    )
+
+
+class TwoRequestClient:
+    """The main poll returns one US book; the Pinnacle request returns Pinnacle or fails."""
+
+    calls: list[dict] = []
+    pinnacle_error: Exception | None = None
+
+    def __init__(self, api_key):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return None
+
+    def fetch_spreads(self, _key, **kwargs):
+        TwoRequestClient.calls.append(kwargs)
+        now = kwargs["now"]
+        if kwargs.get("bookmakers") == "pinnacle":
+            if TwoRequestClient.pinnacle_error is not None:
+                raise TwoRequestClient.pinnacle_error
+            return MarketLinesResult(
+                lines=[_line(kwargs["source"], "pinnacle", -9.0, now)], skipped=[]
+            )
+        return MarketLinesResult(lines=[_line(LIVE_SOURCE, "draftkings", -6.0, now)], skipped=[])
+
+
+@pytest.fixture
+def two_request_client(monkeypatch):
+    TwoRequestClient.calls = []
+    TwoRequestClient.pinnacle_error = None
+    monkeypatch.setenv("ODDS_API_KEY", "test-key")
+    monkeypatch.setattr("pickem.operations.recommendations.OddsClient", TwoRequestClient)
+    return TwoRequestClient
+
+
+def test_each_poll_also_records_pinnacle_under_its_own_source(
+    db, seeded_week, two_request_client
+):
+    now = datetime(2026, 9, 2, tzinfo=UTC)
+
+    poll_odds_snapshot(db, Sport.NFL, 2026, 1, now, window_start=now)
+
+    main, pinnacle = two_request_client.calls
+    assert "bookmakers" not in main
+    assert pinnacle["bookmakers"] == "pinnacle"
+    assert pinnacle["source"] == PINNACLE_SOURCE
+    assert pinnacle["window"] == main["window"]
+    with Store(db, read_only=True) as store:
+        lines = store.load_week(Sport.NFL, 2026, 1).market_lines
+    stored = {(line.source, line.book) for line in lines}
+    assert stored == {(LIVE_SOURCE, "draftkings"), (PINNACLE_SOURCE, "pinnacle")}
+
+
+def test_a_failed_pinnacle_request_keeps_the_main_poll(
+    db, seeded_week, two_request_client, records
+):
+    two_request_client.pinnacle_error = OddsApiError("odds api returned 500")
+    now = datetime(2026, 9, 2, tzinfo=UTC)
+
+    result = poll_odds_snapshot(db, Sport.NFL, 2026, 1, now)
+
+    assert [line.book for line in result.lines] == ["draftkings"]
+    with Store(db, read_only=True) as store:
+        assert len(store.load_week(Sport.NFL, 2026, 1).market_lines) == 1
+    assert any(r["extra"].get("event") == "pinnacle_poll_failed" for r in records)
+
+
+def test_a_failed_pinnacle_request_never_logs_the_api_key(
+    db, seeded_week, two_request_client, records
+):
+    two_request_client.pinnacle_error = OddsApiError(
+        "odds api unreachable: GET /v4/sports/x/odds?apiKey=test-key&bookmakers=pinnacle"
+    )
+
+    poll_odds_snapshot(db, Sport.NFL, 2026, 1, datetime(2026, 9, 2, tzinfo=UTC))
+
+    (row,) = [r for r in records if r["extra"].get("event") == "pinnacle_poll_failed"]
+    assert "test-key" not in row["extra"]["error_detail"]
+    assert "test-key" not in row["message"]
+
+
+def test_pinnacle_lines_never_move_the_models_market_spread(db, seeded_week):
+    at = datetime(2026, 9, 2, tzinfo=UTC)
+    with Store(db) as store:
+        store.append_market_lines(
+            [
+                _line(LIVE_SOURCE, "draftkings", -6.0, at),
+                _line(PINNACLE_SOURCE, "pinnacle", -9.0, at),
+            ]
+        )
+
+    snapshot = generate_recommendations(db, Sport.NFL, 2026, 1, at)
+
+    assert snapshot.edges[0].market_spread == -6.0

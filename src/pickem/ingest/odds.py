@@ -138,9 +138,12 @@ def _log_quota(response: httpx.Response) -> None:
     )
 
 
-def _log_poll(result: MarketLinesResult, *, sport: Sport, season: int, week: int) -> None:
+def _log_poll(
+    result: MarketLinesResult, *, sport: Sport, season: int, week: int, source: str
+) -> None:
     logger.bind(
         event="odds_polled",
+        source=source,
         sport=sport.value,
         season=season,
         week=week,
@@ -417,8 +420,14 @@ class OddsClient:
         now: datetime,
         slate: Collection[str],
         window: tuple[datetime, datetime],
+        bookmakers: str | None = None,
+        source: str = LIVE_SOURCE,
     ) -> MarketLinesResult:
         """Fetch current spreads for the games named in `slate`.
+
+        By default every US book. `bookmakers` asks for those books instead
+        (the API ignores `regions` when both are sent, and bills per ten
+        books), and `source` labels the rows they produce.
 
         `slate` is the set of canonical game ids for the target week — normally
         the ids already ingested from the CBS sheet. `window` is the kickoff
@@ -426,11 +435,12 @@ class OddsClient:
         never stamped with this week's number.
         """
         window_start, window_end = window
+        books = {"bookmakers": bookmakers} if bookmakers else {"regions": "us"}
         response = self._get(
             f"/sports/{sport_key}/odds",
             params={
                 "apiKey": self._api_key,
-                "regions": "us",
+                **books,
                 "markets": "spreads",
                 "oddsFormat": "american",
                 # Narrows the payload server-side; the client-side window check
@@ -454,9 +464,9 @@ class OddsClient:
             slate=slate,
             window=window,
             captured_at=now,
-            source=LIVE_SOURCE,
+            source=source,
         )
-        _log_poll(result, sport=sport, season=season, week=week)
+        _log_poll(result, sport=sport, season=season, week=week, source=source)
         return result
 
     def fetch_historical_spreads(
@@ -520,5 +530,5 @@ class OddsClient:
             source=source,
             snapshot_at=captured_at,
         )
-        _log_poll(result, sport=sport, season=season, week=week)
+        _log_poll(result, sport=sport, season=season, week=week, source=source)
         return result
