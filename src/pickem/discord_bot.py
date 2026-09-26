@@ -449,7 +449,8 @@ def _last_recommendation_change(
         pick = (record.side, record.tier)
         was = previous.get(record.game_id)
         previous[record.game_id] = pick
-        if was is None or was == pick:
+        # Only a side flip is a change: a tier move asks nothing of the owner.
+        if was is None or was[0] == pick[0]:
             continue
         if latest is not None and record.generated_at <= latest[0]:
             continue

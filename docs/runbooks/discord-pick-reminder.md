@@ -110,8 +110,10 @@ What to expect operationally:
   progress during the 1h-before-SNF poll are not written to `lines`. The daily
   refresh keeps its twelve-hour lookback.
 
-Notifications fire on a change of **side or tier** — a coinflip firming into a
-lean counts, an edge growing inside its own tier does not. The first refresh
+Notifications fire only when a pick's **side** flips, or a game is added to the
+board. A tier-only move — a coinflip firming into a lean, a lean into a strong —
+stays quiet, because it changes nothing entered on CBS. `/status` still shows
+the current tier. The first refresh
 after upgrading adopts the stored signature silently instead of announcing
 that every game changed.
 

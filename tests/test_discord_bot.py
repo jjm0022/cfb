@@ -1987,7 +1987,9 @@ def test_last_recommendation_change_reads_the_latest_flip_from_history(settings)
                 record(steady.game_id, Side.HOME, Tier.LEAN, first),
                 record(game.game_id, Side.HOME, Tier.COINFLIP, first),
                 record(game.game_id, Side.HOME, Tier.COINFLIP, first + timedelta(hours=1)),
-                record(game.game_id, Side.HOME, Tier.STRONG, first + timedelta(hours=2)),
+                record(game.game_id, Side.AWAY, Tier.LEAN, first + timedelta(hours=2)),
+                # Tier-only, after the flip: not a change the owner acts on.
+                record(game.game_id, Side.AWAY, Tier.STRONG, first + timedelta(hours=3)),
             ]
         )
 
@@ -1996,8 +1998,34 @@ def test_last_recommendation_change_reads_the_latest_flip_from_history(settings)
     assert last is not None
     assert last.at == first + timedelta(hours=2)
     assert last.summary == (
-        "Buffalo Bills at Miami Dolphins went 🪙 Coinflip home → 🔥 Strong Miami Dolphins"
+        "Buffalo Bills at Miami Dolphins went 🪙 Coinflip home → ✅ Lean Buffalo Bills"
     )
+
+
+def test_last_recommendation_change_ignores_tier_only_moves(settings):
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    _store_slate(settings, (game,))
+    first = datetime(2026, 9, 11, 14, tzinfo=UTC)
+    with Store(settings.db) as store:
+        store.init_schema()
+        store.append_recommendation_history(
+            [
+                RecommendationRecord(
+                    game_id=game.game_id,
+                    sport=Sport.NFL,
+                    season=2026,
+                    week=1,
+                    side=Side.HOME,
+                    tier=tier,
+                    edge_points=1.0,
+                    generated_at=first + timedelta(hours=hour),
+                    source=HISTORY_MONITOR,
+                )
+                for hour, tier in enumerate((Tier.COINFLIP, Tier.LEAN, Tier.STRONG))
+            ]
+        )
+
+    assert _last_recommendation_change(settings, MonitorScope(Sport.NFL, 2026, 1)) is None
 
 
 def test_last_recommendation_change_is_none_before_any_flip(settings):

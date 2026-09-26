@@ -23,7 +23,7 @@ You type the sides and the tiebreaker into CBS yourself.
 |---|---|
 | Python | 3.12 or newer (`.python-version` pins 3.12) |
 | Package manager | [uv](https://docs.astral.sh/uv/) — the project uses `uv.lock` and the `uv_build` backend |
-| Odds API key | [the-odds-api.com](https://the-odds-api.com) — live market spreads. Free tier is enough for weekly use (1 credit per poll) |
+| Odds API key | [the-odds-api.com](https://the-odds-api.com) — live market spreads. Free tier is enough for weekly use (2 credits per poll: US books, then Pinnacle) |
 | CFBD API key | [collegefootballdata.com](https://collegefootballdata.com) — college schedules and final scores |
 | Discord bot token | Optional, only for the reminder bot |
 
@@ -353,8 +353,9 @@ that appends each pick's rationale.
 Besides the daily refresh it polls at `12, 6, 2, 1` hours before **each
 kickoff on the board** — a fixed daily time is hours stale for a night game,
 and the market keeps moving. One poll covers every game in the sport, so this
-costs about 60 credits per pool week. It DMs you only when a pick's side or
-tier actually changes. See `docs/runbooks/discord-pick-reminder.md` for the
+costs about 60 polls per pool week, at 2 credits each (the US books, then
+Pinnacle alone). It DMs you only when a pick's side flips or a game is added;
+a tier-only move such as lean to strong stays quiet. See `docs/runbooks/discord-pick-reminder.md` for the
 offsets, the cost model, and what happens on a restart.
 
 To run it as a user systemd service, `deploy/pickem-discord-bot.service` is

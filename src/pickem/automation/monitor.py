@@ -76,11 +76,10 @@ _SIGNATURE_PREFIX = f"{_SIGNATURE_VERSION}|"
 def recommendation_signature(snapshot: RecommendationSnapshot) -> str:
     """Return the canonical game-ID-to-pick mapping for a snapshot.
 
-    Side and tier both participate. A coinflip that firms into a lean is worth
-    a DM even though the side never moved, and a game that acquires a side it
-    did not have is the same event seen from the other end. ``delta``
-    deliberately does not participate: an edge growing inside its own tier
-    changes no pick, and notifying on it would make every poll noisy.
+    Side and tier are both recorded, so status and history keep the tier, but
+    only a side flip (or a newly added game) counts as a change: the owner
+    enters sides on CBS, and a lean firming into a strong asks nothing of
+    them. See `_changed_game_ids`. ``delta`` does not participate at all.
 
     The version tag exists so a signature written by an older format is
     recognizable as unreadable rather than mistaken for a different set of
@@ -114,6 +113,11 @@ def _mapping_from_snapshot(snapshot: RecommendationSnapshot) -> dict[str, str]:
     }
 
 
+def _side(pick: str) -> str:
+    """The side out of a "<tier> <side>" mapping value."""
+    return pick.rsplit(" ", 1)[-1]
+
+
 def _change_message(old_signature: str | None, snapshot: RecommendationSnapshot) -> str:
     old = _mapping_from_signature(old_signature)
     new = _mapping_from_snapshot(snapshot)
@@ -125,7 +129,7 @@ def _change_message(old_signature: str | None, snapshot: RecommendationSnapshot)
     changes.extend(
         f"changed: {game_id} {old[game_id]} → {new[game_id]}"
         for game_id in sorted(old.keys() & new.keys())
-        if old[game_id] != new[game_id]
+        if _side(old[game_id]) != _side(new[game_id])
     )
     # Games that left the board are deliberately not reported: automation
     # decides only games that have not kicked off, so a disappearance means
@@ -142,13 +146,20 @@ def _changed_game_ids(
     games that have kicked off, so the board shrinks as a week burns down; a
     game dropping out is a pick becoming unactionable, not a pick changing, and
     treating it as news would DM the owner about a game already locked. A
-    genuine flip and a newly added game both still register.
+    side flip and a newly added game both register; a tier-only move does
+    not, because it changes nothing the owner enters on CBS.
     """
     if not _is_current_signature(old_signature):
         return ()
     old = _mapping_from_signature(old_signature)
     new = _mapping_from_snapshot(snapshot)
-    return tuple(sorted(game_id for game_id, pick in new.items() if old.get(game_id) != pick))
+    return tuple(
+        sorted(
+            game_id
+            for game_id, pick in new.items()
+            if game_id not in old or _side(old[game_id]) != _side(pick)
+        )
+    )
 
 
 def _picks_changed(old_signature: str | None, snapshot: RecommendationSnapshot) -> bool:

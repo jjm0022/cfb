@@ -109,22 +109,75 @@ def test_recommendation_signature_separates_two_tiers_of_the_same_side():
     assert recommendation_signature(coinflip) != recommendation_signature(lean)
 
 
-def test_refresh_notifies_when_only_the_tier_changes():
+def test_refresh_stays_silent_when_only_the_tier_changes():
+    """Lean to strong on the same team changes nothing the owner must enter."""
     fake = FakeMonitor(
         [
             snapshot_with({"game-a": Side.HOME}, tiers={"game-a": Tier.COINFLIP}),
             snapshot_with({"game-a": Side.HOME}, tiers={"game-a": Tier.LEAN}),
+            snapshot_with({"game-a": Side.HOME}, tiers={"game-a": Tier.STRONG}),
         ]
     )
     monitor = fake.monitor()
 
-    first, changed = [asyncio.run(monitor.refresh()) for _ in range(2)]
+    results = [asyncio.run(monitor.refresh()) for _ in range(3)]
 
-    assert first.changed is False
-    assert changed.changed is True
+    assert [result.changed for result in results] == [False, False, False]
+    assert fake.notifications == []
+    # The tier is still tracked, so a later side flip compares against it.
+    assert fake.state.signature == "v2|game-a:home:strong"
+
+
+def test_refresh_notifies_when_the_side_flips_whatever_the_tier():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME}, tiers={"game-a": Tier.LEAN}),
+            snapshot_with({"game-a": Side.AWAY}, tiers={"game-a": Tier.LEAN}),
+        ]
+    )
+    monitor = fake.monitor()
+
+    _, flipped = [asyncio.run(monitor.refresh()) for _ in range(2)]
+
+    assert flipped.changed is True
+    assert flipped.changed_game_ids == ("game-a",)
     assert fake.notifications == [
-        "Recommendations changed: changed: game-a coinflip home → lean home"
+        "Recommendations changed: changed: game-a lean home → lean away"
     ]
+
+
+def test_a_tier_change_beside_a_side_flip_reports_only_the_flip():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME, "game-b": Side.HOME}),
+            snapshot_with(
+                {"game-a": Side.AWAY, "game-b": Side.HOME}, tiers={"game-b": Tier.STRONG}
+            ),
+        ]
+    )
+    monitor = fake.monitor()
+
+    _, result = [asyncio.run(monitor.refresh()) for _ in range(2)]
+
+    assert result.changed_game_ids == ("game-a",)
+    assert fake.notifications == [
+        "Recommendations changed: changed: game-a lean home → lean away"
+    ]
+
+
+def test_a_game_new_to_the_board_still_notifies():
+    fake = FakeMonitor(
+        [
+            snapshot_with({"game-a": Side.HOME}),
+            snapshot_with({"game-a": Side.HOME, "game-b": Side.AWAY}),
+        ]
+    )
+    monitor = fake.monitor()
+
+    _, result = [asyncio.run(monitor.refresh()) for _ in range(2)]
+
+    assert result.changed_game_ids == ("game-b",)
+    assert fake.notifications == ["Recommendations changed: added: game-b → lean away"]
 
 
 def test_refresh_stays_silent_when_the_edge_grows_inside_one_tier():
