@@ -126,3 +126,15 @@ def test_model_tier_rows_follow_the_board_filter(tmp_path):
     page = page_fixture(tmp_path, synthetic_season())
     dom = rendered_dom(page, "tab=model&sport=cfb", tmp_path)
     assert dom.count('class="rate-row"') == 3 + 7
+
+
+def test_games_tab_lists_every_game(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "tab=games", tmp_path)
+    assert '<table class="games"' in dom
+    assert dom.count('<tr class="game-row"') == 4
+    assert 'aria-sort="ascending"' in dom  # kickoff, by default
+
+
+def test_games_tab_with_no_matches_says_so(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "tab=games&tier=lean", tmp_path)
+    assert "No games match" in dom

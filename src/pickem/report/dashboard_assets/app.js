@@ -1,7 +1,7 @@
 // App state, the top bar, routing between tabs, and boot.
 (function (P) {
   "use strict";
-  const { h, LABELS } = P.ui;
+  const { h } = P.ui;
   const F = P.filters;
   const TAB_LABELS = { week: "Week", season: "Season", model: "Model", games: "Games" };
   const THEMES = ["auto", "light", "dark"];

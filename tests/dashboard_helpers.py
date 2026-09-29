@@ -1,6 +1,7 @@
 """Shared fixtures for the dashboard: a synthetic season, and runners for Node and Chrome."""
 
 import random
+import re
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -147,4 +148,5 @@ def rendered_dom(page: Path, fragment: str, tmp_path: Path) -> str:
     assert result.returncode == 0, result.stderr
     dom = result.stdout
     assert 'data-boot="ok"' in dom, dom[-2000:]
-    return dom
+    # Drop the inlined scripts and data so assertions only see what the page drew.
+    return re.sub(r"<script\b[^>]*>.*?</script>", "", dom, flags=re.S)
