@@ -170,14 +170,15 @@ def embeds(monkeypatch):
     return captured
 
 
-def test_import_writes_the_week_page_and_the_index(workspace, tmp_path):
+def test_import_writes_the_page_and_a_forwarder_per_week(workspace, tmp_path):
     db, results = workspace
     dash = tmp_path / "dash"
     result = invoke_import(db, results, "--no-notify", "--dashboard-dir", str(dash))
     assert result.exit_code == 0, result.output
-    page = (dash / "week-2.html").read_text()
+    page = (dash / "index.html").read_text()
     assert page.startswith("<!doctype html>")
-    assert (dash / "index.html").read_text() == page
+    assert 'id="pickem-data"' in page
+    assert 'location.replace("index.html#week=2")' in (dash / "week-2.html").read_text()
     assert not list(dash.glob(".*.tmp"))
     assert "dashboard written to" in result.output
 
@@ -199,22 +200,21 @@ def test_a_failed_atomic_write_leaves_no_temp_file(workspace, tmp_path, monkeypa
 def test_dashboard_defaults_to_the_configured_directory(workspace, tmp_path):
     db, results = workspace
     assert invoke_import(db, results, "--no-notify").exit_code == 0
-    assert (tmp_path / "dashboard" / "week-2.html").exists()  # conftest's PICKEM_DASHBOARD_DIR
+    assert (tmp_path / "dashboard" / "index.html").exists()  # conftest's PICKEM_DASHBOARD_DIR
+    assert (tmp_path / "dashboard" / "week-2.html").exists()
 
 
-def test_rebuilding_an_older_week_leaves_the_index_alone(workspace, tmp_path, monkeypatch):
+def test_rebuilding_any_week_rewrites_the_whole_page(workspace, tmp_path):
     db, results = workspace
     dash = tmp_path / "dash"
     assert invoke_import(db, results, "--no-notify", "--dashboard-dir", str(dash)).exit_code == 0
-    (dash / "index.html").write_text("latest week")
-    monkeypatch.setattr(Store, "pool_weeks", lambda self, season: [2, 3])
+    (dash / "index.html").write_text("stale")
     result = runner.invoke(app, [
         "results-report", "--season", "2026", "--pool-week", "2", "--db", str(db),
         "--out-dir", str(results), "--dashboard-dir", str(dash),
     ])
     assert result.exit_code == 0, result.output
-    assert (dash / "index.html").read_text() == "latest week"
-    assert 'href="week-3.html"' in (dash / "week-2.html").read_text()
+    assert 'id="pickem-data"' in (dash / "index.html").read_text()
 
 
 def test_dm_links_the_dashboard_when_the_url_is_set(workspace, embeds, monkeypatch, tmp_path):
@@ -240,7 +240,7 @@ def test_a_render_failure_keeps_the_report_sends_the_dm_and_exits_3(
     def boom(*args, **kwargs):
         raise RuntimeError("render broke")
 
-    monkeypatch.setattr("pickem.cli.render_results_dashboard", boom)
+    monkeypatch.setattr("pickem.cli.render_dashboard", boom)
     result = invoke_import(db, results)
     assert result.exit_code == 3, result.output
     assert "dashboard not written: render broke" in result.output
@@ -260,7 +260,7 @@ def test_a_dm_failure_takes_precedence_over_a_dashboard_failure(
     def boom(*args, **kwargs):
         raise RuntimeError("render broke")
 
-    monkeypatch.setattr("pickem.cli.render_results_dashboard", boom)
+    monkeypatch.setattr("pickem.cli.render_dashboard", boom)
     result = invoke_import(db, results)
     assert result.exit_code == 2, result.output
     assert "the Discord DM failed" in result.output
@@ -290,5 +290,5 @@ def test_dashboard_write_is_logged(workspace, tmp_path):
     written = [row for row in rows if row["event"] == "dashboard_written"]
     assert len(written) == 1
     assert written[0]["pool_week"] == 2
-    assert written[0]["index_updated"] is True
+    assert written[0]["weeks"] == 1
     assert not any(row["event"] == "dashboard_write_failed" for row in rows)

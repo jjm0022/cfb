@@ -1,9 +1,15 @@
 # Results dashboard
 
-The Tuesday results job writes one page per pool week to the dashboard
-directory (`$PICKEM_DASHBOARD_DIR`, default `~/.local/share/pickem/dashboard`):
-`week-N.html` for each week and `index.html` for the latest. Tailscale serves
-that directory to the owner's own devices only.
+The Tuesday results job writes one interactive page, `index.html`, to the
+dashboard directory (`$PICKEM_DASHBOARD_DIR`, default
+`~/.local/share/pickem/dashboard`). It covers the season through the latest
+imported week, and has a week picker for earlier weeks. The job also writes a
+small `week-N.html` for every imported week; each one only forwards to
+`index.html#week=N`, so links in older DMs still land on the right week.
+Tailscale serves that directory to the owner's own devices only.
+
+The page is self-contained: its data, styles and scripts are all inside
+`index.html`, and it makes no outside requests. It needs JavaScript.
 
 Address: `https://sandbox.tail750bff.ts.net/pickem/`
 
@@ -44,8 +50,9 @@ Without it the DM is sent as before, with no link.
 uv run pickem results-report --season 2026 --pool-week N
 ```
 
-This rewrites `week-N.html` (and the Markdown), and `index.html` only when N
-is the latest imported week. Use it after a `dashboard not written` failure:
+This rewrites week N's Markdown and always rebuilds the whole page
+(`index.html` and every `week-N.html` forwarder) from everything imported,
+whichever week N is. Use it after a `dashboard not written` failure:
 the Tuesday job exits 3 in that case and DMs the owner the exact command to
 run, and its Wednesday retry does not redo an imported week (the week is
 already imported, so `pending-results-week` skips it).

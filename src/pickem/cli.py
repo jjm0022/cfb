@@ -87,8 +87,8 @@ from pickem.operations.recommendations import (
     poll_odds_snapshot,
 )
 from pickem.operations.results_import import ResultsImportError, import_results, league_week
+from pickem.report.dashboard import render_dashboard, render_week_forwarder
 from pickem.report.results import ResultsReport, ResultsReportError, build_results_report
-from pickem.report.results_html import render_results_dashboard
 from pickem.report.results_markdown import render_results_report
 from pickem.report.sheet import render_sheet
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
@@ -559,22 +559,26 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def _write_dashboard(store: Store, report: ResultsReport, dashboard_dir: Path) -> Path | None:
-    """Write week-N.html, and index.html when N is the latest week; ``None`` on failure.
+    """Write index.html for the whole season, and a forwarder week-N.html for every week.
 
-    The import and the Markdown are already saved, so a failure here is logged
-    and reported, never raised: the DM still goes out before the command exits 3.
+    The page always covers the season through the latest imported week, whichever
+    week ``report`` is. The import and the Markdown are already saved, so a failure
+    here is logged and reported, never raised: the DM still goes out before the
+    command exits 3.
     """
     try:
         weeks = store.pool_weeks(report.season)
-        page = render_results_dashboard(
-            report, generated_at=datetime.now(tz=UTC), imported_weeks=weeks
-        )
+        latest = report
+        if report.pool_week != weeks[-1]:
+            latest = build_results_report(
+                store, season=report.season, pool_week=weeks[-1], entry_name=report.entry_name
+            )
+        page = render_dashboard(latest, generated_at=datetime.now(tz=UTC))
         dashboard_dir.mkdir(parents=True, exist_ok=True)
-        path = dashboard_dir / f"week-{report.pool_week}.html"
+        path = dashboard_dir / "index.html"
         _write_atomic(path, page)
-        index_updated = report.pool_week == weeks[-1]
-        if index_updated:
-            _write_atomic(dashboard_dir / "index.html", page)
+        for week in weeks:
+            _write_atomic(dashboard_dir / f"week-{week}.html", render_week_forwarder(week))
     except Exception as exc:  # a render bug or a filesystem error alike must not stop the DM
         logger.bind(
             event="dashboard_write_failed",
@@ -589,7 +593,7 @@ def _write_dashboard(store: Store, report: ResultsReport, dashboard_dir: Path) -
         pool_week=report.pool_week,
         path=str(path),
         bytes=len(page.encode("utf-8")),
-        index_updated=index_updated,
+        weeks=len(weeks),
     ).info(f"dashboard written to {path}")
     typer.echo(f"dashboard written to {path}")
     return path
