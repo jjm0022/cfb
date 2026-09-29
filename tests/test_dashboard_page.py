@@ -138,3 +138,22 @@ def test_games_tab_lists_every_game(tmp_path):
 def test_games_tab_with_no_matches_says_so(tmp_path):
     dom = rendered_dom(page_fixture(tmp_path), "tab=games&tier=lean", tmp_path)
     assert "No games match" in dom
+
+
+def test_season_tab_prints_a_weeks_values_as_text(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "tab=season", tmp_path)
+    assert dom.count('class="readout"') == 2
+    assert re.search(r"Week 2: Us \d+ · Field median [\d.]+ · Winner \d+", dom)
+    assert re.search(r"Week 2: Beaten \d+%", dom)
+    assert "Open week 2" in dom
+
+
+def test_model_tab_with_no_games_says_so(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "tab=model&tier=lean", tmp_path)
+    assert 'class="rate-row"' not in dom
+    assert dom.count("No games yet") == 2
+
+
+def test_the_model_timeline_shows_the_date(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), f"game={MODEL_GAME}", tmp_path)
+    assert "Sep 11, 6:00 AM ET" in dom  # 30 hours before a Saturday noon kickoff

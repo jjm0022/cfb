@@ -55,7 +55,7 @@
   const kickoffFormat = new Intl.DateTimeFormat("en-US",
     { ...EASTERN, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const timeFormat = new Intl.DateTimeFormat("en-US",
-    { ...EASTERN, weekday: "short", hour: "numeric", minute: "2-digit" });
+    { ...EASTERN, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
   const fmt = {
     spread(x) {

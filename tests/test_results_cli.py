@@ -8,6 +8,7 @@ from results_helpers import FIXTURE, seed
 from typer.testing import CliRunner
 
 from pickem.cli import app
+from pickem.report.results import build_results_report
 from pickem.store.db import Store
 
 runner = CliRunner()
@@ -215,6 +216,30 @@ def test_rebuilding_any_week_rewrites_the_whole_page(workspace, tmp_path):
     ])
     assert result.exit_code == 0, result.output
     assert 'id="pickem-data"' in (dash / "index.html").read_text()
+
+
+def test_rebuilding_an_older_week_builds_the_page_through_the_latest(
+    workspace, tmp_path, monkeypatch
+):
+    db, results = workspace
+    dash = tmp_path / "dash"
+    assert invoke_import(db, results, "--no-notify", "--dashboard-dir", str(dash)).exit_code == 0
+    real = build_results_report
+    built = []
+
+    def spy(store, *, season, pool_week, entry_name):
+        built.append(pool_week)
+        return real(store, season=season, pool_week=2, entry_name=entry_name)
+
+    monkeypatch.setattr(Store, "pool_weeks", lambda self, season: [2, 3])
+    monkeypatch.setattr("pickem.cli.build_results_report", spy)
+    result = runner.invoke(app, [
+        "results-report", "--season", "2026", "--pool-week", "2", "--db", str(db),
+        "--out-dir", str(results), "--dashboard-dir", str(dash),
+    ])
+    assert result.exit_code == 0, result.output
+    assert built == [2, 3]  # week 2's Markdown, then the page through week 3
+    assert 'location.replace("index.html#week=3")' in (dash / "week-3.html").read_text()
 
 
 def test_dm_links_the_dashboard_when_the_url_is_set(workspace, embeds, monkeypatch, tmp_path):

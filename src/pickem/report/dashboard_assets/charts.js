@@ -39,7 +39,7 @@
   }
 
   function rateRows(rows, onPick) {
-    if (!rows.length) return h("p", { class: "empty" }, "No games yet");
+    if (!rows.some((row) => row.games.length)) return h("p", { class: "empty" }, "No games yet");
     const RH = 28, x = P.scales.linear(0, 1, 8, W - 8);
     return h("div", { class: "rates" },
       h("div", { class: "rate-axis", "aria-hidden": "true" }, h("span"),

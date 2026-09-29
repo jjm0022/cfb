@@ -9,7 +9,7 @@
 
   const app = {
     data: null, state: null, sort: { key: "kickoff", dir: "asc" }, search: "",
-    list: null, tierOpen: false, pushedGame: false,
+    list: null, tierOpen: false, pushedGame: false, seasonWeek: null,
   };
   P.app = app;
 

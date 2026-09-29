@@ -45,9 +45,9 @@ button{cursor:pointer}
 .tier-pick summary::-webkit-details-marker{display:none}
 .tier-pick .menu{position:absolute;z-index:5;margin-top:4px;padding:6px;min-width:180px;
   background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
-.tier-pick label{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 6px}
+.tier-pick label{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 6px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-.chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 6px 0 12px;
+.chip{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 6px 0 12px;
   border-radius:999px;background:var(--good-bg);border:0}
 .chip span{font-size:15px;line-height:1}
 .tabs{position:sticky;top:0;z-index:4;display:flex;gap:4px;margin:12px -16px 0;padding:6px 16px;
@@ -102,8 +102,9 @@ dl dd{margin:0;color:var(--muted)}
 .games-head input{min-height:44px;flex:1 1 200px;max-width:320px;padding:0 12px;
   border:1px solid var(--line);border-radius:10px;background:var(--raised)}
 table.games{white-space:nowrap;font-size:14px;margin-top:10px}
-table.games th button{border:0;background:none;padding:0;min-height:36px;color:inherit;font-weight:inherit}
+table.games th button{border:0;background:none;padding:0;min-height:44px;color:inherit;font-weight:inherit}
 table.games tbody tr{cursor:pointer}
+table.games td{padding-top:12px;padding-bottom:12px}
 table.games tbody tr:hover{background:var(--raised)}
 .tier{color:var(--muted);font-size:12px;margin-left:4px}
 
@@ -147,6 +148,7 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .key{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
 figure{margin:0}
 figcaption{color:var(--muted);font-size:13px;margin-bottom:6px}
+.readout{margin:8px 0 0;font-size:14px;font-variant-numeric:tabular-nums}
 
 /* detail panel */
 .backdrop{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.35)}
