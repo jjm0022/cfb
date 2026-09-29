@@ -1,6 +1,8 @@
 """Shared fixtures for the dashboard: a synthetic season, and runners for Node and Chrome."""
 
 import random
+import shutil
+import subprocess
 from datetime import UTC, datetime, timedelta
 
 from pickem.models import HISTORY_MONITOR, Game, RecommendationRecord, Side, Sport, Tier
@@ -55,3 +57,16 @@ def synthetic_season(seed: int = 7, per_week: int = 30) -> ResultsReport:
         season=2026, pool_week=2, entry_name="Jota", standings=standings,
         week_games=tuple(g for g in games if g.pool_week == 2), season_games=tuple(games),
     )
+
+
+NODE = shutil.which("node")
+
+
+def run_node(*args: str) -> str:
+    """Run Node from the repo root and return stdout; fail loudly when Node is missing."""
+    assert NODE, "Node is required for the dashboard's JavaScript tests: install nodejs"
+    result = subprocess.run(
+        [NODE, *args], capture_output=True, text=True, timeout=120, check=False
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout
