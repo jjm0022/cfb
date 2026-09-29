@@ -37,6 +37,8 @@ SCRIPTS = (
     "charts.js",
     "panel.js",
     "tab_week.js",
+    "tab_season.js",
+    "tab_model.js",
     "app.js",
 )
 

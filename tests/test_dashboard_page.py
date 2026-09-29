@@ -98,3 +98,31 @@ def test_week_tab_survives_filters_that_leave_nothing(tmp_path):
     dom = rendered_dom(page_fixture(tmp_path), "tier=lean&result=win", tmp_path)
     assert dom.count('class="tile"') == 4  # standings are not filtered
     assert "No games match the filters." in dom
+
+
+def test_season_tab_draws_both_trends(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "tab=season", tmp_path)
+    assert dom.count('<figure class="trend"') == 2
+    assert "<polyline" not in dom  # one imported week: points, no lines
+
+
+def test_season_trends_draw_lines_across_weeks(tmp_path):
+    page = page_fixture(tmp_path, synthetic_season())
+    dom = rendered_dom(page, "tab=season", tmp_path)
+    assert dom.count("<polyline") == 4  # us, median, winner; and share beaten
+
+
+def test_model_tab_has_tiers_baselines_clv_findings_and_glossary(tmp_path):
+    page = page_fixture(tmp_path, synthetic_season())
+    dom = rendered_dom(page, "tab=model", tmp_path)
+    assert dom.count('class="rate-row"') == 6 + 7  # 2 boards × 3 tiers, us + 6 baselines
+    assert "NFL backtest" in dom
+    assert "Closing-line value" in dom
+    assert "What the data says" in dom
+    assert "What the terms mean" in dom
+
+
+def test_model_tier_rows_follow_the_board_filter(tmp_path):
+    page = page_fixture(tmp_path, synthetic_season())
+    dom = rendered_dom(page, "tab=model&sport=cfb", tmp_path)
+    assert dom.count('class="rate-row"') == 3 + 7
