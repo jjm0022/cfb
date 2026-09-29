@@ -29,7 +29,9 @@ from pickem.report.results import (
 
 ASSETS = Path(__file__).with_name("dashboard_assets")
 # Inline order: pure logic first, then helpers, charts, panel and tabs, and app.js last (it boots).
-SCRIPTS = ("stats.js", "filters.js", "scales.js", "ui_core.js", "app.js")
+SCRIPTS = (
+    "stats.js", "filters.js", "scales.js", "ui_core.js", "charts.js", "panel.js", "app.js",
+)
 
 
 def build_dashboard_data(report: ResultsReport, *, generated_at: datetime) -> dict:

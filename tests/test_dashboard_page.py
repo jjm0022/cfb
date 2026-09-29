@@ -1,7 +1,14 @@
 import json
 import re
 
-from dashboard_helpers import GENERATED, page_fixture, rendered_dom, synthetic_season
+from dashboard_helpers import (
+    BARE_GAME,
+    GENERATED,
+    MODEL_GAME,
+    page_fixture,
+    rendered_dom,
+    synthetic_season,
+)
 from results_helpers import assert_well_formed
 
 from pickem.report.dashboard import ASSETS, SCRIPTS, render_dashboard, render_week_forwarder
@@ -55,3 +62,20 @@ def test_the_page_boots_in_a_real_browser(tmp_path):
     dom = rendered_dom(page_fixture(tmp_path), "", tmp_path)
     assert 'role="tablist"' in dom
     assert "Pick'em 2026" in dom
+
+
+def test_a_game_opens_in_the_detail_panel_with_its_history(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), f"game={MODEL_GAME}", tmp_path)
+    assert 'class="panel"' in dom
+    assert "PSU @ TEM" in dom
+    assert "The model through the week" in dom
+    assert dom.count('class="changed"') == 2  # tier change, then side change
+    assert "Line movement" in dom and "<polyline" in dom
+    assert "Pinnacle" in dom
+
+
+def test_a_game_the_model_never_covered_still_opens(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), f"game={BARE_GAME}", tmp_path)
+    assert "The model never covered this game." in dom
+    assert "No line history" in dom
+    assert "Not captured" in dom
