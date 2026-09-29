@@ -30,7 +30,14 @@ from pickem.report.results import (
 ASSETS = Path(__file__).with_name("dashboard_assets")
 # Inline order: pure logic first, then helpers, charts, panel and tabs, and app.js last (it boots).
 SCRIPTS = (
-    "stats.js", "filters.js", "scales.js", "ui_core.js", "charts.js", "panel.js", "app.js",
+    "stats.js",
+    "filters.js",
+    "scales.js",
+    "ui_core.js",
+    "charts.js",
+    "panel.js",
+    "tab_week.js",
+    "app.js",
 )
 
 

@@ -79,3 +79,22 @@ def test_a_game_the_model_never_covered_still_opens(tmp_path):
     assert "The model never covered this game." in dom
     assert "No line history" in dom
     assert "Not captured" in dom
+
+
+def test_week_tab_shows_the_headline_and_every_section(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "", tmp_path)
+    assert dom.count('class="tile"') == 4
+    assert "No analysis for this week yet." in dom
+    assert "Confident picks that lost" in dom
+    assert dom.count('class="board-table"') == 2  # both boards played in pool week 2
+
+
+def test_week_tab_shows_only_boards_with_games(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "sport=nfl", tmp_path)
+    assert dom.count('class="board-table"') == 1
+
+
+def test_week_tab_survives_filters_that_leave_nothing(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "tier=lean&result=win", tmp_path)
+    assert dom.count('class="tile"') == 4  # standings are not filtered
+    assert "No games match the filters." in dom
