@@ -4,9 +4,31 @@ import random
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from pickem.models import HISTORY_MONITOR, Game, RecommendationRecord, Side, Sport, Tier
-from pickem.report.results import BoardStanding, ResultsReport, WeekStanding, grade_game
+from results_helpers import KICK as STORE_KICK
+from results_helpers import imported_store
+
+from pickem.models import (
+    HISTORY_MONITOR,
+    LIVE_SOURCE,
+    PINNACLE_SOURCE,
+    Game,
+    MarketLine,
+    RecommendationRecord,
+    Side,
+    Sport,
+    Tier,
+    make_game_id,
+)
+from pickem.report.dashboard import render_dashboard
+from pickem.report.results import (
+    BoardStanding,
+    ResultsReport,
+    WeekStanding,
+    build_results_report,
+    grade_game,
+)
 
 GENERATED = datetime(2026, 9, 29, 13, tzinfo=UTC)
 KICK = datetime(2026, 9, 5, 16, tzinfo=UTC)
@@ -70,3 +92,59 @@ def run_node(*args: str) -> str:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout
+
+
+CHROME = shutil.which("google-chrome") or shutil.which("chromium")
+MODEL_GAME = "cfb-2026-02-PSU-at-TEM"
+BARE_GAME = make_game_id(Sport.NFL, 2026, 1, "NE", "SEA")
+
+
+def fixture_report():
+    """The CBS fixture week, with one modelled game that has US and Pinnacle line history."""
+    store = imported_store()
+    store.append_recommendation_history([
+        RecommendationRecord(
+            game_id=MODEL_GAME, sport=Sport.CFB, season=2026, week=2, side=side, tier=tier,
+            edge_points=edge, generated_at=STORE_KICK - timedelta(hours=hours),
+            source=HISTORY_MONITOR,
+        )
+        for side, tier, edge, hours in [
+            (Side.HOME, Tier.LEAN, 1.0, 30), (Side.HOME, Tier.STRONG, 2.5, 6),
+            (Side.AWAY, Tier.STRONG, 2.1, 1),
+        ]
+    ])
+    store.append_market_lines([
+        MarketLine(game_id=MODEL_GAME, source=source, book=book, spread_home=spread,
+                   captured_at=STORE_KICK - timedelta(hours=hours))
+        for source, book, spread, hours in [
+            (LIVE_SOURCE, "dk", 24.0, 30), (LIVE_SOURCE, "fd", 24.5, 30),
+            (LIVE_SOURCE, "dk", 25.5, 2), (PINNACLE_SOURCE, "pinnacle", 25.0, 3),
+        ]
+    ])
+    try:
+        return build_results_report(store, season=2026, pool_week=2, entry_name="Jota")
+    finally:
+        store.close()
+
+
+def page_fixture(tmp_path: Path, report=None) -> Path:
+    path = tmp_path / "index.html"
+    path.write_text(render_dashboard(report or fixture_report(), generated_at=GENERATED))
+    return path
+
+
+def rendered_dom(page: Path, fragment: str, tmp_path: Path) -> str:
+    """The page's DOM after its scripts ran in headless Chrome, opened at ``#fragment``."""
+    assert CHROME, "Google Chrome is required for the dashboard page tests"
+    result = subprocess.run(
+        [
+            CHROME, "--headless=new", "--disable-gpu", "--no-first-run",
+            "--no-default-browser-check", f"--user-data-dir={tmp_path / 'chrome-profile'}",
+            "--virtual-time-budget=3000", "--dump-dom", f"{page.as_uri()}#{fragment}",
+        ],
+        capture_output=True, text=True, timeout=90, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    dom = result.stdout
+    assert 'data-boot="ok"' in dom, dom[-2000:]
+    return dom
