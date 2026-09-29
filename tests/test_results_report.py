@@ -8,6 +8,8 @@ from pickem.backtest.stats import Result, wilson_interval
 from pickem.models import (
     HISTORY_MONITOR,
     HISTORY_REPORT,
+    LIVE_SOURCE,
+    PINNACLE_SOURCE,
     Game,
     MarketLine,
     RecommendationRecord,
@@ -16,6 +18,9 @@ from pickem.models import (
     Tier,
 )
 from pickem.report.results import (
+    PINNACLE_LINE,
+    US_LINE,
+    LinePoint,
     Record,
     ResultsReportError,
     Strategy,
@@ -26,6 +31,7 @@ from pickem.report.results import (
     field_consensus_side,
     grade_game,
     last_before,
+    line_history,
     record_for,
 )
 
@@ -199,3 +205,71 @@ def test_build_rejects_unknown_entrant_and_week(store):
         build_results_report(store, season=2026, pool_week=2, entry_name="Nobody")
     with pytest.raises(ResultsReportError, match="pool week 3 of 2026 is not imported"):
         build_results_report(store, season=2026, pool_week=3, entry_name="Jota")
+
+
+def _quote(book, spread, minutes_before, source=LIVE_SOURCE):
+    return MarketLine(
+        game_id="g", source=source, book=book, spread_home=spread,
+        captured_at=KICK - timedelta(minutes=minutes_before),
+    )
+
+
+def test_line_history_is_the_running_us_consensus_and_ends_at_the_close():
+    quotes = [
+        _quote("dk", -3.0, 300), _quote("fd", -3.5, 300),
+        _quote("dk", -4.0, 60), _quote("fd", -4.5, 60),
+        _quote("dk", -9.0, -10),  # after kickoff: ignored
+    ]
+    points = line_history(quotes, KICK)
+    assert [(p.source, p.spread_home) for p in points] == [(US_LINE, -3.25), (US_LINE, -4.25)]
+    assert points[-1].spread_home == closing_spread(quotes, KICK)
+
+
+def test_pinnacle_is_its_own_series_and_never_moves_the_us_consensus():
+    quotes = [
+        _quote("dk", -3.0, 300),
+        _quote("pinnacle", -6.0, 200, source=PINNACLE_SOURCE),
+    ]
+    assert line_history(quotes, KICK) == (
+        LinePoint(KICK - timedelta(minutes=300), US_LINE, -3.0),
+        LinePoint(KICK - timedelta(minutes=200), PINNACLE_LINE, -6.0),
+    )
+
+
+def test_no_quotes_means_no_history():
+    assert line_history([], KICK) == ()
+
+
+def test_graded_game_keeps_the_pre_kickoff_model_history_oldest_first():
+    game = Game(
+        game_id="cfb-2026-02-a-at-h", sport=Sport.CFB, season=2026, week=2,
+        kickoff_utc=KICK, home_team_id="H", away_team_id="A", home_score=20, away_score=10,
+    )
+
+    def rec(hours, side, tier):
+        return RecommendationRecord(
+            game_id=game.game_id, sport=Sport.CFB, season=2026, week=2, side=side, tier=tier,
+            edge_points=1.0, generated_at=KICK - timedelta(hours=hours), source=HISTORY_MONITOR,
+        )
+
+    late = rec(1, Side.AWAY, Tier.LEAN)
+    early = rec(5, Side.HOME, Tier.STRONG)
+    after = rec(-1, Side.HOME, Tier.LEAN)
+    graded = grade_game(
+        game=game, pool_week=2, league_spread=-3.5, close_spread=None, our_side=Side.HOME,
+        field_home=1, field_away=1, history=[late, after, early],
+    )
+    assert graded.history == (early, late)
+    assert graded.line_history == ()
+
+
+def test_the_built_report_carries_each_games_line_history():
+    store = imported_store()
+    game_id = "cfb-2026-02-PSU-at-TEM"
+    store.append_market_lines([
+        MarketLine(game_id=game_id, source=LIVE_SOURCE, book="dk", spread_home=24.0,
+                   captured_at=KICK - timedelta(hours=3)),
+    ])
+    report = build_results_report(store, season=2026, pool_week=2, entry_name="Jota")
+    graded = next(g for g in report.season_games if g.game.game_id == game_id)
+    assert [(p.source, p.spread_home) for p in graded.line_history] == [(US_LINE, 24.0)]

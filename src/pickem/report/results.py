@@ -19,6 +19,7 @@ from pickem.edge.divergence import consensus_spread, suppress_decision_logging
 from pickem.edge.favorite import favorite_side
 from pickem.models import (
     LIVE_SOURCE,
+    PINNACLE_SOURCE,
     Game,
     MarketLine,
     PoolPick,
@@ -133,6 +134,39 @@ def closing_spread(lines: Iterable[MarketLine], kickoff: datetime) -> float | No
         return consensus_spread(before)
 
 
+US_LINE = "us"
+PINNACLE_LINE = "pinnacle"
+
+
+@dataclass(frozen=True)
+class LinePoint:
+    captured_at: datetime
+    source: str  # US_LINE or PINNACLE_LINE
+    spread_home: float
+
+
+def line_history(lines: Iterable[MarketLine], kickoff: datetime) -> tuple[LinePoint, ...]:
+    """The market's spread through the week, from quotes captured before kickoff.
+
+    The US series is the consensus after each poll, computed the same way as
+    the closing line, so its last point is ``closing_spread``. Pinnacle is its
+    own series and never enters the consensus.
+    """
+    before = [ln for ln in lines if ln.captured_at < kickoff]
+    live = [ln for ln in before if ln.source == LIVE_SOURCE]
+    points: list[LinePoint] = []
+    with suppress_decision_logging():
+        for at in sorted({ln.captured_at for ln in live}):
+            spread = consensus_spread([ln for ln in live if ln.captured_at <= at])
+            points.append(LinePoint(at, US_LINE, spread))
+    points += [
+        LinePoint(ln.captured_at, PINNACLE_LINE, ln.spread_home)
+        for ln in before
+        if ln.source == PINNACLE_SOURCE
+    ]
+    return tuple(sorted(points, key=lambda p: (p.captured_at, p.source)))
+
+
 def last_before(
     history: Iterable[RecommendationRecord], kickoff: datetime
 ) -> RecommendationRecord | None:
@@ -158,6 +192,8 @@ class GradedGame:
     field_away: int
     model: RecommendationRecord | None
     picks: dict[Strategy, Side | None]
+    history: tuple[RecommendationRecord, ...] = ()
+    line_history: tuple[LinePoint, ...] = ()
 
     def result(self, strategy: Strategy) -> Result | None:
         side = self.picks.get(strategy)
@@ -207,6 +243,7 @@ def grade_game(
     field_home: int,
     field_away: int,
     history: Sequence[RecommendationRecord],
+    line_history: Sequence[LinePoint] = (),
 ) -> GradedGame:
     model = last_before(history, game.kickoff_utc)
     first = earliest(history, game.kickoff_utc)
@@ -227,6 +264,13 @@ def grade_game(
             Strategy.HOME: Side.HOME,
             Strategy.FIELD: field_consensus_side(field_home, field_away),
         },
+        history=tuple(
+            sorted(
+                (r for r in history if r.generated_at < game.kickoff_utc),
+                key=lambda r: (r.generated_at, r.source),
+            )
+        ),
+        line_history=tuple(line_history),
     )
 
 
@@ -410,6 +454,7 @@ def _grade_week(
                 field_home=field.count(Side.HOME),
                 field_away=field.count(Side.AWAY),
                 history=history[game_id],
+                line_history=line_history(lines[game_id], game.kickoff_utc),
             )
         )
     graded.sort(key=lambda g: (g.game.kickoff_utc, g.game.game_id))
