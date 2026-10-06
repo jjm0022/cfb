@@ -160,6 +160,19 @@ Split out of `HANDOFF.md` on 2026-09-09; content unchanged.
   fold picks `lean = 0.5`, but stability of a zero-magnitude effect is not
   evidence. Do not re-run this sweep unless the tiebreak improves — see
   `docs/research/2026-08-19-threshold-tuning.md`.
+- **Amended for NFL (2026-10-06): the SLIGHT tier.** Live NFL picks follow the
+  market on any non-zero gap under 1.0 (tier `slight`); a zero gap is still
+  COINFLIP with the CBS favorite. CFB and every historical replay keep 2.0/1.0
+  (`Thresholds.slight` is off by default; `LIVE_THRESHOLDS` in
+  `operations/recommendations.py` turns it on for NFL only). Reason: the sweep
+  above used Tuesday sportsbook lines as stand-ins for CBS lines, so it cannot
+  show whether CBS's own lines are worse than the books'. The 2026 real-CBS
+  record of following the closing market was NFL 32–15 overall and 15–8 on
+  gaps under 1 (CFB 28–31, unchanged). The rule was chosen after seeing that
+  record, so an early stop is declared: the weekly report warns when the NFL
+  SLIGHT record's 95% interval lies wholly below 50%. Revert by setting NFL
+  back to `Thresholds()`. Spec:
+  `docs/superpowers/specs/2026-10-06-nfl-slight-tier-design.md`.
 - **The CBS page is read as data, not scraped.** The pick'em page
   server-renders its GraphQL result into an Apollo SSR blob, so `--html` parses
   that rather than the DOM. Its CSS classes are hashed per build

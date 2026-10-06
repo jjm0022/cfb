@@ -108,7 +108,8 @@ CBS line:
 |---|---|
 | `strong` | ≥ 2.0 points of divergence |
 | `lean` | ≥ 1.0 point |
-| `coinflip` | Less than that — no real edge. Resolved by taking the frozen-board favorite (home when the frozen spread is ≤ 0) |
+| `slight` | NFL only: any gap above 0 and under 1.0 point. Follows the market, like lean. Notes when the gap crosses 3 or 7 |
+| `coinflip` | Less than 1.0 point on the CFB board, exactly 0 on the NFL board — no real edge. Resolved by taking the frozen-board favorite (home when the frozen spread is ≤ 0) |
 | `no_market` | No market line stored for the game at all. Resolved by an Elo rating built from stored results |
 
 A coinflip pick is a coinflip. The tiebreak exists so every game on the sheet
