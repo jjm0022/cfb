@@ -17,6 +17,7 @@ from enum import StrEnum
 from pickem.backtest.stats import Result, grade_pick, wilson_interval
 from pickem.edge.divergence import consensus_spread, suppress_decision_logging
 from pickem.edge.favorite import favorite_side
+from pickem.edge.key_numbers import key_number_crossed
 from pickem.models import (
     LIVE_SOURCE,
     PINNACLE_SOURCE,
@@ -34,7 +35,18 @@ from pickem.store.db import Store
 AGAINST_FIELD_SHARE = 0.40
 
 # NFL 2020-2025 backtest (docs/results.md). Shown as NFL numbers even beside CFB.
-BACKTEST_TIER_RATES = {Tier.STRONG: 0.637, Tier.LEAN: 0.542, Tier.COINFLIP: 0.495}
+# SLIGHT is the 0.5-1.0 band of the threshold test, on stand-in lines.
+BACKTEST_TIER_RATES = {
+    Tier.STRONG: 0.637,
+    Tier.LEAN: 0.542,
+    Tier.SLIGHT: 0.521,
+    Tier.COINFLIP: 0.495,
+}
+SLIGHT_REFERENCE_NOTE = (
+    "slight's reference is the 0.5–1.0 point band of the 2020–2025 NFL test, measured "
+    "on stand-in Tuesday sportsbook lines rather than real CBS lines"
+)
+SLIGHT_SPEC = "docs/superpowers/specs/2026-10-06-nfl-slight-tier-design.md"
 
 
 class ResultsReportError(RuntimeError):
@@ -216,6 +228,14 @@ class GradedGame:
         return self.team(Side.HOME if home_result is Result.WIN else Side.AWAY)
 
     @property
+    def key_number(self) -> int | None:
+        """3 or 7 when the model's SLIGHT pick spanned that margin, else None."""
+        if self.model is None or self.model.tier is not Tier.SLIGHT:
+            return None
+        market = self.league_spread - self.model.edge_points
+        return key_number_crossed(self.league_spread, market)
+
+    @property
     def clv(self) -> float | None:
         return closing_line_value(self.picks[Strategy.US], self.league_spread, self.close_spread)
 
@@ -306,13 +326,20 @@ def record_for(
     *,
     sport: Sport | None = None,
     tier: Tier | None = None,
+    key_number: bool | None = None,
 ) -> Record:
-    """W-L-P for one strategy; ``tier`` filters on the model's tier for the game."""
+    """W-L-P for one strategy; ``tier`` filters on the model's tier for the game.
+
+    ``key_number`` keeps only SLIGHT games that did (True) or did not (False)
+    span 3 or 7.
+    """
     counts = {Result.WIN: 0, Result.LOSS: 0, Result.PUSH: 0}
     for game in games:
         if sport is not None and game.game.sport is not sport:
             continue
         if tier is not None and (game.model is None or game.model.tier is not tier):
+            continue
+        if key_number is not None and (game.key_number is not None) is not key_number:
             continue
         result = game.result(strategy)
         if result is not None:
@@ -502,6 +529,20 @@ def _separate(a: tuple[float, float], b: tuple[float, float]) -> bool:
     return a[1] < b[0] or b[1] < a[0]
 
 
+def slight_stop_warning(games: Iterable[GradedGame]) -> str | None:
+    """The early-stop rule declared with the SLIGHT tier, or None while it holds.
+
+    Fires only when the whole 95% interval of the NFL SLIGHT record is below 50%.
+    """
+    record = record_for(games, Strategy.MODEL, sport=Sport.NFL, tier=Tier.SLIGHT)
+    if not record.decided or record.interval[1] >= 0.5:
+        return None
+    return (
+        f"NFL slight tier {record} is clearly below 50%: the early-stop rule in "
+        f"{SLIGHT_SPEC} says to revert NFL to the old tiers"
+    )
+
+
 def findings(games: Sequence[GradedGame]) -> Findings:
     """Statements the numbers support, and comparisons they cannot settle yet.
 
@@ -511,6 +552,9 @@ def findings(games: Sequence[GradedGame]) -> Findings:
     """
     claims: list[str] = []
     not_yet: list[str] = []
+    warning = slight_stop_warning(games)
+    if warning is not None:
+        claims.append(warning)
     sports = sorted({game.game.sport for game in games})
     scopes: list[tuple[Sport | None, str]] = [(None, "all boards")]
     scopes += [(sport, sport.value.upper()) for sport in sports]

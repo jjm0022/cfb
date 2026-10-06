@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pickem.models import Sport
+from pickem.models import Sport, Tier
 from pickem.report.results import (
     AGAINST_FIELD_SHARE,
     BACKTEST_TIER_RATES,
     BASELINES,
     GLOSSARY_INTRO,
     RESULT_MARKS,
+    SLIGHT_REFERENCE_NOTE,
     STRATEGY_DEFINITIONS,
     WEEK_STRATEGIES,
     GradedGame,
@@ -82,10 +83,25 @@ def _season(report: ResultsReport, sports: list[Sport]) -> list[str]:
         "| Board | Tier | Record | NFL backtest |",
         "|---|---|---|---|",
     ]
+    shown_slight = False
     for sport in sports:
         for tier, expected in BACKTEST_TIER_RATES.items():
+            if tier is Tier.SLIGHT:
+                if not record_for(games, Strategy.MODEL, sport=sport, tier=tier).decided:
+                    continue
+                shown_slight = True
+                for label, crossed in (("slight, crosses 3 or 7", True), ("slight, other", False)):
+                    record = record_for(
+                        games, Strategy.MODEL, sport=sport, tier=tier, key_number=crossed
+                    )
+                    lines.append(
+                        f"| {sport.value.upper()} | {label} | {record} | {expected:.1%}* |"
+                    )
+                continue
             record = record_for(games, Strategy.MODEL, sport=sport, tier=tier)
             lines.append(f"| {sport.value.upper()} | {tier.value} | {record} | {expected:.1%} |")
+    if shown_slight:
+        lines += ["", f"\\* {SLIGHT_REFERENCE_NOTE[0].upper()}{SLIGHT_REFERENCE_NOTE[1:]}."]
     lines += [
         "",
         "Games with no recommendation stored before kickoff (excluded from model grading): "

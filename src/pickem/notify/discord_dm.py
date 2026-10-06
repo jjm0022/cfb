@@ -21,6 +21,7 @@ from pickem.report.results import (
     Strategy,
     clv_summary,
     record_for,
+    slight_stop_warning,
 )
 
 _FIELD_VALUE_LIMIT = 1024
@@ -72,6 +73,9 @@ def build_results_embed(
         for tier, rate in BACKTEST_TIER_RATES.items()
     )
     embed.add_field(name="Season to date — model by tier", value=_cap(tiers), inline=False)
+    warning = slight_stop_warning(report.season_games)
+    if warning is not None:
+        embed.add_field(name="⚠️ Slight tier early stop", value=_cap(warning), inline=False)
     clv = clv_summary(report.season_games)
     clv_text = (
         "no closing lines stored"
