@@ -132,13 +132,15 @@ Pure-module tests on small hand-built weeks:
 
 - A two-way tie for first gives each a half win.
 - Two rules that produce identical picks produce identical results.
-- Every other entrant on the favorite in every COINFLIP game and us one point
-  behind: the underdog rule has a higher win chance and lower average points
-  than the current rule.
+- Every other entrant on the favorite in every COINFLIP game: the underdog
+  rule has a higher win chance than the current rule, at the same average
+  points (both sides are 50/50, so going contrarian costs nothing on average
+  under these assumptions).
 - With many draws, STRONG and LEAN games come out near 0.637 and 0.542.
 - The same seed gives byte-identical results.
-- The search never ends below its starting rule, and on a 3-COINFLIP week it
-  finds the best of all 8 combinations (checked by brute force).
+- The search never ends below its starting rule, no single switch improves its result,
+  and on a 3-COINFLIP week it finds the best of all 8 combinations (checked
+  by brute force).
 
 One end-to-end test runs the real command against a small temporary database
 and checks the printed tables, and that the database is unchanged.
