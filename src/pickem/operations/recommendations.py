@@ -15,7 +15,7 @@ from pathlib import Path
 from loguru import logger
 
 from pickem import config
-from pickem.edge.divergence import rank_edges
+from pickem.edge.divergence import Thresholds, rank_edges
 from pickem.edge.pipeline import decide_edges
 from pickem.ingest.odds import (
     CFB_KEY,
@@ -28,6 +28,14 @@ from pickem.ingest.odds import (
 from pickem.models import PINNACLE_SOURCE, Edge, MarketLinesResult, Sport, Tier
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
+
+# Tier settings for live picks, per sport. NFL follows the market on any gap
+# (the SLIGHT tier; docs/superpowers/specs/2026-10-06-nfl-slight-tier-design.md).
+# To revert NFL, set it back to Thresholds().
+LIVE_THRESHOLDS: dict[Sport, Thresholds] = {
+    Sport.NFL: Thresholds(slight=True),
+    Sport.CFB: Thresholds(),
+}
 
 
 class RecommendationDatabaseMissing(FileNotFoundError):
@@ -114,6 +122,7 @@ def generate_recommendations(
             [line for line in dataset.market_lines if line.source != PINNACLE_SOURCE],
             dataset.games,
             store.games_before(sport, season, week),
+            LIVE_THRESHOLDS[sport],
         )
     ranked = tuple(rank_edges(edges))
     logger.bind(

@@ -117,3 +117,21 @@ def test_backfill_reads_pick_batches_and_logged_decisions(store, tmp_path):
 def test_backfill_tolerates_a_missing_log_directory(store, tmp_path):
     summary = backfill_history(store, season=2026, log_dir=tmp_path / "absent")
     assert (summary.from_logs, summary.log_decisions_seen) == (0, 0)
+
+
+def test_slight_tier_round_trips(tmp_path):
+    from datetime import UTC, datetime
+
+    from pickem.models import RecommendationRecord, Side, Sport, Tier
+    from pickem.store.db import Store
+
+    record = RecommendationRecord(
+        game_id="nfl:rt", sport=Sport.NFL, season=2026, week=6, side=Side.AWAY,
+        tier=Tier.SLIGHT, edge_points=-0.5,
+        generated_at=datetime(2026, 10, 11, 15, tzinfo=UTC), source="refresh",
+    )
+    with Store(tmp_path / "rt.duckdb") as store:
+        store.init_schema()
+        store.append_recommendation_history([record])
+        [back] = store.recommendation_history(["nfl:rt"])
+    assert back.tier is Tier.SLIGHT

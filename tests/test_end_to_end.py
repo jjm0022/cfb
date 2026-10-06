@@ -113,9 +113,10 @@ def test_paste_to_pick_sheet(tmp_path, fake_odds):
     # line is generous on: league -3.0 vs market -6.25 is +3.25 toward home.
     assert sheet.index("BUF at MIA") < sheet.index("DAL at NYJ")
 
-    # The near-flat game fell to the tiebreak rather than being dropped, and the
-    # clear divergence was NOT overridden by it.
-    assert "coinflip" in sheet
+    # The near-flat NFL game (0.25 gap) follows the market as SLIGHT rather than
+    # being dropped, and the clear divergence was NOT overridden by it.
+    assert "slight" in sheet
+    assert "**DAL**" in sheet
     assert "strong" in sheet
 
     with Store(db) as store:

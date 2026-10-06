@@ -395,3 +395,40 @@ def test_pinnacle_lines_never_move_the_models_market_spread(db, seeded_week):
     snapshot = generate_recommendations(db, Sport.NFL, 2026, 1, at)
 
     assert snapshot.edges[0].market_spread == -6.0
+
+
+def _seed_small_gap(db, sport, game_id, *, league=-3.5, market=-3.0):
+    kickoff = datetime(2026, 10, 11, 17, tzinfo=UTC)
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games([
+            Game(game_id=game_id, sport=sport, season=2026, week=6, kickoff_utc=kickoff,
+                 home_team_id="home", away_team_id="away")
+        ])
+        store.upsert_league_lines([
+            LeagueLine(game_id=game_id, season=2026, week=6, spread_home=league,
+                       posted_at=kickoff - timedelta(days=5))
+        ])
+        store.append_market_lines([
+            MarketLine(game_id=game_id, source=LIVE_SOURCE, book="draftkings",
+                       spread_home=market, captured_at=kickoff - timedelta(hours=2))
+        ])
+
+
+def test_live_nfl_follows_the_market_on_a_small_gap(db):
+    _seed_small_gap(db, Sport.NFL, "nfl:small")
+    [edge] = generate_recommendations(
+        db, Sport.NFL, 2026, 6, datetime(2026, 10, 11, 15, tzinfo=UTC)
+    ).edges
+    assert edge.tier is Tier.SLIGHT
+    assert edge.side.value == "away"
+    assert "crosses key number 3" in edge.rationale
+
+
+def test_live_cfb_keeps_small_gaps_as_coinflips(db):
+    _seed_small_gap(db, Sport.CFB, "cfb:small")
+    [edge] = generate_recommendations(
+        db, Sport.CFB, 2026, 6, datetime(2026, 10, 11, 15, tzinfo=UTC)
+    ).edges
+    assert edge.tier is Tier.COINFLIP
+    assert edge.side.value == "home"
