@@ -214,3 +214,66 @@ def win_chance(sides: Sequence[Side], draws: Draws) -> float:
         for outcome, best, count in zip(draws.outcomes, draws.best, draws.best_count, strict=True)
     )
     return total / len(draws.outcomes)
+def search_optimal(week: SimWeek, draws: Draws) -> tuple[Side, ...]:
+    """Coordinate ascent on win chance over the COINFLIP sides.
+
+    Starts from the current rule and keeps any single switch that raises the
+    win chance on ``draws``; stops when none does. Callers must measure the
+    result on different draws, or it partly reflects its own luck.
+    """
+    sides = list(rule_sides(week, Rule.CURRENT))
+    best = win_chance(sides, draws)
+    improved = True
+    while improved:
+        improved = False
+        for i, game in enumerate(week.games):
+            if not game.is_coinflip:
+                continue
+            sides[i] = opposite(sides[i])
+            trial = win_chance(sides, draws)
+            if trial > best + 1e-12:
+                best = trial
+                improved = True
+            else:
+                sides[i] = opposite(sides[i])
+    return tuple(sides)
+
+
+@dataclass(frozen=True)
+class SwitchedGame:
+    label: str
+    league_spread: float
+    favorite_share: float | None
+
+
+@dataclass(frozen=True)
+class WeekResult:
+    pool_week: int
+    entrants: int
+    draws: int
+    results: tuple[RuleResult, ...]
+    switched: tuple[SwitchedGame, ...]
+    unrecommended: int
+
+    def result(self, rule: Rule) -> RuleResult:
+        return next(r for r in self.results if r.rule is rule)
+
+
+def simulate_week(
+    week: SimWeek, *, draws: int = DEFAULT_DRAWS, seed: int = DEFAULT_SEED
+) -> WeekResult:
+    evaluation = draw(week, draws, f"{seed}:{week.pool_week}:evaluate")
+    search = draw(week, draws, f"{seed}:{week.pool_week}:search")
+    optimal = search_optimal(week, search)
+    results = tuple(
+        evaluate(rule, optimal if rule is Rule.OPTIMAL else rule_sides(week, rule), evaluation)
+        for rule in Rule
+    )
+    switched = tuple(
+        SwitchedGame(game.label, game.league_spread, week.favorite_share(i))
+        for i, (game, side) in enumerate(zip(week.games, optimal, strict=True))
+        if game.is_coinflip and side is not game.favorite
+    )
+    return WeekResult(
+        week.pool_week, week.entrants, draws, results, switched, week.unrecommended
+    )

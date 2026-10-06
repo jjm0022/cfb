@@ -1,3 +1,5 @@
+from itertools import product
+
 import pytest
 
 from pickem.backtest.pool_sim import (
@@ -7,6 +9,8 @@ from pickem.backtest.pool_sim import (
     draw,
     evaluate,
     rule_sides,
+    search_optimal,
+    simulate_week,
     win_chance,
 )
 from pickem.models import Side, Tier
@@ -137,3 +141,70 @@ def test_same_seed_same_draws():
     w = week([game(i) for i in range(3)], [[H, A, H], [A, A, H]])
     assert draw(w, 500, "s") == draw(w, 500, "s")
     assert draw(w, 500, "s").outcomes != draw(w, 500, "t").outcomes
+def three_coinflip_week():
+    return week(
+        [game(0), game(1, spread=2.5), game(2), game(3, tier=Tier.STRONG)],
+        [[H, A, H, H], [H, A, A, H], [A, A, H, H], [H, H, H, A], [H, A, H, H]],
+    )
+
+
+def test_search_never_ends_below_the_current_rule():
+    w = three_coinflip_week()
+    d = draw(w, 4000, "search")
+    assert win_chance(search_optimal(w, d), d) >= win_chance(rule_sides(w, Rule.CURRENT), d)
+
+
+def test_search_ends_where_no_single_switch_helps():
+    w = three_coinflip_week()
+    d = draw(w, 4000, "search")
+    found = search_optimal(w, d)
+    base = win_chance(found, d)
+    for i, g in enumerate(w.games):
+        if g.is_coinflip:
+            flipped = list(found)
+            flipped[i] = A if flipped[i] is H else H
+            assert win_chance(flipped, d) <= base + 1e-12
+
+
+def test_search_finds_the_brute_force_best_on_three_coinflips():
+    w = three_coinflip_week()
+    d = draw(w, 4000, "search")
+    best = max(
+        win_chance((a, b, c, H), d) for a, b, c in product((H, A), repeat=3)
+    )
+    assert win_chance(search_optimal(w, d), d) == pytest.approx(best)
+
+
+def test_search_leaves_non_coinflip_games_alone():
+    w = three_coinflip_week()
+    assert search_optimal(w, draw(w, 2000, "x"))[3] is H
+
+
+def test_week_without_coinflips_keeps_the_current_rule():
+    w = week([game(0, tier=Tier.LEAN), game(1, tier=Tier.STRONG, model_side=A)], [[H, H]] * 3)
+    result = simulate_week(w, draws=2000, seed=1)
+    assert result.result(Rule.OPTIMAL).sides == result.result(Rule.CURRENT).sides
+    assert result.switched == ()
+
+
+def test_simulate_week_reports_every_rule_in_order():
+    w = three_coinflip_week()
+    result = simulate_week(w, draws=2000, seed=1)
+    assert [r.rule for r in result.results] == list(Rule)
+    assert result.entrants == 6 and result.draws == 2000 and result.pool_week == 1
+
+
+def test_switched_lists_coinflips_the_optimal_mix_took_against_the_favorite():
+    w = three_coinflip_week()
+    result = simulate_week(w, draws=2000, seed=1)
+    optimal = result.result(Rule.OPTIMAL).sides
+    expected = [
+        g.label for g, side in zip(w.games, optimal, strict=True)
+        if g.is_coinflip and side is not g.favorite
+    ]
+    assert [s.label for s in result.switched] == expected
+
+
+def test_simulate_week_is_repeatable():
+    w = three_coinflip_week()
+    assert simulate_week(w, draws=1000, seed=7) == simulate_week(w, draws=1000, seed=7)
