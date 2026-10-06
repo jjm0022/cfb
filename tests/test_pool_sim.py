@@ -6,10 +6,13 @@ from pickem.backtest.pool_sim import (
     Rule,
     SimGame,
     SimWeek,
+    at_least_one,
     draw,
     evaluate,
+    format_report,
     rule_sides,
     search_optimal,
+    season_summary,
     simulate_week,
     win_chance,
 )
@@ -208,3 +211,42 @@ def test_switched_lists_coinflips_the_optimal_mix_took_against_the_favorite():
 def test_simulate_week_is_repeatable():
     w = three_coinflip_week()
     assert simulate_week(w, draws=1000, seed=7) == simulate_week(w, draws=1000, seed=7)
+def test_at_least_one_win_in_eighteen_weeks():
+    assert at_least_one(0.02) == pytest.approx(1 - 0.98**18)
+    assert at_least_one(0.0) == 0.0
+
+
+def test_season_summary_averages_weekly_win_chance():
+    w1 = simulate_week(three_coinflip_week(), draws=1000, seed=1)
+    w2 = simulate_week(week([game(0)], [[H]] * 3, pool_week=2), draws=1000, seed=1)
+    rows = {row.label: row for row in season_summary([w1, w2])}
+    expected = (w1.result(Rule.CURRENT).win_chance + w2.result(Rule.CURRENT).win_chance) / 2
+    assert rows["current"].weekly_win == pytest.approx(expected)
+    assert rows["current"].season_win == pytest.approx(at_least_one(expected))
+    assert rows["minority*"].weekly_win == pytest.approx(
+        (w1.result(Rule.MINORITY).win_chance + w2.result(Rule.MINORITY).win_chance) / 2
+    )
+    assert rows["no-edge entrant"].weekly_win == pytest.approx((1 / 6 + 1 / 4) / 2)
+
+
+def test_report_labels_ceilings_and_counts_unrecommended_games():
+    w = week(
+        [game(0), game(1, tier=None, model_side=A)], [[H, H]] * 4, pool_week=3, unrecommended=1
+    )
+    text = format_report([simulate_week(w, draws=1000, seed=1)])
+    assert "Pool week 3: 5 entrants, 1,000 simulated weeks" in text
+    for rule in Rule:
+        assert str(rule) in text
+    assert "minority*" in text and "current*" not in text
+    assert "* ceiling" in text
+    assert "no stored recommendation (treated as 50/50): 1" in text
+    assert "no-edge entrant" in text
+    assert "Season, pool week 3" in text
+
+
+def test_report_names_the_switched_games():
+    # Every other entrant on the favorite everywhere: the search takes underdogs.
+    w = week([game(i) for i in range(4)], [[H] * 4] * 5)
+    text = format_report([simulate_week(w, draws=2000, seed=1)])
+    assert "optimal mix took the underdog on:" in text
+    assert "A0 at H0 (-3.5, pool 100% on the favorite)" in text

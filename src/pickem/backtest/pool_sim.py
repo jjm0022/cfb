@@ -277,3 +277,68 @@ def simulate_week(
     return WeekResult(
         week.pool_week, week.entrants, draws, results, switched, week.unrecommended
     )
+def at_least_one(weekly: float, weeks: int = SEASON_WEEKS) -> float:
+    """Chance of at least one weekly win over ``weeks`` independent weeks."""
+    return 1 - (1 - weekly) ** weeks
+
+
+@dataclass(frozen=True)
+class SeasonRow:
+    label: str
+    weekly_win: float
+    season_win: float
+
+
+def _label(rule: Rule) -> str:
+    return f"{rule}*" if rule in CEILINGS else str(rule)
+
+
+def season_summary(weeks: Sequence[WeekResult]) -> tuple[SeasonRow, ...]:
+    rows = []
+    for rule in Rule:
+        weekly = sum(w.result(rule).win_chance for w in weeks) / len(weeks)
+        rows.append(SeasonRow(_label(rule), weekly, at_least_one(weekly)))
+    no_edge = sum(1 / w.entrants for w in weeks) / len(weeks)
+    rows.append(SeasonRow("no-edge entrant", no_edge, at_least_one(no_edge)))
+    return tuple(rows)
+
+
+def _share(share: float | None) -> str:
+    return "no pool picks" if share is None else f"pool {share:.0%} on the favorite"
+
+
+def _span(weeks: Sequence[WeekResult]) -> str:
+    first, last = weeks[0].pool_week, weeks[-1].pool_week
+    return f"pool week {first}" if first == last else f"pool weeks {first}-{last}"
+
+
+def format_report(weeks: Sequence[WeekResult]) -> str:
+    lines: list[str] = []
+    for w in weeks:
+        lines.append(f"Pool week {w.pool_week}: {w.entrants} entrants, {w.draws:,} simulated weeks")
+        lines.append(f"  {'rule':<20}{'avg pts':>8}{'win':>8}{'top 3':>8}{'median rank':>13}")
+        for r in w.results:
+            lines.append(
+                f"  {_label(r.rule):<20}{r.avg_points:>8.2f}{r.win_chance:>8.1%}"
+                f"{r.top3_chance:>8.1%}{r.median_rank:>13g}"
+            )
+        if w.switched:
+            games = "; ".join(
+                f"{g.label} ({g.league_spread:+.1f}, {_share(g.favorite_share)})"
+                for g in w.switched
+            )
+            lines.append(f"  optimal mix took the underdog on: {games}")
+        else:
+            lines.append("  optimal mix kept every favorite")
+        if w.unrecommended:
+            lines.append(
+                f"  games with no stored recommendation (treated as 50/50): {w.unrecommended}"
+            )
+        lines.append("")
+    lines.append(f"Season, {_span(weeks)}")
+    lines.append(f"  {'rule':<20}{'avg weekly win':>16}{f'>=1 win in {SEASON_WEEKS} weeks':>22}")
+    for row in season_summary(weeks):
+        lines.append(f"  {row.label:<20}{row.weekly_win:>16.1%}{row.season_win:>22.1%}")
+    lines.append("")
+    lines.append("* ceiling: uses pool picks hidden until kickoff; cannot be played live.")
+    return "\n".join(lines)
