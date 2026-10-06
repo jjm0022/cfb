@@ -45,6 +45,7 @@ from pickem.backtest.coinflip_residual import (
     render_residual_report,
     residual_evaluations_are_byte_identical,
 )
+from pickem.backtest.pool_sim import DEFAULT_DRAWS, DEFAULT_SEED, format_report, simulate_week
 from pickem.backtest.runner import run_backtest, split_proxies
 from pickem.edge.divergence import suppress_decision_logging
 from pickem.edge.pipeline import MissingGameError
@@ -72,6 +73,7 @@ from pickem.operations.pick_check import (
     format_check_line,
     log_pick_check,
 )
+from pickem.operations.pool_sim_inputs import SimInputError, load_sim_week
 from pickem.operations.pool_weeks import pending_results_week, pool_week_status
 from pickem.operations.preflight import evaluate_preflight, render_preflight
 from pickem.operations.recommendation_history import (
@@ -721,6 +723,62 @@ def results_report_cmd(
         # when both the dashboard and the DM fail.
         if dashboard is None:
             raise typer.Exit(code=3)
+
+
+def _parse_pool_weeks(text: str | None) -> list[int] | None:
+    """``"4"`` or ``"1-4"``; None means every imported week."""
+    if text is None:
+        return None
+    first, _, last = text.partition("-")
+    try:
+        start, end = int(first), int(last or first)
+    except ValueError as exc:
+        raise ValueError(f"--pool-weeks must be N or A-B, got {text!r}") from exc
+    if start < 1 or end < start:
+        raise ValueError(f"--pool-weeks must be N or A-B with 1 <= A <= B, got {text!r}")
+    return list(range(start, end + 1))
+
+
+@app.command("simulate-weekly-win")
+def simulate_weekly_win_cmd(
+    season: int = typer.Option(...),
+    pool_weeks: str = typer.Option(
+        None, help="Pool weeks, e.g. 4 or 1-4. Default: every imported pool week"
+    ),
+    draws: int = typer.Option(DEFAULT_DRAWS, min=1000, help="Simulated weeks per pool week"),
+    seed: int = typer.Option(DEFAULT_SEED),
+    entry_name: str = typer.Option(config.DEFAULT_ENTRY_NAME),
+    db: Path = typer.Option(config.DEFAULT_DB),
+) -> None:
+    """Estimate how often each COINFLIP rule would have won each pool week. Read-only."""
+    with run_context("cli:simulate-weekly-win", season=season, db=str(db)):
+        try:
+            requested = _parse_pool_weeks(pool_weeks)
+        except ValueError as exc:
+            typer.secho(str(exc), fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        if not db.exists():
+            typer.secho(f"no database at {db}", fg="red", err=True)
+            raise typer.Exit(code=1)
+        with Store(db, read_only=True) as store:
+            weeks = requested if requested is not None else store.pool_weeks(season)
+            if not weeks:
+                typer.secho(
+                    f"no pool weeks of {season} are imported; run import-results first",
+                    fg="red",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            try:
+                inputs = [
+                    load_sim_week(store, season=season, pool_week=week, entry_name=entry_name)
+                    for week in weeks
+                ]
+            except SimInputError as exc:
+                typer.secho(str(exc), fg="red", err=True)
+                raise typer.Exit(code=1) from exc
+        results = [simulate_week(week, draws=draws, seed=seed) for week in inputs]
+        typer.echo(format_report(results))
 
 
 @app.command("backfill-recommendations")

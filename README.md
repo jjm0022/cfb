@@ -327,6 +327,7 @@ them for a normal week.
 | `calibrate` | Measure how closely the frozen CBS line tracks the market behind it |
 | `evaluate-coinflip` | Frozen CFB Candidate 1 experiment (result recorded; NULL) |
 | `evaluate-coinflip-residual` | Frozen CFB Candidate 2 experiment (result recorded; NULL) |
+| `simulate-weekly-win` | Estimate how often each COINFLIP rule would have finished first in each imported pool week. Read-only |
 
 `backfill-history` is the only command that can spend real money. It plans and
 prints the cost before doing anything, and refuses to execute unless the number
