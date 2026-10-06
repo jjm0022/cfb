@@ -314,3 +314,56 @@ def test_decision_logging_suppression_nests_and_restores_after_exception(records
 
     decide_edges([league(-3.0)], [], [game()], [])
     assert any(r["extra"].get("event") == "edge_decided" for r in records)
+
+NFL_LIVE = Thresholds(slight=True)
+
+
+def test_slight_follows_the_market_on_a_half_point_gap():
+    [edge] = decide_edges([league(-4.5)], [market(-5.0)], [game()], HISTORY, NFL_LIVE)
+    assert edge.tier is Tier.SLIGHT
+    assert edge.side is Side.HOME
+    assert "key number" not in edge.rationale
+
+
+def test_slight_follows_a_fractional_gap():
+    [edge] = decide_edges([league(-3.5)], [market(-3.25)], [game()], HISTORY, NFL_LIVE)
+    assert edge.tier is Tier.SLIGHT
+    assert edge.side is Side.AWAY
+
+
+def test_slight_notes_a_key_number():
+    [edge] = decide_edges([league(-3.5)], [market(-3.0)], [game()], HISTORY, NFL_LIVE)
+    assert edge.tier is Tier.SLIGHT
+    assert edge.side is Side.AWAY
+    assert edge.rationale.endswith("; crosses key number 3")
+
+
+def test_slight_never_runs_a_tiebreak(records):
+    decide_edges([league(-3.5)], [market(-3.0)], [game()], HISTORY, NFL_LIVE)
+    assert not [r for r in records if r["extra"].get("event") == "tiebreak_applied"]
+
+
+def test_zero_gap_is_still_a_coinflip_for_the_favorite_with_slight_on():
+    [edge] = decide_edges([league(-3.5)], [market(-3.5)], [game()], HISTORY, NFL_LIVE)
+    assert edge.tier is Tier.COINFLIP
+    assert edge.side is Side.HOME
+
+
+@pytest.mark.parametrize(
+    ("market_spread", "tier"), [(-1.5, Tier.LEAN), (-6.0, Tier.STRONG)]
+)
+def test_larger_gaps_keep_their_tiers_with_slight_on(market_spread, tier):
+    [edge] = decide_edges([league(-3.0)], [market(market_spread)], [game()], HISTORY, NFL_LIVE)
+    assert edge.tier is tier
+
+
+def test_no_market_is_still_elo_with_slight_on():
+    [edge] = decide_edges([league(-3.5)], [], [game()], HISTORY, NFL_LIVE)
+    assert edge.tier is Tier.NO_MARKET
+    assert "Elo" in edge.rationale
+
+
+def test_default_thresholds_keep_small_gaps_as_coinflips():
+    [edge] = decide_edges([league(-3.5)], [market(-3.0)], [game()], HISTORY)
+    assert edge.tier is Tier.COINFLIP
+    assert edge.side is Side.HOME

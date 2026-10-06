@@ -85,6 +85,7 @@ def test_generation_logs_an_exact_summary(records, db, seeded_week):
     assert summary["extra"]["tiers"] == {
         Tier.STRONG.value: 0,
         Tier.LEAN.value: 0,
+        Tier.SLIGHT.value: 0,
         Tier.COINFLIP.value: 0,
         Tier.NO_MARKET.value: 1,
     }

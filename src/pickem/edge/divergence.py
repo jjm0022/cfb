@@ -22,6 +22,7 @@ from statistics import median
 from loguru import logger
 from pydantic import BaseModel
 
+from pickem.edge.key_numbers import key_number_crossed
 from pickem.models import Edge, LeagueLine, MarketLine, Side, Tier
 
 
@@ -30,10 +31,16 @@ class Thresholds(BaseModel):
 
     These defaults are initial guesses, to be replaced by backtested values.
     They are configuration, not logic.
+
+    ``slight`` turns any non-zero gap under ``lean`` into SLIGHT, which follows
+    the market instead of falling to the COINFLIP tiebreak. Off by default so
+    history replays unchanged; live NFL turns it on
+    (docs/superpowers/specs/2026-10-06-nfl-slight-tier-design.md).
     """
 
     strong: float = 2.0
     lean: float = 1.0
+    slight: bool = False
 
 
 @dataclass(frozen=True)
@@ -142,6 +149,8 @@ def _tier(delta: float, thresholds: Thresholds) -> Tier:
         return Tier.STRONG
     if magnitude >= thresholds.lean:
         return Tier.LEAN
+    if thresholds.slight and magnitude > 0:
+        return Tier.SLIGHT
     return Tier.COINFLIP
 
 
@@ -197,6 +206,14 @@ def _compute_edge(
         threshold_strong=thresholds.strong,
         threshold_lean=thresholds.lean,
     )
+    rationale = (
+        f"league {league.spread_home:+.1f} vs market {consensus:+.1f}: "
+        f"{abs(delta):.1f} pts toward {moved_toward}"
+    )
+    if tier is Tier.SLIGHT:
+        key = key_number_crossed(league.spread_home, consensus)
+        if key is not None:
+            rationale += f"; crosses key number {key}"
     return Edge(
         game_id=league.game_id,
         side=side,
@@ -204,10 +221,7 @@ def _compute_edge(
         tier=tier,
         league_spread=league.spread_home,
         market_spread=consensus,
-        rationale=(
-            f"league {league.spread_home:+.1f} vs market {consensus:+.1f}: "
-            f"{abs(delta):.1f} pts toward {moved_toward}"
-        ),
+        rationale=rationale,
     )
 
 

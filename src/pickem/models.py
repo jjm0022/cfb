@@ -25,6 +25,7 @@ class Side(StrEnum):
 class Tier(StrEnum):
     STRONG = "strong"
     LEAN = "lean"
+    SLIGHT = "slight"
     COINFLIP = "coinflip"
     NO_MARKET = "no_market"
 
