@@ -6,7 +6,7 @@ const P = load("stats.js", "filters.js");
 const data = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const out = { records: {}, clv: {} };
 for (const sport of ["all", "cfb", "nfl"]) {
-  for (const tier of ["any", "strong", "lean", "coinflip", "no_market"]) {
+  for (const tier of ["any", "strong", "lean", "slight", "coinflip", "no_market"]) {
     const state = { ...P.filters.defaults(data), sport, tiers: tier === "any" ? [] : [tier] };
     const games = P.filters.applyFilters(data.games, state);
     for (const strategy of data.strategies) {

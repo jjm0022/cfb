@@ -10,8 +10,8 @@ from pickem.report.dashboard import build_dashboard_data
 from pickem.report.results import Strategy, clv_summary, record_for
 
 SPORTS = {"all": None, "cfb": Sport.CFB, "nfl": Sport.NFL}
-TIERS = {"any": None, "strong": Tier.STRONG, "lean": Tier.LEAN, "coinflip": Tier.COINFLIP,
-         "no_market": Tier.NO_MARKET}
+TIERS = {"any": None, "strong": Tier.STRONG, "lean": Tier.LEAN, "slight": Tier.SLIGHT,
+         "coinflip": Tier.COINFLIP, "no_market": Tier.NO_MARKET}
 
 
 def test_dashboard_javascript_unit_tests():

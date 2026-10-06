@@ -3,10 +3,11 @@
   "use strict";
   const TABS = ["week", "season", "model", "games"];
   const SPORTS = ["all", "cfb", "nfl"];
-  const TIERS = ["strong", "lean", "coinflip", "no_market", "none"];
+  const TIERS = ["strong", "lean", "slight", "coinflip", "no_market", "none"];
   const RESULTS = ["all", "win", "loss"];
   const TIER_LABELS = {
-    strong: "Strong", lean: "Lean", coinflip: "Coinflip", no_market: "No market", none: "No model",
+    strong: "Strong", lean: "Lean", slight: "Slight", coinflip: "Coinflip", no_market: "No market",
+    none: "No model",
   };
 
   function defaults(data) {

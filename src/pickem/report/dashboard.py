@@ -122,6 +122,7 @@ def _game(graded: GradedGame) -> dict:
         "field_away": graded.field_away,
         "against_field": graded.against_field,
         "clv": graded.clv,
+        "key_number": graded.key_number,
         "picks": {s.value: _value(graded.picks.get(s)) for s in Strategy},
         "results": {s.value: _value(graded.result(s)) for s in Strategy},
         "model": None if graded.model is None else _recommendation(graded.model),

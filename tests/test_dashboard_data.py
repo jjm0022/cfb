@@ -77,3 +77,14 @@ def test_findings_are_computed_through_each_week():
     assert data["findings"]["1"] == {"claims": list(week1.claims), "not_yet": list(week1.not_yet)}
     season = findings(report.season_games)
     assert data["findings"]["2"] == {"claims": list(season.claims), "not_yet": list(season.not_yet)}
+
+
+def test_games_carry_their_key_number():
+    from dashboard_helpers import GENERATED, synthetic_season
+
+    from pickem.report.dashboard import build_dashboard_data
+
+    report = synthetic_season()
+    data = build_dashboard_data(report, generated_at=GENERATED)
+    assert all("key_number" in g for g in data["games"])
+    assert data["backtest"]["slight"] == 0.521

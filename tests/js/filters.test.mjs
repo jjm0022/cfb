@@ -99,3 +99,9 @@ test("chips name each active filter and clear one at a time", () => {
   assert.deepEqual(plain(F.clearFilter(state, "tiers")).tiers, []);
   assert.deepEqual(plain(F.chips(F.defaults(data))), []);
 });
+
+test("the slight tier is a valid filter", () => {
+  const state = plain(F.parseHash("#tier=slight,lean", data));
+  assert.deepEqual(state.tiers, ["lean", "slight"]);
+  assert.equal(F.TIER_LABELS.slight, "Slight");
+});

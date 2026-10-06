@@ -3,7 +3,7 @@
   "use strict";
   const { h, card, LABELS, fmt } = P.ui;
   const F = P.filters;
-  const TIERS = ["strong", "lean", "coinflip"];
+  const TIERS = ["strong", "lean", "slight", "coinflip"];
 
   function drill(prefix) {
     return (row) => P.app.showList(`${prefix}${row.label}: ${P.stats.recordText(row.record)}`, row.games, row.strategy);
@@ -11,15 +11,23 @@
 
   function tierRows(view) {
     const sports = ["cfb", "nfl"].filter((sp) => view.games.some((g) => g.sport === sp));
-    return sports.flatMap((sport) => TIERS.map((tier) => {
+    return sports.flatMap((sport) => TIERS.flatMap((tier) => {
       const games = view.games.filter((g) => g.sport === sport && F.tierOf(g) === tier);
       const expected = view.data.backtest[tier];
-      return {
-        label: `${LABELS.sport[sport]} ${F.TIER_LABELS[tier].toLowerCase()}`,
-        note: `${sport === "cfb" ? "NFL backtest" : "backtest"} ${fmt.pct(expected, 1)}`,
-        record: P.stats.record(games, "model"), expected,
-        games: F.gradedFor(games, "model"), strategy: "model",
-      };
+      const source = tier === "slight" ? "stand-in-line test"
+        : sport === "cfb" ? "NFL backtest" : "backtest";
+      const row = (label, subset) => ({
+        label: `${LABELS.sport[sport]} ${label}`,
+        note: `${source} ${fmt.pct(expected, 1)}`,
+        record: P.stats.record(subset, "model"), expected,
+        games: F.gradedFor(subset, "model"), strategy: "model",
+      });
+      if (tier !== "slight") return [row(F.TIER_LABELS[tier].toLowerCase(), games)];
+      if (!games.length) return [];
+      return [
+        row("slight · crosses 3 or 7", games.filter((g) => g.key_number != null)),
+        row("slight · other", games.filter((g) => g.key_number == null)),
+      ];
     }));
   }
 
