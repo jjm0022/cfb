@@ -1,0 +1,139 @@
+import pytest
+
+from pickem.backtest.pool_sim import (
+    Rule,
+    SimGame,
+    SimWeek,
+    draw,
+    evaluate,
+    rule_sides,
+    win_chance,
+)
+from pickem.models import Side, Tier
+
+H, A = Side.HOME, Side.AWAY
+
+
+def game(i, tier=Tier.COINFLIP, spread=-3.5, model_side=H):
+    return SimGame(
+        game_id=f"g{i}", label=f"A{i} at H{i}", league_spread=spread,
+        tier=tier, model_side=model_side,
+    )
+
+
+def week(games, others, pool_week=1, unrecommended=0):
+    return SimWeek(
+        pool_week=pool_week, games=tuple(games),
+        others=tuple(tuple(row) for row in others), unrecommended=unrecommended,
+    )
+
+
+def test_rules_differ_only_on_coinflips():
+    # g0: coinflip, home favored, every other entrant on the favorite.
+    # g1: strong, model on the away side.
+    w = week([game(0), game(1, tier=Tier.STRONG, model_side=A)], [[H, H]] * 3)
+    assert rule_sides(w, Rule.CURRENT) == (H, A)
+    assert rule_sides(w, Rule.UNDERDOG) == (A, A)
+    assert rule_sides(w, Rule.MINORITY) == (A, A)
+    assert rule_sides(w, Rule.LOPSIDED) == (A, A)
+
+
+def test_minority_takes_the_favorite_on_an_exact_split():
+    w = week([game(0)], [[H], [A]])
+    assert rule_sides(w, Rule.MINORITY) == (H,)
+
+
+def test_minority_takes_the_favorite_when_the_pool_prefers_the_underdog():
+    w = week([game(0)], [[A], [A], [H]])
+    assert rule_sides(w, Rule.MINORITY) == (H,)
+
+
+def test_lopsided_threshold_is_seventy_percent_of_entrants_who_picked():
+    seven_of_ten = [[H]] * 7 + [[A]] * 3 + [[None]] * 5
+    six_of_ten = [[H]] * 6 + [[A]] * 4
+    assert rule_sides(week([game(0)], seven_of_ten), Rule.LOPSIDED) == (A,)
+    assert rule_sides(week([game(0)], six_of_ten), Rule.LOPSIDED) == (H,)
+
+
+def test_favorite_follows_the_cbs_spread():
+    # +6.5 home: the away team is favored.
+    w = week([game(0, spread=6.5)], [[A]])
+    assert rule_sides(w, Rule.CURRENT) == (A,)
+    assert rule_sides(w, Rule.UNDERDOG) == (H,)
+
+
+def test_optimal_is_not_a_fixed_rule():
+    with pytest.raises(ValueError):
+        rule_sides(week([game(0)], [[H]]), Rule.OPTIMAL)
+
+
+def test_game_without_a_recommendation_is_even_and_keeps_our_side():
+    g = game(0, tier=None, model_side=A)
+    assert g.p_home == 0.5
+    w = week([g], [[H]])
+    assert all(rule_sides(w, rule) == (A,) for rule in Rule if rule is not Rule.OPTIMAL)
+
+
+def test_blank_picks_are_always_wrong():
+    w = week([game(0), game(1)], [[None, None], [H, None]])
+    d = draw(w, 2000, "blank")
+    for outcome, best in zip(d.outcomes, d.best, strict=True):
+        expected = 1 if outcome & 1 else 0  # only entrant 2's home pick on g0 can score
+        assert best == expected
+    assert all(scores[0] == 0 for scores in d.others_sorted)
+
+
+def test_a_tie_for_first_is_half_a_win():
+    # One other entrant always picks exactly what we pick: always tied.
+    w = week([game(0)], [[H]])
+    d = draw(w, 2000, "tie")
+    assert win_chance((H,), d) == pytest.approx(0.5)
+
+
+def test_identical_sides_give_identical_results():
+    w = week([game(0), game(1, tier=Tier.LEAN)], [[H, A], [A, A], [H, H]])
+    d = draw(w, 2000, "same")
+    a = evaluate(Rule.CURRENT, (H, A), d)
+    b = evaluate(Rule.MINORITY, (H, A), d)
+    assert (a.avg_points, a.win_chance, a.top3_chance, a.median_rank) == (
+        b.avg_points, b.win_chance, b.top3_chance, b.median_rank,
+    )
+
+
+def test_going_against_a_unanimous_pool_raises_win_chance_at_the_same_average():
+    # Four coinflips, five other entrants all on the (home) favorite everywhere.
+    w = week([game(i) for i in range(4)], [[H] * 4] * 5)
+    d = draw(w, 20_000, "contrarian")
+    current = evaluate(Rule.CURRENT, rule_sides(w, Rule.CURRENT), d)
+    underdog = evaluate(Rule.UNDERDOG, rule_sides(w, Rule.UNDERDOG), d)
+    assert current.win_chance == pytest.approx(1 / 6)  # always a six-way tie
+    assert underdog.win_chance == pytest.approx(0.375, abs=0.015)  # 5/16 + 6/16 * 1/6
+    assert underdog.avg_points == pytest.approx(current.avg_points, abs=0.05)
+
+
+@pytest.mark.parametrize(
+    ("tier", "model_side", "rate"), [(Tier.STRONG, H, 0.637), (Tier.LEAN, A, 0.542)]
+)
+def test_model_side_wins_at_its_tier_rate(tier, model_side, rate):
+    w = week([game(0, tier=tier, model_side=model_side)], [[H]])
+    d = draw(w, 20_000, "rates")
+    home_rate = sum(o & 1 for o in d.outcomes) / len(d.outcomes)
+    model_rate = home_rate if model_side is H else 1 - home_rate
+    assert model_rate == pytest.approx(rate, abs=0.015)
+
+
+def test_rank_counts_entrants_strictly_ahead():
+    # We pick away, the other two pick home: rank 1 when away covers, 3 when home does.
+    w = week([game(0)], [[H], [H]])
+    d = draw(w, 2000, "rank")
+    result = evaluate(Rule.UNDERDOG, (A,), d)
+    away_rate = 1 - sum(o & 1 for o in d.outcomes) / len(d.outcomes)
+    assert result.top3_chance == 1.0
+    assert result.win_chance == pytest.approx(away_rate)
+    assert result.median_rank in (1, 2, 3)
+
+
+def test_same_seed_same_draws():
+    w = week([game(i) for i in range(3)], [[H, A, H], [A, A, H]])
+    assert draw(w, 500, "s") == draw(w, 500, "s")
+    assert draw(w, 500, "s").outcomes != draw(w, 500, "t").outcomes
