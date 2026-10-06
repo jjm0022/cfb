@@ -173,3 +173,50 @@ The general lesson, worth keeping: **spend a small amount of real money early to
 check assumptions, before spending a large amount.** Task 6 of the backfill plan
 was ordered cheapest-verification-first for this reason, and it is why the total
 damage from all four bugs was ~110 wasted credits.
+
+## Weekly-win simulation (2026-10-05)
+
+`uv run pickem simulate-weekly-win --season 2026` (default seed 20261005,
+20,000 simulated weeks per pool week), over pool weeks 1–4, 53 entrants. Spec:
+`docs/superpowers/specs/2026-10-05-weekly-win-simulator-design.md`.
+
+```
+Season, pool weeks 1-4
+  rule                  avg weekly win   >=1 win in 18 weeks
+  current                         2.6%                 37.5%
+  underdog                        4.9%                 59.6%
+  minority*                       5.6%                 64.3%
+  lopsided underdog*              4.9%                 59.2%
+  optimal mix*                    5.7%                 65.6%
+  no-edge entrant                 1.9%                 29.0%
+
+* ceiling: uses pool picks hidden until kickoff; cannot be played live.
+```
+
+**A playable rule nearly doubles the weekly win chance.** Taking the underdog
+on every COINFLIP raised it from 2.6% to 4.9%, and it was higher in all four
+weeks (0.5→4.4, 2.1→3.5, 2.3→4.9, 5.4→6.9). Average points did not move (within
+0.05 a week), as expected when COINFLIP games are 50/50: the rule costs nothing
+on average and gains by not duplicating a crowd that takes the favorite on 83%
+of COINFLIP games.
+
+**It captures most of the ceiling.** The best the hindsight rules reach is
+5.6–5.7%; the playable underdog rule gets about three quarters of the gain
+from the current rule to that ceiling, with no information about the pool.
+
+**What the optimal mix switched.** It took the underdog on 8–12 COINFLIP games
+a week, across spreads from 1.5 to 28.5 points. In those games 48–92% of the
+pool sat on the favorite, most often 60–80%. No simple pattern beyond "the
+crowd is on the favorite" stands out, and the plain underdog rule did as well
+as the 70% lopsided rule (4.9% each).
+
+**Limits.**
+- COINFLIP games are 50/50 by assumption. The 2022–2025 CFB backtest measured
+  the favorite at 51.0%; at that rate the underdog rule gives back about 0.02
+  points per COINFLIP game, which this simulation does not charge.
+- STRONG and LEAN use NFL backtest rates (63.7%, 54.2%) for both boards.
+- Opponents' picks are fixed at what they actually entered; ties for first are
+  split, not broken by the Monday-night total.
+- Four weeks of one pool; the other entrants' habits may change.
+
+**Decision:** pending owner review. The live COINFLIP rule is unchanged.
