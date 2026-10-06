@@ -38,6 +38,7 @@ CBS_CFB = {
     "BAMA": "BAMA",
     "UK": "UK",
     "MICHST": "MSU",
+    "MIZZOU": "MIZ",
     "NCST": "NCSU",
     "NWEST": "NU",
     "RUT": "RUTG",
