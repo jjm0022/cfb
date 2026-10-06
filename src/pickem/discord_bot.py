@@ -492,6 +492,7 @@ def _scope_description(scope: MonitorScope) -> str:
 _TIER_BADGES = {
     Tier.STRONG: "🔥 Strong",
     Tier.LEAN: "✅ Lean",
+    Tier.SLIGHT: "🎯 Slight",
     Tier.COINFLIP: "🪙 Coinflip",
     Tier.NO_MARKET: "⚠️ No market",
 }

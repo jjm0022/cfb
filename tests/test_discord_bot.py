@@ -2293,3 +2293,11 @@ async def test_an_unexpected_crash_still_dms_and_logs(settings, monkeypatch, rec
     assert "crashed" in embed.description
     assert "database locked" in embed.description
     assert any(r["extra"].get("event") == "pick_check_failed" for r in records)
+
+
+def test_every_tier_has_a_badge():
+    from pickem.discord_bot import _TIER_BADGES
+    from pickem.models import Tier
+
+    assert set(_TIER_BADGES) == set(Tier)
+    assert _TIER_BADGES[Tier.SLIGHT] == "🎯 Slight"
