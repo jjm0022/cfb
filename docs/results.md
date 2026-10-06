@@ -193,16 +193,33 @@ Season, pool weeks 1-4
 * ceiling: uses pool picks hidden until kickoff; cannot be played live.
 ```
 
-**A playable rule nearly doubles the weekly win chance.** Taking the underdog
-on every COINFLIP raised it from 2.6% to 4.9%, and it was higher in all four
-weeks (0.5→4.4, 2.1→3.5, 2.3→4.9, 5.4→6.9). Average points did not move (within
-0.05 a week), as expected when COINFLIP games are 50/50: the rule costs nothing
-on average and gains by not duplicating a crowd that takes the favorite on 83%
-of COINFLIP games.
+**A playable rule beats the current one only if COINFLIP games really are
+coin flips.** At exactly 50/50, taking the underdog on every COINFLIP raised the
+weekly win chance from 2.6% to 4.9%, higher in all four weeks (0.5→4.4,
+2.1→3.5, 2.3→4.9, 5.4→6.9), at the same average points. The gain comes from not
+duplicating the crowd: most of the pool took the favorite in 55 of 66 COINFLIP
+games (62% of individual COINFLIP picks were on the favorite).
 
-**It captures most of the ceiling.** The best the hindsight rules reach is
-5.6–5.7%; the playable underdog rule gets about three quarters of the gain
-from the current rule to that ceiling, with no information about the pool.
+The answer is sensitive to that assumption. Re-running the same four weeks with
+the favorite covering more often on COINFLIP games (both boards):
+
+| Favorite covers | current | underdog | optimal mix* |
+|---|---|---|---|
+| 50% | 2.6% | 4.9% | 5.7% |
+| 51% | 2.9% | 4.3% | 5.7% |
+| 52% | 3.2% | 3.8% | 5.6% |
+| 53% | 3.6% | 3.3% | 5.5% |
+
+The underdog rule's edge shrinks from +2.3 points at 50% to +1.4 at 51% and
+reverses near 53%. The 2022–2025 CFB backtest measured the favorite at 51.0% on
+COINFLIP games; no NFL COINFLIP favorite rate has been measured. This season the
+favorite rule is 36–30 (54.5%) on COINFLIP games, too few games to separate
+from 50%.
+
+**At 50/50 it captures most of the ceiling.** The hindsight rules reach
+5.6–5.7%; the underdog rule gets about three quarters of the way there with no
+information about the pool. The ceiling barely moves as the favorite gets
+stronger, because the hindsight search can pick which underdogs to take.
 
 **What the optimal mix switched.** It took the underdog on 8–12 COINFLIP games
 a week, across spreads from 1.5 to 28.5 points. In those games 48–92% of the
@@ -211,9 +228,8 @@ crowd is on the favorite" stands out, and the plain underdog rule did as well
 as the 70% lopsided rule (4.9% each).
 
 **Limits.**
-- COINFLIP games are 50/50 by assumption. The 2022–2025 CFB backtest measured
-  the favorite at 51.0%; at that rate the underdog rule gives back about 0.02
-  points per COINFLIP game, which this simulation does not charge.
+- The published run assumes COINFLIP games are 50/50; the table above shows
+  how much that matters.
 - STRONG and LEAN use NFL backtest rates (63.7%, 54.2%) for both boards.
 - Opponents' picks are fixed at what they actually entered; ties for first are
   split, not broken by the Monday-night total.
