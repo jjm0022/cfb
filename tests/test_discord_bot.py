@@ -2404,6 +2404,30 @@ def test_a_full_embed_skips_the_link_rather_than_break_the_message(page_url):
     assert len(_add_page_link(embed).fields) == 25
 
 
+def padded_embed(total: int) -> discord.Embed:
+    """An embed whose text adds up to exactly ``total`` characters, as Discord counts it."""
+    embed = discord.Embed(title="t", description="d" * 4000)
+    while len(embed) < total:
+        embed.add_field(name="n", value="x" * min(1000, total - len(embed) - 1), inline=False)
+    assert len(embed) == total
+    return embed
+
+
+def test_the_link_is_added_when_it_just_fits_discords_size_limit(page_url):
+    link_size = len("\u200b") + len(LINK)
+    embed = _add_page_link(padded_embed(6000 - link_size))
+    assert embed.fields[-1].value == LINK
+    assert len(embed) == 6000
+
+
+def test_an_embed_the_link_would_push_past_6000_characters_skips_it(page_url):
+    link_size = len("\u200b") + len(LINK)
+    embed = padded_embed(6001 - link_size)
+    fields = len(embed.fields)
+    assert len(_add_page_link(embed).fields) == fields
+    assert all("Open this week's picks" not in f.value for f in embed.fields)
+
+
 @pytest.mark.asyncio
 async def test_the_refresh_reply_with_new_picks_links_the_page(settings, page_url):
     add_pick_scope(settings)

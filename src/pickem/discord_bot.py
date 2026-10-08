@@ -612,6 +612,8 @@ def _add_recommendation_fields(
 
 PAGE_LINK_TEXT = "📊 Open this week's picks"
 _DISCORD_EMBED_FIELD_LIMIT = 25
+# Characters across the title, description, fields, footer and author, as discord.py counts them.
+_DISCORD_EMBED_TOTAL_LIMIT = 6000
 
 
 def _page_link_clock() -> datetime:
@@ -632,14 +634,17 @@ def _page_link_url(base: str, now: datetime) -> str:
 def _add_page_link(embed: discord.Embed) -> discord.Embed:
     """End the embed with a link to this week's page when the dashboard address is set.
 
-    Skipped on an embed already at Discord's field limit: one more field would
-    make Discord reject the whole message.
+    Skipped when the link would take the embed past Discord's limits, 25 fields
+    or 6,000 characters in all: Discord would reject the whole message.
     """
     base = config.dashboard_url()
     if base is None or len(embed.fields) >= _DISCORD_EMBED_FIELD_LIMIT:
         return embed
-    url = _page_link_url(base, _page_link_clock())
-    return embed.add_field(name="\u200b", value=f"[{PAGE_LINK_TEXT}]({url})", inline=False)
+    name = "\u200b"
+    value = f"[{PAGE_LINK_TEXT}]({_page_link_url(base, _page_link_clock())})"
+    if len(embed) + len(name) + len(value) > _DISCORD_EMBED_TOTAL_LIMIT:
+        return embed
+    return embed.add_field(name=name, value=value, inline=False)
 
 
 def _publish_dashboard(settings: DiscordSettings) -> None:
