@@ -1,4 +1,5 @@
-"""The interactive results dashboard: the season's data, and the one page that draws it.
+"""The interactive dashboard: the season's results and this week's board, and the one page
+that draws them.
 
 The page is self-contained: its data, styles and scripts are inlined, and it
 makes no outside requests. Grading happens here in Python; the page only
@@ -44,12 +45,29 @@ SCRIPTS = (
 )
 
 
-def build_dashboard_data(report: ResultsReport, *, generated_at: datetime) -> dict:
-    """Everything the page shows, as plain JSON-ready values."""
+# The saved-logo listing, by theme then board: team ids with a file under logos/<sport>/.
+NO_LOGOS = {"light": {"cfb": [], "nfl": []}, "dark": {"cfb": [], "nfl": []}}
+
+
+def build_dashboard_data(
+    report: ResultsReport | None,
+    *,
+    generated_at: datetime,
+    season: int | None = None,
+    this_week: dict | None = None,
+    logos: dict | None = None,
+) -> dict:
+    """Everything the page shows, as plain JSON-ready values.
+
+    ``report`` is None before the season's first results import; the page then
+    carries only this week's board, and ``season`` must say which season it is.
+    """
+    if report is None and season is None:
+        raise ValueError("a page with no results report needs its season")
     return {
-        "season": report.season,
-        "entry": report.entry_name,
-        "latest_week": report.pool_week,
+        "season": report.season if report is not None else season,
+        "entry": report.entry_name if report is not None else None,
+        "latest_week": report.pool_week if report is not None else None,
         "generated_at": iso_utc(generated_at),
         "strategies": [s.value for s in Strategy],
         "baselines": [s.value for s in BASELINES],
@@ -57,12 +75,14 @@ def build_dashboard_data(report: ResultsReport, *, generated_at: datetime) -> di
         "definitions": {s.value: text for s, text in STRATEGY_DEFINITIONS.items()},
         "glossary_intro": GLOSSARY_INTRO,
         "backtest": {tier.value: rate for tier, rate in BACKTEST_TIER_RATES.items()},
-        "standings": [_standing(s) for s in report.standings],
-        "findings": {
+        "standings": [] if report is None else [_standing(s) for s in report.standings],
+        "findings": {} if report is None else {
             str(s.pool_week): _findings(report, s.pool_week) for s in report.standings
         },
-        "games": [_game(g) for g in report.season_games],
+        "games": [] if report is None else [_game(g) for g in report.season_games],
         "analysis": None,
+        "this_week": this_week,
+        "logos": logos if logos is not None else NO_LOGOS,
     }
 
 
@@ -134,12 +154,21 @@ def _game(graded: GradedGame) -> dict:
     }
 
 
-def render_dashboard(report: ResultsReport, *, generated_at: datetime) -> str:
-    """One self-contained page for the whole season in ``report``."""
-    data = build_dashboard_data(report, generated_at=generated_at)
+def render_dashboard(
+    report: ResultsReport | None,
+    *,
+    generated_at: datetime,
+    season: int | None = None,
+    this_week: dict | None = None,
+    logos: dict | None = None,
+) -> str:
+    """One self-contained page: the season's results, and this week's board."""
+    data = build_dashboard_data(
+        report, generated_at=generated_at, season=season, this_week=this_week, logos=logos
+    )
     css = (ASSETS / "app.css").read_text(encoding="utf-8")
     js = "\n".join((ASSETS / name).read_text(encoding="utf-8") for name in SCRIPTS)
-    title = html.escape(f"Pick'em {report.season}")
+    title = html.escape(f"Pick'em {data['season']}")
     return (
         "<!doctype html>\n"
         '<html lang="en"><head><meta charset="utf-8">'

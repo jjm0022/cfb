@@ -1,10 +1,10 @@
-import json
 import re
 
 from dashboard_helpers import (
     BARE_GAME,
     GENERATED,
     MODEL_GAME,
+    data_block,
     page_fixture,
     rendered_dom,
     synthetic_season,
@@ -12,12 +12,6 @@ from dashboard_helpers import (
 from results_helpers import assert_well_formed
 
 from pickem.report.dashboard import ASSETS, SCRIPTS, render_dashboard, render_week_forwarder
-
-
-def data_block(page: str) -> dict:
-    pattern = r'<script type="application/json" id="pickem-data">(.*?)</script>'
-    match = re.search(pattern, page, re.S)
-    return json.loads(match.group(1))
 
 
 def test_page_is_one_well_formed_self_contained_document():

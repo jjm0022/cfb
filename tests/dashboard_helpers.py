@@ -1,5 +1,6 @@
 """Shared fixtures for the dashboard: a synthetic season, and runners for Node and Chrome."""
 
+import json
 import random
 import re
 import shutil
@@ -128,10 +129,77 @@ def fixture_report():
         store.close()
 
 
-def page_fixture(tmp_path: Path, report=None) -> Path:
+def page_fixture(tmp_path: Path, report=None, **render_kwargs) -> Path:
     path = tmp_path / "index.html"
-    path.write_text(render_dashboard(report or fixture_report(), generated_at=GENERATED))
+    if report is None and "season" not in render_kwargs:
+        report = fixture_report()
+    path.write_text(render_dashboard(report, generated_at=GENERATED, **render_kwargs))
     return path
+
+
+def data_block(page: str) -> dict:
+    """The JSON the page carries in its data block."""
+    pattern = r'<script type="application/json" id="pickem-data">(.*?)</script>'
+    match = re.search(pattern, page, re.S)
+    return json.loads(match.group(1))
+
+
+TW_KICK = datetime(2026, 10, 10, 16, tzinfo=UTC)
+TW_STRONG = "cfb-2026-06-OU-at-MICH"
+TW_SLIGHT = "nfl-2026-05-BUF-at-MIA"
+TW_LOCKED = "cfb-2026-06-PSU-at-TEM"
+TW_NO_MODEL = "nfl-2026-05-NE-at-SEA"
+LOGOS_FIXTURE = {
+    "light": {"cfb": ["MICH", "OU"], "nfl": ["BUF"]},
+    "dark": {"cfb": ["OU"], "nfl": []},
+}
+
+
+def this_week_fixture() -> dict:
+    """This week's board as the publisher writes it: one game in each state the page draws."""
+    def at(hours: float) -> str:
+        return (TW_KICK - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+
+    def rec(hours, side, tier, edge):
+        return {"at": at(hours), "side": side, "tier": tier, "edge": edge}
+
+    def us(hours, spread):
+        return {"at": at(hours), "source": "us", "spread": spread}
+
+    def base(game_id, sport, week, away, home, kickoff_hours, line, **rest):
+        return {"id": game_id, "sport": sport, "week": week, "kickoff": at(kickoff_hours),
+                "home": home, "away": away, "home_score": None, "away_score": None,
+                "line": line, "locked": False, "final": False, "model": None, "result": None,
+                "market": {"us": None, "pinnacle": None}, "gap": None, "key_number": None,
+                "history": [], "lines": [], **rest}
+
+    return {"pool_week": 6, "games": [
+        base("cfb-2026-06-AF-at-ARMY", "cfb", 6, "AF", "ARMY", 48, -3.5,
+             home_score=24, away_score=17, locked=True, final=True, result="win",
+             model={**rec(49, "home", "strong", 3.5),
+                    "rationale": "league -3.5 vs market -7.0: 3.5 pts toward home"},
+             market={"us": -7.0, "pinnacle": None}, gap=3.5,
+             history=[rec(49, "home", "strong", 3.5)], lines=[us(50, -7.0)]),
+        base(TW_LOCKED, "cfb", 6, "PSU", "TEM", 4, 7.0, locked=True,
+             model={**rec(6, "home", "lean", 1.5), "rationale": None},
+             market={"us": 5.5, "pinnacle": None}, gap=1.5,
+             history=[rec(6, "home", "lean", 1.5)], lines=[us(6, 5.5)]),
+        base(TW_STRONG, "cfb", 6, "OU", "MICH", 0, -3.0,
+             model={**rec(3, "home", "strong", 3.0),
+                    "rationale": "league -3.0 vs market -6.0: 3.0 pts toward home"},
+             market={"us": -6.0, "pinnacle": -5.5}, gap=3.0,
+             history=[rec(80, "away", "lean", -1.5), rec(30, "home", "lean", 1.5),
+                      rec(6, "home", "strong", 3.0)],
+             lines=[us(81, -4.0), us(31, -5.0),
+                    {"at": at(31), "source": "pinnacle", "spread": -5.5}, us(7, -6.0)]),
+        base(TW_SLIGHT, "nfl", 5, "BUF", "MIA", -24, -3.5,
+             model={**rec(2, "away", "slight", -0.5),
+                    "rationale": ("league -3.5 vs market -3.0: 0.5 pts toward away; "
+                                  "crosses key number 3")},
+             market={"us": -3.0, "pinnacle": None}, gap=-0.5, key_number=3,
+             history=[rec(2, "away", "slight", -0.5)], lines=[us(3, -3.0)]),
+        base(TW_NO_MODEL, "nfl", 5, "NE", "SEA", -27, 2.5),
+    ]}
 
 
 def rendered_dom(page: Path, fragment: str, tmp_path: Path) -> str:

@@ -1,9 +1,17 @@
 import json
 from datetime import timedelta
 
-from dashboard_helpers import GENERATED, KICK, synthetic_season
+import pytest
+from dashboard_helpers import (
+    GENERATED,
+    KICK,
+    LOGOS_FIXTURE,
+    data_block,
+    synthetic_season,
+    this_week_fixture,
+)
 
-from pickem.report.dashboard import build_dashboard_data
+from pickem.report.dashboard import NO_LOGOS, build_dashboard_data, render_dashboard
 from pickem.report.results import (
     BACKTEST_TIER_RATES,
     STRATEGY_DEFINITIONS,
@@ -88,3 +96,38 @@ def test_games_carry_their_key_number():
     data = build_dashboard_data(report, generated_at=GENERATED)
     assert all("key_number" in g for g in data["games"])
     assert data["backtest"]["slight"] == 0.521
+
+
+def test_this_weeks_board_and_logos_ride_along():
+    data = build_dashboard_data(synthetic_season(), generated_at=GENERATED,
+                                this_week=this_week_fixture(), logos=LOGOS_FIXTURE)
+    assert data["this_week"]["pool_week"] == 6
+    assert data["logos"] == LOGOS_FIXTURE
+
+
+def test_without_them_the_page_still_has_both_keys():
+    data = build_dashboard_data(synthetic_season(), generated_at=GENERATED)
+    assert data["this_week"] is None
+    assert data["logos"] == NO_LOGOS
+
+
+def test_before_any_import_the_page_has_only_this_week():
+    data = build_dashboard_data(None, generated_at=GENERATED, season=2026,
+                                this_week=this_week_fixture())
+    assert data["season"] == 2026
+    assert data["latest_week"] is None and data["entry"] is None
+    assert data["standings"] == [] and data["games"] == [] and data["findings"] == {}
+    assert len(data["this_week"]["games"]) == 5
+
+
+def test_a_page_with_no_report_needs_its_season():
+    with pytest.raises(ValueError, match="season"):
+        build_dashboard_data(None, generated_at=GENERATED)
+
+
+def test_a_page_with_no_report_renders_self_contained():
+    page = render_dashboard(
+        None, generated_at=GENERATED, season=2026, this_week=this_week_fixture()
+    )
+    assert "<title>Pick&#x27;em 2026</title>" in page
+    assert data_block(page)["this_week"]["pool_week"] == 6
