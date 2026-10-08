@@ -476,6 +476,10 @@ class Store:
         else:
             self._con.execute("COMMIT")
 
+    def latest_league_season(self) -> int | None:
+        """The newest season with any CBS line stored, or None on an empty store."""
+        return self._con.execute("SELECT max(season) FROM league_lines").fetchone()[0]
+
     def pool_weeks(self, season: int) -> list[int]:
         rows = self._con.execute(
             "SELECT DISTINCT pool_week FROM pool_results WHERE season = ? ORDER BY pool_week",

@@ -7,7 +7,6 @@ import asyncio
 import hashlib
 import os
 import sys
-import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -95,7 +94,7 @@ from pickem.operations.recommendations import (
     poll_odds_snapshot,
 )
 from pickem.operations.results_import import ResultsImportError, import_results, league_week
-from pickem.report.dashboard import render_dashboard, render_week_forwarder
+from pickem.report.publish import TRIGGER_MANUAL, TRIGGER_RESULTS, publish_dashboard
 from pickem.report.results import ResultsReport, ResultsReportError, build_results_report
 from pickem.report.results_markdown import render_results_report
 from pickem.report.sheet import render_sheet
@@ -550,61 +549,21 @@ def _write_results_report(
     return report, path
 
 
-def _write_atomic(path: Path, text: str) -> None:
-    """Write to a unique temp file beside the target, then rename, so a reader
-    never sees half a page and concurrent writers never collide on one temp name."""
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.",
-        suffix=".tmp", delete=False,
-    )
-    try:
-        with tmp:
-            tmp.write(text)
-        Path(tmp.name).replace(path)
-    except Exception:
-        Path(tmp.name).unlink(missing_ok=True)
-        raise
-
-
 def _write_dashboard(store: Store, report: ResultsReport, dashboard_dir: Path) -> Path | None:
-    """Write index.html for the whole season, and a forwarder week-N.html for every week.
+    """Write the whole page through the latest imported week; a failure is reported, never raised.
 
-    The page always covers the season through the latest imported week, whichever
-    week ``report`` is. The import and the Markdown are already saved, so a failure
-    here is logged and reported, never raised: the DM still goes out before the
-    command exits 3.
+    The import and the Markdown are already saved, so the DM still goes out
+    before the command exits 3.
     """
-    try:
-        weeks = store.pool_weeks(report.season)
-        latest = report
-        if report.pool_week != weeks[-1]:
-            latest = build_results_report(
-                store, season=report.season, pool_week=weeks[-1], entry_name=report.entry_name
-            )
-        page = render_dashboard(latest, generated_at=datetime.now(tz=UTC))
-        dashboard_dir.mkdir(parents=True, exist_ok=True)
-        path = dashboard_dir / "index.html"
-        _write_atomic(path, page)
-        for week in weeks:
-            _write_atomic(dashboard_dir / f"week-{week}.html", render_week_forwarder(week))
-    except Exception as exc:  # a render bug or a filesystem error alike must not stop the DM
-        logger.bind(
-            event="dashboard_write_failed",
-            pool_week=report.pool_week,
-            error_type=type(exc).__name__,
-            error_detail=str(exc),
-        ).error(f"dashboard not written: {exc}")
-        typer.secho(f"dashboard not written: {exc}", fg="red", err=True)
-        return None
-    logger.bind(
-        event="dashboard_written",
-        pool_week=report.pool_week,
-        path=str(path),
-        bytes=len(page.encode("utf-8")),
-        weeks=len(weeks),
-    ).info(f"dashboard written to {path}")
-    typer.echo(f"dashboard written to {path}")
-    return path
+    published = publish_dashboard(
+        store, dashboard_dir, trigger=TRIGGER_RESULTS,
+        season=report.season, entry_name=report.entry_name,
+    )
+    if published.path is None:
+        typer.secho(f"dashboard not written: {published.error}", fg="red", err=True)
+    else:
+        typer.echo(f"dashboard written to {published.path}")
+    return published.path
 
 
 def _notify_results(report: ResultsReport, path: Path, *, dashboard_written: bool) -> None:
@@ -695,6 +654,27 @@ def import_results_cmd(
         # when both the dashboard and the DM fail.
         if dashboard is None:
             raise typer.Exit(code=3)
+
+
+@app.command("publish-dashboard")
+def publish_dashboard_cmd(
+    trigger: str = typer.Option(TRIGGER_MANUAL, help="Which job asked, for the log"),
+    db: Path = typer.Option(config.DEFAULT_DB),
+    dashboard_dir: Path = typer.Option(
+        None, help="Default: $PICKEM_DASHBOARD_DIR or ~/.local/share/pickem/dashboard"
+    ),
+) -> None:
+    """Rebuild the dashboard page from what is stored; exits 3 when it was not written."""
+    with run_context("cli:publish-dashboard", db=str(db), trigger=trigger):
+        with _store(db) as store:
+            published = publish_dashboard(
+                store, dashboard_dir or config.dashboard_dir(), trigger=trigger
+            )
+    if published.path is None:
+        typer.secho(f"dashboard not written: {published.error or 'no CBS board is stored yet'}",
+                    fg="red", err=True)
+        raise typer.Exit(code=3)
+    typer.echo(f"dashboard written to {published.path}")
 
 
 @app.command("results-report")

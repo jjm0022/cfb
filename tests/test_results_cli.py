@@ -233,6 +233,7 @@ def test_rebuilding_an_older_week_builds_the_page_through_the_latest(
 
     monkeypatch.setattr(Store, "pool_weeks", lambda self, season: [2, 3])
     monkeypatch.setattr("pickem.cli.build_results_report", spy)
+    monkeypatch.setattr("pickem.report.publish.build_results_report", spy)
     result = runner.invoke(app, [
         "results-report", "--season", "2026", "--pool-week", "2", "--db", str(db),
         "--out-dir", str(results), "--dashboard-dir", str(dash),
@@ -265,7 +266,7 @@ def test_a_render_failure_keeps_the_report_sends_the_dm_and_exits_3(
     def boom(*args, **kwargs):
         raise RuntimeError("render broke")
 
-    monkeypatch.setattr("pickem.cli.render_dashboard", boom)
+    monkeypatch.setattr("pickem.report.publish.render_dashboard", boom)
     result = invoke_import(db, results)
     assert result.exit_code == 3, result.output
     assert "dashboard not written: render broke" in result.output
@@ -285,7 +286,7 @@ def test_a_dm_failure_takes_precedence_over_a_dashboard_failure(
     def boom(*args, **kwargs):
         raise RuntimeError("render broke")
 
-    monkeypatch.setattr("pickem.cli.render_dashboard", boom)
+    monkeypatch.setattr("pickem.report.publish.render_dashboard", boom)
     result = invoke_import(db, results)
     assert result.exit_code == 2, result.output
     assert "the Discord DM failed" in result.output
