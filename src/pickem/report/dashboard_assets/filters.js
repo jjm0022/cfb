@@ -115,7 +115,10 @@
     const out = [];
     if (state.sport !== "all") out.push({ key: "sport", label: state.sport.toUpperCase() });
     if (state.tiers.length) out.push({ key: "tiers", label: state.tiers.map((t) => TIER_LABELS[t]).join(" + ") });
-    if (state.result !== "all") out.push({ key: "result", label: state.result === "win" ? "Our wins" : "Our losses" });
+    // This week has no results of ours to filter, so a leftover result filter would only mislead there.
+    if (state.result !== "all" && state.tab !== "thisweek") {
+      out.push({ key: "result", label: state.result === "win" ? "Our wins" : "Our losses" });
+    }
     return out;
   }
 

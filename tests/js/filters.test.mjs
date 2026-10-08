@@ -209,3 +209,9 @@ test("a game is locked by its flag, or once its kickoff is at or before the view
   assert.equal(F.isLocked({ locked: false, kickoff: "2026-10-10T16:00:00Z" }, now), true);
   assert.equal(F.isLocked({ locked: false, kickoff: "2026-10-10T16:01:00Z" }, now), false);
 });
+
+test("on this week the result filter leaves no chip, since that tab ignores it", () => {
+  const state = { ...F.defaults(data), sport: "nfl", result: "loss" };
+  assert.deepEqual(plain(F.chips({ ...state, tab: "thisweek" })), [{ key: "sport", label: "NFL" }]);
+  assert.deepEqual(plain(F.chips({ ...state, tab: "week" })).map((c) => c.key), ["sport", "result"]);
+});

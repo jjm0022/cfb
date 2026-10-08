@@ -306,6 +306,17 @@ def test_a_long_pick_timeline_folds_the_refreshes_that_changed_nothing(tmp_path)
     assert dom.count('class="mark-change"') == 2
 
 
+def test_this_week_hides_the_week_picker_and_every_sign_of_the_result_filter(tmp_path):
+    page = this_week_page(tmp_path)
+    dom = rendered_dom(page, "tab=thisweek&result=loss", tmp_path)
+    assert 'class="week-pick"' not in dom
+    assert 'aria-label="Result"' not in dom
+    assert "Our losses" not in dom
+    results = rendered_dom(page, "result=loss", tmp_path)
+    assert 'class="week-pick"' in results and 'aria-label="Result"' in results
+    assert 'aria-label="Clear Our losses"' in results
+
+
 def test_a_game_past_kickoff_shows_locked_before_the_next_rebuild(tmp_path):
     board = this_week_fixture()
     game = tw_game(board, TW_STRONG)
