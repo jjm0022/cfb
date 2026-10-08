@@ -815,6 +815,12 @@ class PickemBot(commands.Bot):
         # news twice. Scheduled and kickoff-poll refreshes have no reply, so
         # they keep DMing.
         self._reporting_in_reply = False
+        # The page rebuild runs in the background, one at a time. The task is
+        # kept so it is not garbage-collected mid-build; the flag records a
+        # refresh that finished while a build was running, which that build
+        # may have read too early to include.
+        self._dashboard_rebuild_task: asyncio.Task[None] | None = None
+        self._dashboard_rebuild_again = False
         command_context = app_commands.AppCommandContext(
             guild=False, dm_channel=True, private_channel=False
         )
@@ -1018,23 +1024,44 @@ class PickemBot(commands.Bot):
                     result = RefreshResult(changed=False, error=error)
                 results.append((scope, result))
         # Every refresh, changed or not: the spreads moved even when no pick did.
-        await self._rebuild_dashboard()
+        # Not awaited: the page must never hold up the reply or DM that follows.
+        self._request_dashboard_rebuild()
         return tuple(results)
 
+    def _request_dashboard_rebuild(self) -> None:
+        """Ask for the page to be rebuilt in the background, never two builds at once.
+
+        A request that arrives while a build is running is folded into exactly
+        one more build after it, so the page ends up reflecting the latest refresh.
+        """
+        task = self._dashboard_rebuild_task
+        if task is not None and not task.done():
+            self._dashboard_rebuild_again = True
+            return
+        self._dashboard_rebuild_task = asyncio.create_task(self._rebuild_dashboard_until_current())
+
+    async def _rebuild_dashboard_until_current(self) -> None:
+        while True:
+            self._dashboard_rebuild_again = False
+            await self._rebuild_dashboard()
+            if not self._dashboard_rebuild_again:
+                return
+
     async def _rebuild_dashboard(self) -> None:
-        """Rebuild the page after a refresh, off the event loop.
+        """Rebuild the page once, off the event loop.
 
         Never raises: a page is not worth a missed message.
         """
         try:
             await asyncio.to_thread(_publish_dashboard, self.settings)
         except Exception as error:  # opening the store can fail while another job holds it
+            detail = _scheduled_error_detail(self.settings, error)
             logger.bind(
                 event="dashboard_write_failed",
                 trigger=TRIGGER_BOT,
                 error_type=type(error).__name__,
-                error_detail=str(error),
-            ).error(f"dashboard not written: {error}")
+                error_detail=detail,
+            ).error(f"dashboard not written: {detail}")
 
     async def _scheduled_refresh(self) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
         return await self._refresh_scopes()

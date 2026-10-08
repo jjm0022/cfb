@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -2317,6 +2318,21 @@ def test_every_tier_has_a_badge():
     assert _TIER_BADGES[Tier.SLIGHT] == "🎯 Slight"
 
 
+async def _rebuilt(bot):
+    """Wait for the bot's background page rebuild, if one is running."""
+    task = bot._dashboard_rebuild_task
+    if task is not None:
+        await task
+
+
+async def _until(condition, *, seconds=5.0):
+    """Let the event loop run until a condition holds, so a hang fails instead of freezing."""
+    deadline = asyncio.get_running_loop().time() + seconds
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "timed out waiting"
+        await asyncio.sleep(0.005)
+
+
 URL = "https://sandbox.tail750bff.ts.net/pickem"
 LINK = "[📊 Open this week's picks](https://sandbox.tail750bff.ts.net/pickem/#tab=thisweek)"
 
@@ -2389,7 +2405,9 @@ async def test_every_refresh_rebuilds_the_page(settings, published):
     add_pick_scope(settings)
     bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
     await bot._scheduled_refresh()
+    await _rebuilt(bot)
     await bot.refresh(FakeInteraction(user_id=settings.owner_id))
+    await _rebuilt(bot)
     assert published == [settings.db, settings.db]
 
 
@@ -2409,6 +2427,7 @@ async def test_a_failed_rebuild_is_logged_and_the_reply_still_goes_out(
         scheduler=FakeScheduler(),
     )
     await bot.refresh(interaction)
+    await _rebuilt(bot)
     assert interaction.followup.embeds[0].title == "🏈 Recommendations Updated"
     failed = [r for r in records if r["extra"].get("event") == "dashboard_write_failed"]
     assert [r["extra"]["trigger"] for r in failed] == ["bot"]
@@ -2419,3 +2438,72 @@ def test_the_bots_rebuild_writes_this_weeks_page(settings, tmp_path):
     real_publish_dashboard(settings)
     data = data_block((tmp_path / "dashboard" / "index.html").read_text())
     assert data["this_week"]["pool_week"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_finishes_before_the_page_rebuild_does(settings, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_build(_settings):
+        entered.set()
+        release.wait(5)
+
+    monkeypatch.setattr("pickem.discord_bot._publish_dashboard", slow_build)
+    add_pick_scope(settings)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    try:
+        results = await asyncio.wait_for(bot._scheduled_refresh(), timeout=2)
+        await _until(entered.is_set)
+        assert len(results) == 1  # the refresh is done while the build is still running
+        assert not bot._dashboard_rebuild_task.done()
+    finally:
+        release.set()
+    await _rebuilt(bot)
+
+
+@pytest.mark.asyncio
+async def test_requests_during_a_running_build_cause_exactly_one_more_build(settings, monkeypatch):
+    entered, release, builds = threading.Event(), threading.Event(), []
+
+    def counted_build(_settings):
+        builds.append(1)
+        entered.set()
+        release.wait(5)
+
+    monkeypatch.setattr("pickem.discord_bot._publish_dashboard", counted_build)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    try:
+        bot._request_dashboard_rebuild()
+        await _until(entered.is_set)
+        bot._request_dashboard_rebuild()
+        bot._request_dashboard_rebuild()
+        assert len(builds) == 1  # never two builds at once
+    finally:
+        release.set()
+    await _rebuilt(bot)
+    assert len(builds) == 2  # the two requests were folded into one more build
+
+
+@pytest.mark.asyncio
+async def test_a_request_after_the_builds_finish_starts_a_fresh_one(settings, published):
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    bot._request_dashboard_rebuild()
+    await _rebuilt(bot)
+    bot._request_dashboard_rebuild()
+    await _rebuilt(bot)
+    assert len(published) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rebuild_log_hides_the_database_path(settings, records, monkeypatch):
+    def locked(_settings):
+        raise RuntimeError(f"Could not set lock on file {settings.db}")
+
+    monkeypatch.setattr("pickem.discord_bot._publish_dashboard", locked)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    bot._request_dashboard_rebuild()
+    await _rebuilt(bot)
+    (failed,) = [r for r in records if r["extra"].get("event") == "dashboard_write_failed"]
+    assert str(settings.db) not in failed["message"]
+    assert str(settings.db) not in failed["extra"]["error_detail"]
+    assert "[redacted]" in failed["extra"]["error_detail"]
