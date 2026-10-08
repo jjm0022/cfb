@@ -50,7 +50,7 @@ def build_dashboard_data(report: ResultsReport, *, generated_at: datetime) -> di
         "season": report.season,
         "entry": report.entry_name,
         "latest_week": report.pool_week,
-        "generated_at": _iso(generated_at),
+        "generated_at": iso_utc(generated_at),
         "strategies": [s.value for s in Strategy],
         "baselines": [s.value for s in BASELINES],
         "week_strategies": [s.value for s in WEEK_STRATEGIES],
@@ -66,7 +66,7 @@ def build_dashboard_data(report: ResultsReport, *, generated_at: datetime) -> di
     }
 
 
-def _iso(moment: datetime) -> str:
+def iso_utc(moment: datetime) -> str:
     return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
@@ -96,9 +96,9 @@ def _findings(report: ResultsReport, week: int) -> dict:
     return {"claims": list(found.claims), "not_yet": list(found.not_yet)}
 
 
-def _recommendation(record: RecommendationRecord) -> dict:
+def recommendation_json(record: RecommendationRecord) -> dict:
     return {
-        "at": _iso(record.generated_at),
+        "at": iso_utc(record.generated_at),
         "side": record.side.value,
         "tier": record.tier.value,
         "edge": record.edge_points,
@@ -111,7 +111,7 @@ def _game(graded: GradedGame) -> dict:
         "id": game.game_id,
         "sport": game.sport.value,
         "week": graded.pool_week,
-        "kickoff": _iso(game.kickoff_utc),
+        "kickoff": iso_utc(game.kickoff_utc),
         "home": game.home_team_id,
         "away": game.away_team_id,
         "home_score": game.home_score,
@@ -125,10 +125,10 @@ def _game(graded: GradedGame) -> dict:
         "key_number": graded.key_number,
         "picks": {s.value: _value(graded.picks.get(s)) for s in Strategy},
         "results": {s.value: _value(graded.result(s)) for s in Strategy},
-        "model": None if graded.model is None else _recommendation(graded.model),
-        "history": [_recommendation(r) for r in graded.history],
+        "model": None if graded.model is None else recommendation_json(graded.model),
+        "history": [recommendation_json(r) for r in graded.history],
         "lines": [
-            {"at": _iso(p.captured_at), "source": p.source, "spread": p.spread_home}
+            {"at": iso_utc(p.captured_at), "source": p.source, "spread": p.spread_home}
             for p in graded.line_history
         ],
     }
