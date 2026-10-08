@@ -9,9 +9,11 @@
     return [h("span", { class: "tier-badge" }, TIER_BADGES[g.model.tier]), " ", fmt.sideLine(g, g.model.side)];
   }
 
-  function status(g) {
+  function status(g, now) {
     if (g.final) return [h("span", { class: "muted" }, `${g.away_score}–${g.home_score}`), resultTag(g.result)];
-    if (g.locked) return h("span", { class: "lock", title: "Kicked off: the pick can no longer change" }, "🔒 Locked");
+    if (F.isLocked(g, now)) {
+      return h("span", { class: "lock", title: "Kicked off: the pick can no longer change" }, "🔒 Locked");
+    }
     return null;
   }
 
@@ -24,7 +26,7 @@
         matchup(view.data, g), h("br"),
         h("span", { class: "muted" }, `${fmt.kickoff(g.kickoff)} · CBS ${fmt.homeLine(g, g.line)}`)),
       h("span", { class: "tw-pick" }, pick(g)),
-      h("span", { class: "tw-status" }, status(g))));
+      h("span", { class: "tw-status" }, status(g, view.now))));
   }
 
   P.tabs.thisweek = function (view) {
@@ -50,7 +52,7 @@
   }
 
   P.thisWeek = {
-    detail(g, data) {
+    detail(g, data, now) {
       const fact = P.panel.fact;
       const m = g.model;
       const marks = F.pickChanges(g.history).map((c) => ({ at: c.at, label: changeLabel(g, c) }));
@@ -58,7 +60,7 @@
         h("div", { class: "tw-head" },
           P.ui.logo(data, g.sport, g.away, true), h("span", { class: "at" }, "@"), P.ui.logo(data, g.sport, g.home, true)),
         h("p", { class: "muted" },
-          `${LABELS.sport[g.sport]} · Week ${g.week} · ${fmt.kickoff(g.kickoff)}${g.locked ? " · Locked" : ""}`),
+          `${LABELS.sport[g.sport]} · Week ${g.week} · ${fmt.kickoff(g.kickoff)}${F.isLocked(g, now) ? " · Locked" : ""}`),
         h("h3", null, "Lines now"),
         h("dl", { class: "facts" },
           g.final ? fact("Final", `${g.away} ${g.away_score} – ${g.home} ${g.home_score}`) : null,

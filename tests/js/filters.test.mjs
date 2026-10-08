@@ -158,3 +158,11 @@ test("pick changes are the history entries whose side or tier moved", () => {
   assert.deepEqual(plain(F.pickChanges([])), []);
   assert.deepEqual(plain(F.pickChanges([h("1", "home", "lean")])), []);
 });
+
+test("a game is locked by its flag, or once its kickoff is at or before the viewer's clock", () => {
+  const now = Date.parse("2026-10-10T16:00:00Z");
+  assert.equal(F.isLocked({ locked: true, kickoff: "2026-10-11T16:00:00Z" }, now), true);
+  assert.equal(F.isLocked({ locked: false, kickoff: "2026-10-10T15:59:00Z" }, now), true);
+  assert.equal(F.isLocked({ locked: false, kickoff: "2026-10-10T16:00:00Z" }, now), true);
+  assert.equal(F.isLocked({ locked: false, kickoff: "2026-10-10T16:01:00Z" }, now), false);
+});

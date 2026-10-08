@@ -137,8 +137,14 @@
     return out;
   }
 
+  // Locked once it has kicked off by the viewer's clock, not just by the last rebuild's: the page is
+  // only rebuilt by refreshes, and after a night game the last one ran an hour before kickoff.
+  function isLocked(g, now) {
+    return Boolean(g.locked) || Date.parse(g.kickoff) <= now;
+  }
+
   P.filters = {
     TABS, TIERS, TIER_LABELS, defaults, parseHash, toHash, tierOf, applyFilters, thisWeekGames, pickChanges,
-    confidentLosses, gradedFor, search, sortGames, homeShare, chips, clearFilter,
+    isLocked, confidentLosses, gradedFor, search, sortGames, homeShare, chips, clearFilter,
   };
 })(globalThis.Pickem = globalThis.Pickem || {});

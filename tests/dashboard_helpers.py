@@ -145,7 +145,9 @@ def data_block(page: str) -> dict:
     return json.loads(match.group(1))
 
 
-TW_KICK = datetime(2026, 10, 10, 16, tzinfo=UTC)
+# Far in the future (a Saturday, like the real week's), so the page's own clock never locks these
+# games: the locked ones carry the flag the publisher sets.
+TW_KICK = datetime(2082, 10, 10, 16, tzinfo=UTC)
 TW_STRONG = "cfb-2026-06-OU-at-MICH"
 TW_SLIGHT = "nfl-2026-05-BUF-at-MIA"
 TW_LOCKED = "cfb-2026-06-PSU-at-TEM"
@@ -156,10 +158,14 @@ LOGOS_FIXTURE = {
 }
 
 
+def tw_at(hours: float) -> str:
+    """A time this many hours before the fixture's kickoff, as the page data writes it."""
+    return (TW_KICK - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+
+
 def this_week_fixture() -> dict:
     """This week's board as the publisher writes it: one game in each state the page draws."""
-    def at(hours: float) -> str:
-        return (TW_KICK - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+    at = tw_at
 
     def rec(hours, side, tier, edge):
         return {"at": at(hours), "side": side, "tier": tier, "edge": edge}

@@ -135,6 +135,7 @@
     const view = {
       data: app.data, state: app.state, games,
       weekGames: games.filter((g) => g.week === app.state.week),
+      now: Date.now(),  // the viewer's clock, so a game that kicked off since the last rebuild shows locked
     };
     const needsResults = app.state.tab !== "thisweek" && !app.data.standings.length;
     const tab = needsResults ? noResults : (P.tabs[app.state.tab] || notBuilt);

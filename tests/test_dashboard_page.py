@@ -253,3 +253,19 @@ def test_the_games_table_shows_logos(tmp_path):
 def test_a_results_game_header_shows_both_logos(tmp_path):
     dom = rendered_dom(page_fixture(tmp_path, logos=RESULT_LOGOS), f"game={MODEL_GAME}", tmp_path)
     assert dom.count('class="logo logo-lg"') == 2
+
+
+def tw_game(board: dict, game_id: str) -> dict:
+    return next(g for g in board["games"] if g["id"] == game_id)
+
+
+def test_a_game_past_kickoff_shows_locked_before_the_next_rebuild(tmp_path):
+    board = this_week_fixture()
+    game = tw_game(board, TW_STRONG)
+    game["kickoff"] = "2026-10-03T16:00:00Z"  # already past on any clock running this
+    assert game["locked"] is False  # as the last rebuild, before kickoff, wrote it
+    page = this_week_page(tmp_path, this_week=board)
+    assert rendered_dom(page, "tab=thisweek", tmp_path).count("🔒 Locked") == 2
+    panel = rendered_dom(page, f"tab=thisweek&game={TW_STRONG}", tmp_path)
+    assert "Sat, Oct 3, 12:00 PM ET · Locked" in panel
+    assert "🔥 Strong" in panel  # the pick shown is the same

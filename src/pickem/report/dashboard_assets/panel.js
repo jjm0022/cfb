@@ -71,7 +71,7 @@
     const current = id && view.data.this_week && view.data.this_week.games.find((x) => x.id === id);
     const past = id && view.data.games.find((x) => x.id === id);
     if (current && (view.state.tab === "thisweek" || !past)) {
-      return shell(`${current.away} @ ${current.home}`, P.thisWeek.detail(current, view.data));
+      return shell(`${current.away} @ ${current.home}`, P.thisWeek.detail(current, view.data, view.now));
     }
     const g = past;
     if (g) return shell(`${g.away} @ ${g.home}`, gameDetail(g, view.data));
