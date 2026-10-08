@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import discord
 import pytest
 from cbs_entry_helpers import ATL, ATL_GB, GB, KICKOFF_MS, entry, entry_page
+from dashboard_helpers import data_block
 from loguru import logger
 
 from pickem.automation.monitor import (
@@ -24,6 +25,8 @@ from pickem.discord_bot import (
     LastChange,
     PickemBot,
     ScopeStatus,
+    _add_page_link,
+    _format_change_notification,
     _format_recommendations,
     _format_refresh_results,
     _format_status,
@@ -33,6 +36,7 @@ from pickem.discord_bot import (
     schedule_kickoff_polls,
     send_dm,
 )
+from pickem.discord_bot import _publish_dashboard as real_publish_dashboard
 from pickem.ingest.cbs_fetch import CbsSessionExpired
 from pickem.models import (
     HISTORY_MONITOR,
@@ -46,6 +50,16 @@ from pickem.models import (
 )
 from pickem.operations.recommendations import RecommendationSnapshot
 from pickem.store.db import AutomationState, Store
+
+
+@pytest.fixture(autouse=True)
+def published(monkeypatch):
+    """Record page rebuilds instead of writing one on every refresh under test."""
+    calls = []
+    monkeypatch.setattr(
+        "pickem.discord_bot._publish_dashboard", lambda settings: calls.append(settings.db)
+    )
+    return calls
 
 
 @dataclass
@@ -2301,3 +2315,107 @@ def test_every_tier_has_a_badge():
 
     assert set(_TIER_BADGES) == set(Tier)
     assert _TIER_BADGES[Tier.SLIGHT] == "🎯 Slight"
+
+
+URL = "https://sandbox.tail750bff.ts.net/pickem"
+LINK = "[📊 Open this week's picks](https://sandbox.tail750bff.ts.net/pickem/#tab=thisweek)"
+
+
+def test_the_change_notification_ends_with_the_page_link(monkeypatch):
+    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    embed = _format_change_notification(
+        MonitorScope(Sport.NFL, 2026, 1), _snapshot_for(_edge(game.game_id)), (game,)
+    )
+    assert embed.fields[-1].value == LINK
+    assert embed.title == "🏈 Recommendations Updated"
+
+
+def test_status_ends_with_the_page_link(monkeypatch):
+    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    status = ScopeStatus(
+        scope=MonitorScope(Sport.NFL, 2026, 1),
+        state=AutomationState(),
+        snapshot=_snapshot_for(_edge(game.game_id)),
+        games=(game,),
+        market_timestamp=None,
+    )
+    embed = _format_status((status,), FakeScheduler())
+    assert embed.fields[-1].value == LINK
+    assert embed.fields[-2].name == "Scheduling"
+
+
+def test_without_a_dashboard_address_the_messages_are_unchanged():
+    game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
+    embed = _format_change_notification(
+        MonitorScope(Sport.NFL, 2026, 1), _snapshot_for(_edge(game.game_id)), (game,)
+    )
+    assert all("Open this week's picks" not in f.value for f in embed.fields)
+
+
+def test_a_full_embed_skips_the_link_rather_than_break_the_message(monkeypatch):
+    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+    embed = discord.Embed(title="t")
+    for index in range(25):
+        embed.add_field(name=str(index), value="x", inline=False)
+    assert len(_add_page_link(embed).fields) == 25
+
+
+@pytest.mark.asyncio
+async def test_the_refresh_reply_with_new_picks_links_the_page(settings, monkeypatch):
+    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+    add_pick_scope(settings)
+    snapshot = _snapshot_for(_edge("game-a"))
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    monitor = FakeMonitor(RefreshResult(changed=True, snapshot=snapshot))
+    bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
+    await bot.refresh(interaction)
+    assert interaction.followup.embeds[0].fields[-1].value == LINK
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_refresh_reply_has_no_link(settings, monkeypatch):
+    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+    add_pick_scope(settings)
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    await PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler()).refresh(interaction)
+    fields = interaction.followup.embeds[0].fields
+    assert all("Open this week's picks" not in f.value for f in fields)
+
+
+@pytest.mark.asyncio
+async def test_every_refresh_rebuilds_the_page(settings, published):
+    add_pick_scope(settings)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    await bot._scheduled_refresh()
+    await bot.refresh(FakeInteraction(user_id=settings.owner_id))
+    assert published == [settings.db, settings.db]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rebuild_is_logged_and_the_reply_still_goes_out(
+    settings, records, monkeypatch
+):
+    def locked(_settings):
+        raise RuntimeError("Could not set lock on file")
+
+    monkeypatch.setattr("pickem.discord_bot._publish_dashboard", locked)
+    add_pick_scope(settings)
+    interaction = FakeInteraction(user_id=settings.owner_id)
+    bot = PickemBot(
+        settings,
+        FakeMonitor(RefreshResult(changed=True, snapshot=_snapshot_for(_edge("game-a")))),
+        scheduler=FakeScheduler(),
+    )
+    await bot.refresh(interaction)
+    assert interaction.followup.embeds[0].title == "🏈 Recommendations Updated"
+    failed = [r for r in records if r["extra"].get("event") == "dashboard_write_failed"]
+    assert [r["extra"]["trigger"] for r in failed] == ["bot"]
+
+
+def test_the_bots_rebuild_writes_this_weeks_page(settings, tmp_path):
+    add_pick_scope(settings)  # NFL week 1, so pool week 2
+    real_publish_dashboard(settings)
+    data = data_block((tmp_path / "dashboard" / "index.html").read_text())
+    assert data["this_week"]["pool_week"] == 2

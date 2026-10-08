@@ -46,6 +46,7 @@ from pickem.operations.pick_check import (
 )
 from pickem.operations.recommendation_history import record_snapshot_history
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
+from pickem.report.publish import TRIGGER_BOT, publish_dashboard
 from pickem.resolve.resolver import TeamResolver
 from pickem.store.db import AutomationState, Store
 
@@ -609,22 +610,49 @@ def _add_recommendation_fields(
         embed.add_field(name=f"{scope_name} —{suffix}", value=picks, inline=False)
 
 
+PAGE_LINK_TEXT = "📊 Open this week's picks"
+_DISCORD_EMBED_FIELD_LIMIT = 25
+
+
+def _add_page_link(embed: discord.Embed) -> discord.Embed:
+    """End the embed with a link to this week's page when the dashboard address is set.
+
+    Skipped on an embed already at Discord's field limit: one more field would
+    make Discord reject the whole message.
+    """
+    base = config.dashboard_url()
+    if base is None or len(embed.fields) >= _DISCORD_EMBED_FIELD_LIMIT:
+        return embed
+    return embed.add_field(
+        name="\u200b", value=f"[{PAGE_LINK_TEXT}]({base}#tab=thisweek)", inline=False
+    )
+
+
+def _publish_dashboard(settings: DiscordSettings) -> None:
+    """Rebuild the dashboard page from the bot's database. Runs in a worker thread."""
+    with Store(settings.db) as store:
+        store.init_schema()
+        publish_dashboard(store, config.dashboard_dir(), trigger=TRIGGER_BOT)
+
+
 def _format_change_notification(
     scope: MonitorScope, snapshot: Any | None, games: tuple[Game, ...]
 ) -> discord.Embed:
     embed = discord.Embed(title="🏈 Recommendations Updated", color=discord.Color.green())
     _add_recommendation_fields(embed, scope, snapshot, games)
-    return embed
+    return _add_page_link(embed)
 
 
 def _format_status(
     statuses: tuple[ScopeStatus, ...], scheduler: Any, *, details: bool = False
 ) -> discord.Embed:
     if not statuses:
-        return discord.Embed(
-            title="🏈 Pick'em Status",
-            description="No active pick'em scopes with stored picks.",
-            color=discord.Color.blurple(),
+        return _add_page_link(
+            discord.Embed(
+                title="🏈 Pick'em Status",
+                description="No active pick'em scopes with stored picks.",
+                color=discord.Color.blurple(),
+            )
         )
     embed = discord.Embed(
         title="🏈 Pick'em Status",
@@ -643,10 +671,12 @@ def _format_status(
             ]
         )
         embed.add_field(name=f"{scope_name} — Monitoring", value=monitoring, inline=False)
-    return embed.add_field(
-        name="Scheduling",
-        value=f"Next scheduled event: {_next_scheduled_event(scheduler)}",
-        inline=False,
+    return _add_page_link(
+        embed.add_field(
+            name="Scheduling",
+            value=f"Next scheduled event: {_next_scheduled_event(scheduler)}",
+            inline=False,
+        )
     )
 
 
@@ -744,6 +774,8 @@ def _format_refresh_results(
                 value=chunk,
                 inline=False,
             )
+    if changed and not has_error:
+        _add_page_link(embed)
     return embed
 
 
@@ -985,7 +1017,24 @@ class PickemBot(commands.Bot):
                     ).error(_scheduled_error_message(self.settings, error))
                     result = RefreshResult(changed=False, error=error)
                 results.append((scope, result))
-            return tuple(results)
+        # Every refresh, changed or not: the spreads moved even when no pick did.
+        await self._rebuild_dashboard()
+        return tuple(results)
+
+    async def _rebuild_dashboard(self) -> None:
+        """Rebuild the page after a refresh, off the event loop.
+
+        Never raises: a page is not worth a missed message.
+        """
+        try:
+            await asyncio.to_thread(_publish_dashboard, self.settings)
+        except Exception as error:  # opening the store can fail while another job holds it
+            logger.bind(
+                event="dashboard_write_failed",
+                trigger=TRIGGER_BOT,
+                error_type=type(error).__name__,
+                error_detail=str(error),
+            ).error(f"dashboard not written: {error}")
 
     async def _scheduled_refresh(self) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
         return await self._refresh_scopes()
