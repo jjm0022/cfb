@@ -34,12 +34,13 @@
 
   function timeline(g) {
     if (!g.history.length) return h("p", { class: "empty" }, "The model never covered this game.");
-    return h("ol", { class: "timeline" }, g.history.map((r, i) => {
-      const prev = g.history[i - 1];
-      const changed = prev && (prev.side !== r.side || prev.tier !== r.tier);
-      return h("li", { class: changed ? "changed" : null },
+    // The chart markers use the same rule, so both come from one place.
+    const changes = new Map(P.filters.pickChanges(g.history).map((c) => [c.to, c]));
+    return h("ol", { class: "timeline" }, g.history.map((r) => {
+      const change = changes.get(r);
+      return h("li", { class: change ? "changed" : null },
         `${fmt.time(r.at)} · ${fmt.team(g, r.side)} · ${TIER()[r.tier]} · edge ${fmt.signed(r.edge, 1)}`,
-        changed ? h("span", { class: "badge" }, prev.side !== r.side ? "side changed" : "tier changed") : null);
+        change ? h("span", { class: "badge" }, change.kind === "side" ? "side changed" : "tier changed") : null);
     }));
   }
 
