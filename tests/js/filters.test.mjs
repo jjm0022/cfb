@@ -149,3 +149,12 @@ test("this week's games follow the board and tier filters, not the result filter
   assert.deepEqual(ids({ result: "loss" }), ["tw-cfb", "tw-nfl", "tw-none"]);
   assert.deepEqual(plain(F.thisWeekGames(data, F.defaults(data))), []);
 });
+
+test("pick changes are the history entries whose side or tier moved", () => {
+  const h = (at, side, tier) => ({ at, side, tier, edge: 0 });
+  const changes = F.pickChanges([h("1", "away", "lean"), h("2", "away", "lean"),
+    h("3", "home", "lean"), h("4", "home", "strong")]);
+  assert.deepEqual(plain(changes.map((c) => [c.at, c.kind])), [["3", "side"], ["4", "tier"]]);
+  assert.deepEqual(plain(F.pickChanges([])), []);
+  assert.deepEqual(plain(F.pickChanges([h("1", "home", "lean")])), []);
+});

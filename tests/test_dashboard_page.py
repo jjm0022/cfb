@@ -5,6 +5,10 @@ from dashboard_helpers import (
     GENERATED,
     LOGOS_FIXTURE,
     MODEL_GAME,
+    TW_LOCKED,
+    TW_NO_MODEL,
+    TW_SLIGHT,
+    TW_STRONG,
     data_block,
     page_fixture,
     rendered_dom,
@@ -205,3 +209,34 @@ def test_before_any_results_the_page_opens_on_this_week(tmp_path):
 def test_every_page_says_when_it_was_updated(tmp_path):
     dom = rendered_dom(page_fixture(tmp_path), "", tmp_path)
     assert "Updated Tue, Sep 29, 9:00 AM ET" in dom  # GENERATED, in Eastern time
+
+
+def test_a_this_week_game_opens_with_lines_pick_and_chart(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_STRONG}", tmp_path)
+    assert 'class="panel"' in dom and "OU @ MICH" in dom
+    assert "Lines now" in dom and "US books" in dom and "Pinnacle" in dom
+    assert "MICH −6" in dom and "MICH −5.5" in dom
+    assert "3.0 pts toward MICH" in dom
+    assert "🔥 Strong" in dom and "league -3.0 vs market -6.0" in dom
+    assert "How the pick changed this week" in dom and dom.count('class="changed"') == 2
+    assert dom.count('class="mark-change"') == 2
+    assert "Pick changed" in dom
+    assert dom.count('class="logo logo-lg"') == 2
+
+
+def test_a_slight_pick_names_its_key_number(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_SLIGHT}", tmp_path)
+    assert "Crosses 3" in dom
+
+
+def test_a_locked_pick_without_a_reason_says_so(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_LOCKED}", tmp_path)
+    assert "No reason recorded for this pick." in dom
+    assert "Locked" in dom
+
+
+def test_a_game_with_no_model_and_no_quotes_still_opens(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_NO_MODEL}", tmp_path)
+    assert "The model has no pick for this game." in dom
+    assert "No line history" in dom
+    assert "No quotes yet" in dom

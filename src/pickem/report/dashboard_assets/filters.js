@@ -124,8 +124,21 @@
     return Object.assign({}, state, { [key]: cleared[key] });
   }
 
+  // Where the model's side or tier moved, for the timeline and the chart markers.
+  function pickChanges(history) {
+    const list = history || [];
+    const out = [];
+    for (let i = 1; i < list.length; i++) {
+      const prev = list[i - 1], cur = list[i];
+      if (prev.side !== cur.side || prev.tier !== cur.tier) {
+        out.push({ at: cur.at, from: prev, to: cur, kind: prev.side !== cur.side ? "side" : "tier" });
+      }
+    }
+    return out;
+  }
+
   P.filters = {
-    TABS, TIERS, TIER_LABELS, defaults, parseHash, toHash, tierOf, applyFilters, thisWeekGames,
+    TABS, TIERS, TIER_LABELS, defaults, parseHash, toHash, tierOf, applyFilters, thisWeekGames, pickChanges,
     confidentLosses, gradedFor, search, sortGames, homeShare, chips, clearFilter,
   };
 })(globalThis.Pickem = globalThis.Pickem || {});

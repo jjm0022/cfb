@@ -9,19 +9,23 @@
       h("li", null, h("span", { class: "key s-" + key }), text)));
   }
 
-  function lineMove(g) {
+  function lineMove(g, marks) {
+    marks = marks || [];
     if (!g.lines.length) return h("p", { class: "empty" }, "No line history");
     const series = [
       ["us", "US books", g.lines.filter((p) => p.source === "us")],
       ["pinnacle", "Pinnacle", g.lines.filter((p) => p.source === "pinnacle")],
     ].filter(([, , points]) => points.length);
     const H = 170, L = 10, R = 10, T = 12, B = 12;
-    const times = g.lines.map((p) => Date.parse(p.at));
+    const times = g.lines.map((p) => Date.parse(p.at)).concat(marks.map((m) => Date.parse(m.at)));
     const [lo, hi] = P.scales.extent(g.lines.map((p) => p.spread).concat([g.line]), 0.5);
     const x = P.scales.linear(Math.min(...times), Math.max(...times), L, W - R);
     const y = P.scales.linear(lo, hi, T, H - B);
     const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Line movement" },
       s("line", { class: "ref", x1: L, x2: W - R, y1: y(g.line), y2: y(g.line) }),
+      marks.map((m) => s("line", {
+        class: "mark-change", x1: x(Date.parse(m.at)), x2: x(Date.parse(m.at)), y1: T, y2: H - B,
+      }, s("title", null, `${fmt.time(m.at)}: ${m.label}`))),
       series.map(([key, , points]) => [
         points.length > 1 && s("polyline", {
           class: "line s-" + key,
@@ -33,6 +37,7 @@
     const items = series.map(([key, label, points]) => [key,
       `${label}: opened ${fmt.spread(points[0].spread)}, last ${fmt.spread(points[points.length - 1].spread)}`]);
     items.push(["cbs", `CBS line ${fmt.spread(g.line)} (dashed)`]);
+    if (marks.length) items.push(["change", "Pick changed (dotted)"]);
     return h("figure", null,
       h("figcaption", null, `Spreads for ${g.home}; lower means ${g.home} more favored.`),
       svg, legend(items));

@@ -64,9 +64,17 @@
   }
 
   P.panel = function (view) {
-    const g = view.state.game && view.data.games.find((x) => x.id === view.state.game);
+    const id = view.state.game;
+    const current = id && view.data.this_week && view.data.this_week.games.find((x) => x.id === id);
+    const past = id && view.data.games.find((x) => x.id === id);
+    if (current && (view.state.tab === "thisweek" || !past)) {
+      return shell(`${current.away} @ ${current.home}`, P.thisWeek.detail(current, view.data));
+    }
+    const g = past;
     if (g) return shell(`${g.away} @ ${g.home}`, gameDetail(g, view.data));
     if (P.app.list) return shell(P.app.list.title, gameList(P.app.list));
     return null;
   };
+  P.panel.fact = fact;
+  P.panel.timeline = timeline;
 })(globalThis.Pickem = globalThis.Pickem || {});
