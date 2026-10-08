@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start a pool week: fetch its CBS board page if it is not saved yet, import
-# both boards into the pick'em database, then take each league's first market
-# snapshot.
+# both boards into the pick'em database, take each league's first market
+# snapshot, and rebuild the dashboard page to show the new week.
 #
 # Pool week N is CFB week N plus NFL week N-1; both boards live on one page,
 # <weeks-dir>/weekN.html on the NAS. Each league is ingested and polled
@@ -171,6 +171,13 @@ for sport in "${sports[@]}"; do
         failed+=("$sport week $week (poll)")
     fi
 done
+
+# Put the new board on the dashboard now rather than at the bot's next refresh.
+# The page is a convenience: its failure never fails the week start.
+if ((${#loaded[@]})); then
+    uv run pickem publish-dashboard --trigger week-start --db "$database" ||
+        echo "Dashboard rebuild failed; the bot rebuilds it on its next refresh." >&2
+fi
 
 if ((${#failed[@]})); then
     summary=$(printf '%s, ' "${failed[@]}")

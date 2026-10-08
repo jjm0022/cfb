@@ -89,6 +89,10 @@ def _dms(commands: list[str]) -> list[str]:
     return [c for c in commands if "notify-owner" in c]
 
 
+def _publish(db: Path) -> str:
+    return f"run pickem publish-dashboard --trigger week-start --db {db}"
+
+
 def test_a_pool_week_ingests_then_polls_cfb_that_week_and_nfl_the_week_before(tmp_path):
     page, db = _page(tmp_path), tmp_path / "pickem.duckdb"
 
@@ -100,6 +104,7 @@ def test_a_pool_week_ingests_then_polls_cfb_that_week_and_nfl_the_week_before(tm
         _poll("cfb", 3, db),
         _ingest(page, "nfl", 2, db),
         _poll("nfl", 2, db),
+        _publish(db),
     ]
 
 
@@ -112,7 +117,7 @@ def test_days_flag_sets_the_poll_window(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert commands == [_ingest(page, "cfb", 3, db), _poll("cfb", 3, db, days=7)]
+    assert commands == [_ingest(page, "cfb", 3, db), _poll("cfb", 3, db, days=7), _publish(db)]
 
 
 def test_pool_week_one_has_no_nfl_board(tmp_path):
@@ -121,7 +126,7 @@ def test_pool_week_one_has_no_nfl_board(tmp_path):
     result, commands = _run(tmp_path, "1", "--season", "2026", "--file", str(page), "--db", str(db))
 
     assert result.returncode == 0, result.stderr
-    assert commands == [_ingest(page, "cfb", 1, db), _poll("cfb", 1, db)]
+    assert commands == [_ingest(page, "cfb", 1, db), _poll("cfb", 1, db), _publish(db)]
 
 
 def test_sport_flag_starts_only_that_league(tmp_path):
@@ -132,7 +137,7 @@ def test_sport_flag_starts_only_that_league(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert commands == [_ingest(page, "nfl", 2, db), _poll("nfl", 2, db)]
+    assert commands == [_ingest(page, "nfl", 2, db), _poll("nfl", 2, db), _publish(db)]
 
 
 def test_a_failed_ingest_skips_that_leagues_poll_but_not_the_other_league(tmp_path):
@@ -146,6 +151,7 @@ def test_a_failed_ingest_skips_that_leagues_poll_but_not_the_other_league(tmp_pa
     assert result.returncode == 1
     assert commands == [
         _ingest(page, "cfb", 3, db), _ingest(page, "nfl", 2, db), _poll("nfl", 2, db),
+        _publish(db),
     ]
     assert "cfb week 3 (ingest)" in result.stderr
 
@@ -164,6 +170,7 @@ def test_a_failed_poll_is_reported_by_stage_and_the_other_league_still_runs(tmp_
         _poll("cfb", 3, db),
         _ingest(page, "nfl", 2, db),
         _poll("nfl", 2, db),
+        _publish(db),
     ]
     assert "cfb week 3 (poll)" in result.stderr
     assert "nfl" not in result.stderr
@@ -213,7 +220,9 @@ def test_a_missing_default_page_is_fetched_before_ingest(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert commands == [_fetch(page, 4), _ingest(page, "cfb", 4, db), _poll("cfb", 4, db)]
+    assert commands == [
+        _fetch(page, 4), _ingest(page, "cfb", 4, db), _poll("cfb", 4, db), _publish(db)
+    ]
 
 
 def test_an_existing_default_page_is_used_without_fetching(tmp_path):
@@ -228,7 +237,7 @@ def test_an_existing_default_page_is_used_without_fetching(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert commands == [_ingest(page, "cfb", 4, db), _poll("cfb", 4, db)]
+    assert commands == [_ingest(page, "cfb", 4, db), _poll("cfb", 4, db), _publish(db)]
 
 
 def test_refetch_replaces_an_existing_page(tmp_path):
@@ -356,3 +365,28 @@ def test_auto_and_a_pool_week_together_are_a_usage_error(tmp_path):
 
     assert result.returncode == 2
     assert commands == []
+
+
+def test_the_page_is_rebuilt_after_the_polls(tmp_path):
+    page, db = _page(tmp_path), tmp_path / "pickem.duckdb"
+    result, commands = _run(tmp_path, "3", "--season", "2026", "--file", str(page), "--db", str(db))
+    assert result.returncode == 0, result.stderr
+    assert commands[-1] == _publish(db)
+    assert commands.index(_publish(db)) > commands.index(_poll("nfl", 2, db))
+
+
+def test_no_rebuild_when_no_league_loaded(tmp_path):
+    page, db = _page(tmp_path), tmp_path / "pickem.duckdb"
+    _, commands = _run(tmp_path, "3", "--season", "2026", "--file", str(page), "--db", str(db),
+                       fail_on="ingest-cbs")
+    assert _publish(db) not in commands
+
+
+def test_a_failed_rebuild_does_not_fail_the_week_start(tmp_path):
+    weeks, db = tmp_path / "weeks", tmp_path / "pickem.duckdb"
+    result, commands = _run(tmp_path, "--auto", "--season", "2026", "--weeks-dir", str(weeks),
+                            "--db", str(db), fail_on="publish-dashboard")
+    assert result.returncode == 0
+    assert "Dashboard rebuild failed" in result.stderr
+    [dm] = _dms(commands)
+    assert "Pool week 4 board loaded" in dm
