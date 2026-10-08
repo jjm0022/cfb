@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import discord
 import pytest
 from cbs_entry_helpers import ATL, ATL_GB, GB, KICKOFF_MS, entry, entry_page
-from dashboard_helpers import data_block
+from dashboard_helpers import data_block, logged_traceback, written_message
 from loguru import logger
 
 from pickem.automation.monitor import (
@@ -2504,6 +2504,22 @@ async def test_a_failed_rebuild_log_hides_the_database_path(settings, records, m
     bot._request_dashboard_rebuild()
     await _rebuilt(bot)
     (failed,) = [r for r in records if r["extra"].get("event") == "dashboard_write_failed"]
-    assert str(settings.db) not in failed["message"]
+    # The traceback carries the raw error, as the refresh_failed log's does.
+    assert str(settings.db) not in written_message(failed)
+    assert written_message(failed) == "dashboard not written: Could not set lock on file [redacted]"
     assert str(settings.db) not in failed["extra"]["error_detail"]
     assert "[redacted]" in failed["extra"]["error_detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rebuild_is_logged_with_its_traceback(settings, records, monkeypatch):
+    def locked_build(_settings):
+        raise RuntimeError("Could not set lock on file")
+
+    monkeypatch.setattr("pickem.discord_bot._publish_dashboard", locked_build)
+    bot = PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler())
+    bot._request_dashboard_rebuild()
+    await _rebuilt(bot)
+    (failed,) = [r for r in records if r["extra"].get("event") == "dashboard_write_failed"]
+    trace = logged_traceback(failed)
+    assert "in locked_build" in trace and "RuntimeError: Could not set lock on file" in trace

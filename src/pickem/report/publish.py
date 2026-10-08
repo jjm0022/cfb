@@ -35,6 +35,24 @@ class Published:
     error: str | None = None  # why not, when writing failed
 
 
+def log_write_failure(trigger: str, error: BaseException, detail: str | None = None) -> None:
+    """Log a page that was not written, with the job that tried and the traceback.
+
+    There is no DM for this, so the traceback is the only clue to a failure
+    that repeats. ``detail`` replaces the error's text in the message, for a
+    caller that must redact it.
+    """
+    detail = str(error) if detail is None else detail
+    logger.bind(
+        event="dashboard_write_failed",
+        trigger=trigger,
+        error_type=type(error).__name__,
+        error_detail=detail,
+    ).opt(depth=1, exception=(type(error), error, error.__traceback__)).error(
+        f"dashboard not written: {detail}"
+    )
+
+
 def publish_dashboard(
     store: Store,
     dashboard_dir: Path,
@@ -68,12 +86,7 @@ def publish_dashboard(
         for week in weeks:
             write_atomic(dashboard_dir / f"week-{week}.html", render_week_forwarder(week))
     except Exception as exc:  # a render bug, a locked database or a full disk alike
-        logger.bind(
-            event="dashboard_write_failed",
-            trigger=trigger,
-            error_type=type(exc).__name__,
-            error_detail=str(exc),
-        ).error(f"dashboard not written: {exc}")
+        log_write_failure(trigger, exc)
         return Published(None, str(exc))
     logger.bind(
         event="dashboard_written",

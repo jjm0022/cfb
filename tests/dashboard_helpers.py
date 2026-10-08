@@ -5,6 +5,7 @@ import random
 import re
 import shutil
 import subprocess
+import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -218,3 +219,21 @@ def rendered_dom(page: Path, fragment: str, tmp_path: Path) -> str:
     assert 'data-boot="ok"' in dom, dom[-2000:]
     # Drop the inlined scripts and data so assertions only see what the page drew.
     return re.sub(r"<script\b[^>]*>.*?</script>", "", dom, flags=re.S)
+
+
+def logged_traceback(record: dict) -> str:
+    """The traceback a captured log record carries, as text; empty when it has none.
+
+    Once logging is configured, its redaction step folds the traceback into the
+    message and clears the exception; a bare test sink still sees it on the record.
+    """
+    if record["exception"] is not None:
+        kind, value, tb = record["exception"]
+        return "".join(traceback.format_exception(kind, value, tb))
+    _, _, rest = record["message"].partition("\n")
+    return rest if rest.startswith("Traceback (most recent call last)") else ""
+
+
+def written_message(record: dict) -> str:
+    """A captured record's message as the code wrote it, without a folded traceback."""
+    return record["message"].partition("\nTraceback (most recent call last)")[0]

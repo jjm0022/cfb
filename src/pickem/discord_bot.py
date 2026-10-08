@@ -46,7 +46,7 @@ from pickem.operations.pick_check import (
 )
 from pickem.operations.recommendation_history import record_snapshot_history
 from pickem.operations.recommendations import generate_recommendations, refresh_recommendations
-from pickem.report.publish import TRIGGER_BOT, publish_dashboard
+from pickem.report.publish import TRIGGER_BOT, log_write_failure, publish_dashboard
 from pickem.resolve.resolver import TeamResolver
 from pickem.store.db import AutomationState, Store
 
@@ -1055,13 +1055,7 @@ class PickemBot(commands.Bot):
         try:
             await asyncio.to_thread(_publish_dashboard, self.settings)
         except Exception as error:  # opening the store can fail while another job holds it
-            detail = _scheduled_error_detail(self.settings, error)
-            logger.bind(
-                event="dashboard_write_failed",
-                trigger=TRIGGER_BOT,
-                error_type=type(error).__name__,
-                error_detail=detail,
-            ).error(f"dashboard not written: {detail}")
+            log_write_failure(TRIGGER_BOT, error, _scheduled_error_detail(self.settings, error))
 
     async def _scheduled_refresh(self) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
         return await self._refresh_scopes()

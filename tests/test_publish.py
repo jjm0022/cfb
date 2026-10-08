@@ -3,7 +3,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 
-from dashboard_helpers import data_block
+from dashboard_helpers import data_block, logged_traceback
 from loguru import logger
 from typer.testing import CliRunner
 
@@ -70,6 +70,19 @@ def test_a_failure_is_logged_with_its_trigger_and_never_raised(tmp_path, records
     assert len(failed) == 1
     assert failed[0]["extra"]["trigger"] == "bot"
     assert failed[0]["extra"]["error_detail"] == "render broke"
+
+
+def test_a_failure_is_logged_with_its_traceback(tmp_path, records, monkeypatch):
+    def broken_render(*args, **kwargs):
+        raise RuntimeError("render broke")
+
+    monkeypatch.setattr("pickem.report.publish.render_dashboard", broken_render)
+    with open_store(tmp_path) as store:
+        seed_board(store)
+        publish_dashboard(store, tmp_path / "dash", trigger=TRIGGER_BOT, now=NOW)
+    [failed] = [r for r in records if r["extra"].get("event") == "dashboard_write_failed"]
+    trace = logged_traceback(failed)
+    assert "in broken_render" in trace and "RuntimeError: render broke" in trace
 
 
 def test_a_successful_write_is_logged_with_its_trigger(tmp_path, records):
