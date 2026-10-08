@@ -18,9 +18,12 @@
     ].filter(([, , points]) => points.length);
     const H = 170, L = 10, R = 10, T = 12, B = 12;
     const times = g.lines.map((p) => Date.parse(p.at)).concat(marks.map((m) => Date.parse(m.at)));
+    const first = Math.min(...times), last = Math.max(...times);
     const [lo, hi] = P.scales.extent(g.lines.map((p) => p.spread).concat([g.line]), 0.5);
-    const x = P.scales.linear(Math.min(...times), Math.max(...times), L, W - R);
+    const x = P.scales.linear(first, last, L, W - R);
+    // The lowest spread is drawn at the top: the more the home team is favored, the higher its line.
     const y = P.scales.linear(lo, hi, T, H - B);
+    const span = first === last ? ` at ${fmt.time(first)}` : `, ${fmt.time(first)} – ${fmt.time(last)}`;
     const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Line movement" },
       s("line", { class: "ref", x1: L, x2: W - R, y1: y(g.line), y2: y(g.line) }),
       marks.map((m) => s("line", {
@@ -39,7 +42,7 @@
     items.push(["cbs", `CBS line ${fmt.spread(g.line)} (dashed)`]);
     if (marks.length) items.push(["change", "Pick changed (dotted)"]);
     return h("figure", null,
-      h("figcaption", null, `Spreads for ${g.home}; lower means ${g.home} more favored.`),
+      h("figcaption", null, `Spreads for ${g.home}${span}. Higher on the chart means ${g.home} more favored.`),
       svg, legend(items));
   }
 

@@ -140,10 +140,11 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .s-winner{stroke:var(--winner);fill:var(--winner);background:var(--winner)}
 .s-pinnacle{stroke:var(--pin);fill:var(--pin);background:var(--pin)}
 .s-cbs{stroke:var(--muted);background:var(--muted)}
-.key.s-change{width:14px;height:0;border-radius:0;border-top:2px dotted var(--muted);background:none;vertical-align:middle}
+.key.s-change{width:16px;height:0;border-radius:0;border-top:3px dotted var(--bad);background:none;vertical-align:middle}
 .line.s-us,.line.s-median,.line.s-winner,.line.s-pinnacle{fill:none}
 .dot.s-us,.dot.s-median,.dot.s-winner,.dot.s-pinnacle{stroke:var(--surface)}
-.mark-change{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:2 4}
+/* the same colour as the timeline's "changed" badges, in round dots unlike the CBS line's dashes */
+.mark-change{stroke:var(--bad);stroke-width:2.5;stroke-dasharray:0 5;stroke-linecap:round}
 .hit{fill:transparent;cursor:pointer}
 .hit:focus-visible{outline:none;fill:var(--push-bg);fill-opacity:.6}
 .legend{list-style:none;display:flex;flex-wrap:wrap;gap:4px 14px;padding:0;margin:8px 0 0;

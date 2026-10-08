@@ -260,6 +260,30 @@ def tw_game(board: dict, game_id: str) -> dict:
     return next(g for g in board["games"] if g["id"] == game_id)
 
 
+def test_the_spread_chart_draws_the_more_favored_line_higher_and_says_so(tmp_path):
+    board = this_week_fixture()
+    tw_game(board, TW_STRONG)["lines"] = [
+        {"at": tw_at(35), "source": "us", "spread": -3.0},
+        {"at": tw_at(8), "source": "us", "spread": -7.0},
+    ]
+    dom = rendered_dom(this_week_page(tmp_path, this_week=board),
+                       f"tab=thisweek&game={TW_STRONG}", tmp_path)
+    dots = re.findall(
+        r'<circle class="dot s-us"[^>]*\bcy="([\d.]+)"[^>]*><title>[^<]*: MICH ([^<]+)</title>',
+        dom)
+    cy = {spread: float(y) for y, spread in dots}
+    assert cy["−7"] < cy["−3"]  # a smaller y is higher on the screen
+    # The span runs from the first line (35 hours out) to the last pick-change mark (6 hours out).
+    assert ("Spreads for MICH, Fri, Oct 9, 1:00 AM ET – Sat, Oct 10, 6:00 AM ET. "
+            "Higher on the chart means MICH more favored.") in dom
+
+
+def test_a_chart_of_one_moment_says_when_it_was(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_SLIGHT}", tmp_path)
+    assert ("Spreads for MIA at Sat, Oct 10, 9:00 AM ET. "
+            "Higher on the chart means MIA more favored.") in dom
+
+
 def test_a_long_pick_timeline_folds_the_refreshes_that_changed_nothing(tmp_path):
     board = this_week_fixture()
 
