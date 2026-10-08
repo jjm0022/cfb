@@ -240,3 +240,16 @@ def test_a_game_with_no_model_and_no_quotes_still_opens(tmp_path):
     assert "The model has no pick for this game." in dom
     assert "No line history" in dom
     assert "No quotes yet" in dom
+
+
+RESULT_LOGOS = {"light": {"cfb": ["PSU", "TEM"], "nfl": []}, "dark": {"cfb": [], "nfl": []}}
+
+
+def test_the_games_table_shows_logos(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path, logos=RESULT_LOGOS), "tab=games", tmp_path)
+    assert 'src="logos/cfb/PSU.png"' in dom and 'src="logos/cfb/TEM.png"' in dom
+
+
+def test_a_results_game_header_shows_both_logos(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path, logos=RESULT_LOGOS), f"game={MODEL_GAME}", tmp_path)
+    assert dom.count('class="logo logo-lg"') == 2

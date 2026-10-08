@@ -13,19 +13,19 @@
         h("div", { class: "panel-body" }, body)));
   }
 
-  function gameButton(g, strategy) {
+  function gameButton(data, g, strategy) {
     const side = g.picks[strategy];
     return h("button", { class: "row-button", type: "button", onclick: () => P.app.openGame(g.id) },
       h("span", { class: "grow" },
-        `W${g.week} · ${g.away} @ ${g.home}`,
+        `W${g.week} · `, P.ui.matchup(data, g),
         h("br"),
         h("span", { class: "muted" }, `${LABELS.strategy[strategy]}: ${side ? fmt.sideLine(g, side) : "no pick"}`)),
       resultTag(g.results[strategy]));
   }
 
-  function gameList(list) {
+  function gameList(list, data) {
     if (!list.games.length) return h("p", { class: "empty" }, "No games");
-    return h("ul", { class: "list" }, list.games.map((g) => h("li", null, gameButton(g, list.strategy))));
+    return h("ul", { class: "list" }, list.games.map((g) => h("li", null, gameButton(data, g, list.strategy))));
   }
 
   function fact(label, value) {
@@ -46,6 +46,8 @@
 
   function gameDetail(g, data) {
     return [
+      h("div", { class: "tw-head" },
+        P.ui.logo(data, g.sport, g.away, true), h("span", { class: "at" }, "@"), P.ui.logo(data, g.sport, g.home, true)),
       h("p", { class: "muted" }, `${LABELS.sport[g.sport]} · Week ${g.week} · ${fmt.kickoff(g.kickoff)}`),
       h("dl", { class: "facts" },
         fact("Final", `${g.away} ${g.away_score} – ${g.home} ${g.home_score}`),
@@ -73,7 +75,7 @@
     }
     const g = past;
     if (g) return shell(`${g.away} @ ${g.home}`, gameDetail(g, view.data));
-    if (P.app.list) return shell(P.app.list.title, gameList(P.app.list));
+    if (P.app.list) return shell(P.app.list.title, gameList(P.app.list, view.data));
     return null;
   };
   P.panel.fact = fact;

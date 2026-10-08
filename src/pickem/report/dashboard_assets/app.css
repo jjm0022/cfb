@@ -105,6 +105,7 @@ table.games{white-space:nowrap;font-size:14px;margin-top:10px}
 table.games th button{border:0;background:none;padding:0;min-height:44px;color:inherit;font-weight:inherit}
 table.games tbody tr{cursor:pointer}
 table.games td{padding-top:12px;padding-bottom:12px}
+table.games .matchup{flex-wrap:nowrap}
 table.games tbody tr:hover{background:var(--raised)}
 .tier{color:var(--muted);font-size:12px;margin-left:4px}
 

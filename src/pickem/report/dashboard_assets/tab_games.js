@@ -19,7 +19,7 @@
       } }, label + (active ? (sort.dir === "asc" ? " ▲" : " ▼") : "")));
   }
 
-  function row(g) {
+  function row(view, g) {
     const share = F.homeShare(g);
     const disagreed = g.picks.us && g.picks.model && g.picks.us !== g.picks.model;
     return h("tr", {
@@ -28,7 +28,7 @@
     },
       h("td", null, g.week),
       h("td", null, fmt.kickoff(g.kickoff)),
-      h("td", null, `${g.away} @ ${g.home}`),
+      h("td", null, P.ui.matchup(view.data, g)),
       h("td", null, fmt.homeLine(g, g.line)),
       h("td", null, `${g.away_score}–${g.home_score}`),
       h("td", null, fmt.team(g, g.picks.us), " ", resultTag(g.results.us)),
@@ -45,7 +45,7 @@
     if (!games.length) return h("p", { class: "empty" }, "No games match");
     return h("table", { class: "games" },
       h("thead", null, h("tr", null, COLUMNS.map(([key, label]) => header(key, label, redraw)))),
-      h("tbody", null, games.map(row)));
+      h("tbody", null, games.map((g) => row(view, g))));
   }
 
   P.tabs.games = function (view) {
