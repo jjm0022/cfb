@@ -614,6 +614,21 @@ PAGE_LINK_TEXT = "📊 Open this week's picks"
 _DISCORD_EMBED_FIELD_LIMIT = 25
 
 
+def _page_link_clock() -> datetime:
+    """The time the page link is stamped with. A function so tests can pin it."""
+    return datetime.now(UTC)
+
+
+def _page_link_url(base: str, now: datetime) -> str:
+    """This week's page, stamped with the time so a phone fetches it again.
+
+    The page is served with no caching instructions, so without a new address
+    a phone may show a copy it saved earlier.
+    """
+    join = "&" if "?" in base else "?"
+    return f"{base}{join}v={int(now.timestamp())}#tab=thisweek"
+
+
 def _add_page_link(embed: discord.Embed) -> discord.Embed:
     """End the embed with a link to this week's page when the dashboard address is set.
 
@@ -623,9 +638,8 @@ def _add_page_link(embed: discord.Embed) -> discord.Embed:
     base = config.dashboard_url()
     if base is None or len(embed.fields) >= _DISCORD_EMBED_FIELD_LIMIT:
         return embed
-    return embed.add_field(
-        name="\u200b", value=f"[{PAGE_LINK_TEXT}]({base}#tab=thisweek)", inline=False
-    )
+    url = _page_link_url(base, _page_link_clock())
+    return embed.add_field(name="\u200b", value=f"[{PAGE_LINK_TEXT}]({url})", inline=False)
 
 
 def _publish_dashboard(settings: DiscordSettings) -> None:

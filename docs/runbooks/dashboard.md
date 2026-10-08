@@ -78,7 +78,9 @@ PICKEM_DASHBOARD_URL=https://sandbox.tail750bff.ts.net/pickem/
 With it, the Tuesday results DM links to that week's results, and the bot adds
 a "📊 Open this week's picks" link to the end of its status and
 "Recommendations Updated" messages. The bot's link opens the "This week" tab.
-Without it, those messages are sent as before, with no link.
+It ends in `?v=` and the time the message was sent, so a phone fetches the
+page again instead of showing a copy it saved earlier. Without it, those
+messages are sent as before, with no link.
 
 Restart the bot after changing `.env`
 (`systemctl --user restart pickem-discord-bot.service`); it only reads the

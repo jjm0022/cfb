@@ -32,6 +32,7 @@ from pickem.discord_bot import (
     _format_refresh_results,
     _format_status,
     _last_recommendation_change,
+    _page_link_url,
     build_schedule,
     resolve_pickem_scopes,
     schedule_kickoff_polls,
@@ -2334,11 +2335,22 @@ async def _until(condition, *, seconds=5.0):
 
 
 URL = "https://sandbox.tail750bff.ts.net/pickem"
-LINK = "[📊 Open this week's picks](https://sandbox.tail750bff.ts.net/pickem/#tab=thisweek)"
+LINK_TIME = datetime(2026, 10, 8, 14, tzinfo=UTC)
+# Stamped with the time in Unix seconds, so a phone fetches the page again rather than reuse a copy.
+LINK = (
+    "[📊 Open this week's picks]"
+    "(https://sandbox.tail750bff.ts.net/pickem/?v=1791468000#tab=thisweek)"
+)
 
 
-def test_the_change_notification_ends_with_the_page_link(monkeypatch):
+@pytest.fixture
+def page_url(monkeypatch):
+    """Set the dashboard address, and pin the clock the link's stamp reads."""
     monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+    monkeypatch.setattr("pickem.discord_bot._page_link_clock", lambda: LINK_TIME)
+
+
+def test_the_change_notification_ends_with_the_page_link(page_url):
     game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
     embed = _format_change_notification(
         MonitorScope(Sport.NFL, 2026, 1), _snapshot_for(_edge(game.game_id)), (game,)
@@ -2347,8 +2359,7 @@ def test_the_change_notification_ends_with_the_page_link(monkeypatch):
     assert embed.title == "🏈 Recommendations Updated"
 
 
-def test_status_ends_with_the_page_link(monkeypatch):
-    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+def test_status_ends_with_the_page_link(page_url):
     game = _nfl_game("BUF", "MIA", datetime(2026, 9, 13, 17, tzinfo=UTC))
     status = ScopeStatus(
         scope=MonitorScope(Sport.NFL, 2026, 1),
@@ -2370,8 +2381,23 @@ def test_without_a_dashboard_address_the_messages_are_unchanged():
     assert all("Open this week's picks" not in f.value for f in embed.fields)
 
 
-def test_a_full_embed_skips_the_link_rather_than_break_the_message(monkeypatch):
-    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+def test_the_link_stamps_the_time_it_was_sent(page_url, monkeypatch):
+    later = LINK_TIME + timedelta(minutes=5)
+    monkeypatch.setattr("pickem.discord_bot._page_link_clock", lambda: later)
+    embed = _add_page_link(discord.Embed(title="t"))
+    assert embed.fields[-1].value == LINK.replace("1791468000", "1791468300")
+
+
+def test_the_link_stamp_joins_an_address_that_already_has_a_query():
+    assert _page_link_url("https://host/pickem/?via=tailnet", LINK_TIME) == (
+        "https://host/pickem/?via=tailnet&v=1791468000#tab=thisweek"
+    )
+    assert _page_link_url("https://host/pickem/", LINK_TIME) == (
+        "https://host/pickem/?v=1791468000#tab=thisweek"
+    )
+
+
+def test_a_full_embed_skips_the_link_rather_than_break_the_message(page_url):
     embed = discord.Embed(title="t")
     for index in range(25):
         embed.add_field(name=str(index), value="x", inline=False)
@@ -2379,8 +2405,7 @@ def test_a_full_embed_skips_the_link_rather_than_break_the_message(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_refresh_reply_with_new_picks_links_the_page(settings, monkeypatch):
-    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+async def test_the_refresh_reply_with_new_picks_links_the_page(settings, page_url):
     add_pick_scope(settings)
     snapshot = _snapshot_for(_edge("game-a"))
     interaction = FakeInteraction(user_id=settings.owner_id)
@@ -2391,8 +2416,7 @@ async def test_the_refresh_reply_with_new_picks_links_the_page(settings, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_an_unchanged_refresh_reply_has_no_link(settings, monkeypatch):
-    monkeypatch.setenv("PICKEM_DASHBOARD_URL", URL)
+async def test_an_unchanged_refresh_reply_has_no_link(settings, page_url):
     add_pick_scope(settings)
     interaction = FakeInteraction(user_id=settings.owner_id)
     await PickemBot(settings, FakeMonitor(), scheduler=FakeScheduler()).refresh(interaction)
