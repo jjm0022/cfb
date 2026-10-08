@@ -137,6 +137,24 @@
     return out;
   }
 
+  // The rows the pick timeline shows. The bot records the pick on every refresh, changed or not, so
+  // only the first entry, each change and the latest are shown; each run of entries between them
+  // folds into one gap row with how many there were and the time of the last.
+  function timelineRows(history) {
+    const list = history || [];
+    const changes = new Map(pickChanges(list).map((c) => [c.to, c]));
+    const rows = [];
+    let hidden = [];
+    list.forEach((entry, i) => {
+      const change = changes.get(entry) || null;
+      if (i !== 0 && i !== list.length - 1 && !change) { hidden.push(entry); return; }
+      if (hidden.length) rows.push({ type: "gap", count: hidden.length, through: hidden[hidden.length - 1].at });
+      hidden = [];
+      rows.push({ type: "entry", entry, change });
+    });
+    return rows;
+  }
+
   // Locked once it has kicked off by the viewer's clock, not just by the last rebuild's: the page is
   // only rebuilt by refreshes, and after a night game the last one ran an hour before kickoff.
   function isLocked(g, now) {
@@ -145,6 +163,6 @@
 
   P.filters = {
     TABS, TIERS, TIER_LABELS, defaults, parseHash, toHash, tierOf, applyFilters, thisWeekGames, pickChanges,
-    isLocked, confidentLosses, gradedFor, search, sortGames, homeShare, chips, clearFilter,
+    timelineRows, isLocked, confidentLosses, gradedFor, search, sortGames, homeShare, chips, clearFilter,
   };
 })(globalThis.Pickem = globalThis.Pickem || {});

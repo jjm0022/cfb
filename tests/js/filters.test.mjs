@@ -159,6 +159,49 @@ test("pick changes are the history entries whose side or tier moved", () => {
   assert.deepEqual(plain(F.pickChanges([h("1", "home", "lean")])), []);
 });
 
+// The timeline as compact rows: [at, change kind or null] for an entry, ["gap", count, through] for hidden ones.
+const timeline = (history) => plain(F.timelineRows(history)).map((row) =>
+  row.type === "gap" ? ["gap", row.count, row.through] : [row.entry.at, row.change ? row.change.kind : null]);
+const rec = (at, side, tier) => ({ at, side, tier, edge: 0 });
+
+test("the timeline of no history is empty, and of one entry is that entry", () => {
+  assert.deepEqual(timeline([]), []);
+  assert.deepEqual(timeline(undefined), []);
+  assert.deepEqual(timeline([rec("1", "home", "lean")]), [["1", null]]);
+});
+
+test("a pick that never changed shows its first and latest entries around one gap", () => {
+  const history = ["1", "2", "3", "4", "5"].map((at) => rec(at, "home", "lean"));
+  assert.deepEqual(timeline(history), [["1", null], ["gap", 3, "4"], ["5", null]]);
+  assert.deepEqual(timeline(history.slice(0, 2)), [["1", null], ["2", null]]);  // nothing hidden
+});
+
+test("changes at the start, middle and end are shown once each, with gaps between", () => {
+  const history = [
+    rec("1", "away", "lean"), rec("2", "home", "lean"), rec("3", "home", "lean"), rec("4", "home", "lean"),
+    rec("5", "home", "strong"), rec("6", "home", "strong"), rec("7", "home", "strong"), rec("8", "away", "strong"),
+  ];
+  assert.deepEqual(timeline(history), [
+    ["1", null], ["2", "side"], ["gap", 2, "4"], ["5", "tier"], ["gap", 2, "7"], ["8", "side"],
+  ]);
+});
+
+test("consecutive changes have no gap row between them", () => {
+  const history = [
+    rec("1", "home", "lean"), rec("2", "home", "lean"), rec("3", "away", "lean"),
+    rec("4", "away", "strong"), rec("5", "away", "strong"), rec("6", "away", "strong"),
+  ];
+  assert.deepEqual(timeline(history), [
+    ["1", null], ["gap", 1, "2"], ["3", "side"], ["4", "tier"], ["gap", 1, "5"], ["6", null],
+  ]);
+});
+
+test("the timeline marks exactly the changes the chart marks", () => {
+  const history = [rec("1", "home", "lean"), rec("2", "away", "lean"), rec("3", "away", "lean"), rec("4", "away", "strong")];
+  const marked = plain(F.timelineRows(history)).filter((row) => row.change).map((row) => row.change.at);
+  assert.deepEqual(marked, plain(F.pickChanges(history)).map((c) => c.at));
+});
+
 test("a game is locked by its flag, or once its kickoff is at or before the viewer's clock", () => {
   const now = Date.parse("2026-10-10T16:00:00Z");
   assert.equal(F.isLocked({ locked: true, kickoff: "2026-10-11T16:00:00Z" }, now), true);

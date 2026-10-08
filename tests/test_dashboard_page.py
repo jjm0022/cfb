@@ -14,6 +14,7 @@ from dashboard_helpers import (
     rendered_dom,
     synthetic_season,
     this_week_fixture,
+    tw_at,
 )
 from results_helpers import assert_well_formed
 
@@ -257,6 +258,28 @@ def test_a_results_game_header_shows_both_logos(tmp_path):
 
 def tw_game(board: dict, game_id: str) -> dict:
     return next(g for g in board["games"] if g["id"] == game_id)
+
+
+def test_a_long_pick_timeline_folds_the_refreshes_that_changed_nothing(tmp_path):
+    board = this_week_fixture()
+
+    def rec(hours, side, tier):
+        return {"at": tw_at(hours), "side": side, "tier": tier, "edge": 1.0}
+
+    tw_game(board, TW_STRONG)["history"] = [
+        *(rec(h, "away", "lean") for h in range(80, 70, -1)),  # first, then 9 unchanged
+        *(rec(h, "home", "lean") for h in range(70, 45, -1)),  # side change, then 24 unchanged
+        rec(45, "home", "strong"), rec(44, "home", "strong"),  # tier change, then 1 unchanged
+        rec(43, "home", "strong"),  # latest
+    ]
+    dom = rendered_dom(this_week_page(tmp_path, this_week=board),
+                       f"tab=thisweek&game={TW_STRONG}", tmp_path)
+    [timeline] = re.findall(r'<ol class="timeline">(.*?)</ol>', dom, re.S)
+    assert timeline.count("<li") == 7  # first, gap, change, gap, change, gap, latest
+    assert timeline.count('class="changed"') == 2 and timeline.count('class="gap"') == 3
+    assert "unchanged through Thu, Oct 8, 2:00 PM ET (24 refreshes)" in timeline
+    assert "(9 refreshes)" in timeline and "(1 refresh)" in timeline
+    assert dom.count('class="mark-change"') == 2
 
 
 def test_a_game_past_kickoff_shows_locked_before_the_next_rebuild(tmp_path):

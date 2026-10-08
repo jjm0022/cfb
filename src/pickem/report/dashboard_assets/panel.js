@@ -34,10 +34,13 @@
 
   function timeline(g) {
     if (!g.history.length) return h("p", { class: "empty" }, "The model never covered this game.");
-    // The chart markers use the same rule, so both come from one place.
-    const changes = new Map(P.filters.pickChanges(g.history).map((c) => [c.to, c]));
-    return h("ol", { class: "timeline" }, g.history.map((r) => {
-      const change = changes.get(r);
+    // The changes come from the same rule as the chart markers; unchanged refreshes fold into one line.
+    return h("ol", { class: "timeline" }, P.filters.timelineRows(g.history).map((row) => {
+      if (row.type === "gap") {
+        return h("li", { class: "gap" },
+          `unchanged through ${fmt.time(row.through)} (${row.count} ${row.count === 1 ? "refresh" : "refreshes"})`);
+      }
+      const { entry: r, change } = row;
       return h("li", { class: change ? "changed" : null },
         `${fmt.time(r.at)} · ${fmt.team(g, r.side)} · ${TIER()[r.tier]} · edge ${fmt.signed(r.edge, 1)}`,
         change ? h("span", { class: "badge" }, change.kind === "side" ? "side changed" : "tier changed") : null);
