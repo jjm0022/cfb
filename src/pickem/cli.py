@@ -61,7 +61,13 @@ from pickem.ingest.cbs_fetch import (
 from pickem.ingest.cbs_fetch import open_session as open_cbs_session
 from pickem.ingest.cbs_html import parse_cbs_html
 from pickem.ingest.cbs_results import parse_cbs_results_html
-from pickem.ingest.cfbd_source import CfbdConfig, default_games_fetcher, load_cfb_games
+from pickem.ingest.cfbd_source import (
+    CfbdConfig,
+    default_games_fetcher,
+    fetch_fbs_teams,
+    load_cfb_games,
+)
+from pickem.ingest.logos import LOGO_DIR, cfb_sources, download_logos, fetch_logo, nfl_sources
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
 from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
 from pickem.models import HISTORY_REPORT, Game, Sport
@@ -1259,6 +1265,42 @@ def pending_results_week_cmd(
             )
         if week is not None:
             typer.echo(week)
+
+
+@app.command("fetch-logos")
+def fetch_logos_cmd(
+    season: int = typer.Option(None, help="Season whose FBS team list to use. Default: this year"),
+    dashboard_dir: Path = typer.Option(
+        None, help="Default: $PICKEM_DASHBOARD_DIR or ~/.local/share/pickem/dashboard"
+    ),
+) -> None:
+    """Download team logos into the dashboard folder once; logos already saved are kept."""
+    season = season or datetime.now(tz=UTC).year
+    target = (dashboard_dir or config.dashboard_dir()) / LOGO_DIR
+    with run_context("cli:fetch-logos", season=season, logo_dir=str(target)):
+        resolver = TeamResolver.default()
+        cfb, unmatched = cfb_sources(fetch_fbs_teams(CfbdConfig.from_env(), season), resolver)
+        outcome = download_logos(
+            [*cfb, *nfl_sources(resolver.team_ids(Sport.NFL))], target, fetch_logo
+        )
+        covered = {s.team_id for s in cfb}
+        missing = [t for t in resolver.team_ids(Sport.CFB) if t not in covered]
+        summary = (
+            f"saved {len(outcome.saved)}, kept {len(outcome.kept)}, failed {len(outcome.failed)}"
+        )
+        logger.bind(
+            event="logos_fetched", saved=len(outcome.saved), kept=len(outcome.kept),
+            failed=len(outcome.failed), unmatched=unmatched, cfb_without_logo=missing,
+        ).info(f"logos: {summary}")
+    typer.echo(summary)
+    if missing:
+        typer.echo("No logo (shown as a plain badge): " + ", ".join(missing))
+    if unmatched:
+        typer.echo("CFBD schools not in the alias table: " + ", ".join(unmatched))
+    for line in outcome.failed:
+        typer.secho(f"failed: {line}", fg="red", err=True)
+    if outcome.failed:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

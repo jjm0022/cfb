@@ -85,6 +85,11 @@ def _get(
     raise CfbdApiError(f"cfbd unreachable after {MAX_ATTEMPTS} attempts for {path}: {last_error}")
 
 
+def fetch_fbs_teams(config: CfbdConfig, season: int) -> list[dict]:
+    """Every FBS team CFBD lists for ``season``, with its logo addresses."""
+    return _get(config, "/teams/fbs", {"year": season})
+
+
 def default_games_fetcher(config: CfbdConfig) -> Fetcher:
     """Games for one week, restricted to FBS.
 

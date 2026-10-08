@@ -90,6 +90,10 @@ class TeamResolver:
             return team_id
         raise UnknownTeamError(self._error_message(name, sport, table))
 
+    def team_ids(self, sport: Sport) -> list[str]:
+        """Every canonical team id for ``sport``, sorted."""
+        return sorted(self._display_names.get(sport, {}))
+
     def display_name(self, team_id: str, sport: Sport) -> str:
         """Return a stable human-friendly name, falling back to the ID."""
         return self._display_names.get(sport, {}).get(team_id, team_id)
