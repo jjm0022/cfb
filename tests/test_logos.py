@@ -44,15 +44,23 @@ def test_a_cfbd_team_with_no_logos_is_skipped():
 
 
 def test_nfl_logos_use_espn_codes_with_washingtons_exception():
-    urls = {s.team_id: s.url for s in nfl_sources(["BUF", "WAS"])}
-    assert urls == {
-        "BUF": "https://a.espncdn.com/i/teamlogos/nfl/500/buf.png",
-        "WAS": "https://a.espncdn.com/i/teamlogos/nfl/500/wsh.png",
+    sources = nfl_sources(["BUF", "WAS"])
+    assert [(s.team_id, s.url, s.dark) for s in sources] == [
+        ("BUF", "https://a.espncdn.com/i/teamlogos/nfl/500/buf.png", False),
+        ("BUF", "https://a.espncdn.com/i/teamlogos/nfl/500-dark/buf.png", True),
+        ("WAS", "https://a.espncdn.com/i/teamlogos/nfl/500/wsh.png", False),
+        ("WAS", "https://a.espncdn.com/i/teamlogos/nfl/500-dark/wsh.png", True),
+    ]
+    assert [s.relative_path for s in sources[:2]] == ["nfl/BUF.png", "nfl/BUF-dark.png"]
+
+
+def test_every_nfl_team_has_a_light_and_a_dark_logo_source():
+    team_ids = TeamResolver.default().team_ids(Sport.NFL)
+    sources = nfl_sources(team_ids)
+    assert len(sources) == 64
+    assert {(s.team_id, s.dark) for s in sources} == {
+        (team, dark) for team in team_ids for dark in (False, True)
     }
-
-
-def test_every_nfl_team_has_a_logo_source():
-    assert len(nfl_sources(TeamResolver.default().team_ids(Sport.NFL))) == 32
 
 
 def test_download_saves_new_keeps_existing_and_reports_failures(tmp_path):
@@ -111,7 +119,8 @@ def test_fetch_logos_command_fills_the_dashboard_folder(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert (tmp_path / LOGO_DIR / "cfb" / "AF.png").exists()
     assert (tmp_path / LOGO_DIR / "nfl" / "WAS.png").exists()
-    assert "saved 34" in result.output  # AF light + dark, and 32 NFL teams
+    assert (tmp_path / LOGO_DIR / "nfl" / "WAS-dark.png").exists()
+    assert "saved 66" in result.output  # light + dark for AF and the 32 NFL teams
 
 
 def test_fetch_logos_exits_1_when_any_download_failed(tmp_path, monkeypatch):

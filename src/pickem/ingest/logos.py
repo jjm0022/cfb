@@ -1,7 +1,7 @@
 """Team logos for the dashboard, downloaded once and served beside the page.
 
-College logos come from CFBD's team list, which also has versions drawn for
-dark backgrounds. NFL logos come from ESPN's logo address. The page never
+College logos come from CFBD's team list, NFL logos from ESPN's logo
+address. Both also have versions drawn for dark backgrounds. The page never
 fetches a logo from outside: it only names files listed here as saved.
 """
 
@@ -19,7 +19,8 @@ from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 LOGO_DIR = "logos"
 CFBD_SIZE = "96"  # pixels; sharp at the page's 28-44px on a phone screen
-ESPN_NFL = "https://a.espncdn.com/i/teamlogos/nfl/500/{code}.png"
+ESPN_NFL = "https://a.espncdn.com/i/teamlogos/nfl/{folder}/{code}.png"
+ESPN_FOLDERS = ((False, "500"), (True, "500-dark"))  # (dark, folder)
 # Every other NFL id is ESPN's code in lower case.
 ESPN_CODES = {"WAS": "wsh"}
 PNG_SIGNATURE = b"\x89PNG"
@@ -66,12 +67,15 @@ def cfb_sources(
 
 
 def nfl_sources(team_ids: Iterable[str]) -> list[LogoSource]:
-    return [
-        LogoSource(
-            Sport.NFL, team_id, ESPN_NFL.format(code=ESPN_CODES.get(team_id, team_id.lower()))
-        )
-        for team_id in team_ids
-    ]
+    """Light and dark ESPN sources for each NFL team, both from the one code."""
+    sources: list[LogoSource] = []
+    for team_id in team_ids:
+        code = ESPN_CODES.get(team_id, team_id.lower())
+        for dark, folder in ESPN_FOLDERS:
+            sources.append(
+                LogoSource(Sport.NFL, team_id, ESPN_NFL.format(folder=folder, code=code), dark)
+            )
+    return sources
 
 
 def download_logos(

@@ -55,10 +55,12 @@ entrant's results.
 uv run pickem fetch-logos
 ```
 
-This saves college logos (including dark-mode versions, which the page swaps
-in when the device is in dark mode) from the college football data service,
-and NFL logos from ESPN, into `$PICKEM_DASHBOARD_DIR/logos/`. Running it
-again fills in any logos that are missing and keeps the ones already saved.
+This saves college logos from the college football data service, and NFL
+logos from ESPN, into `$PICKEM_DASHBOARD_DIR/logos/`. Both leagues come with
+dark-mode versions, which the page swaps in when the device is in dark mode.
+Running it again fills in any logos that are missing and keeps the ones
+already saved, so after an update that adds new logo files (such as the NFL
+dark versions) one more run fetches just those.
 
 It ends by listing the college teams it found no logo for. Those teams show a
 plain placeholder instead (a blank space beside the name in lists, a plain
