@@ -3,7 +3,7 @@
   "use strict";
   const { h } = P.ui;
   const F = P.filters;
-  const TAB_LABELS = { week: "Week", season: "Season", model: "Model", games: "Games" };
+  const TAB_LABELS = { thisweek: "This week", week: "Results", season: "Season", model: "Model", games: "Games" };
   const THEMES = ["auto", "light", "dark"];
   const THEME_KEY = "pickem-theme";
 
@@ -97,14 +97,19 @@
     return h("header", { class: "top" },
       h("div", { class: "title-row" },
         h("h1", null, `Pick'em ${data.season}`),
-        h("label", { class: "week-pick" }, h("span", { class: "sr" }, "Week"),
-          h("select", { onchange: (e) => app.set({ week: Number(e.target.value) }) },
-            data.standings.map((s) => h("option", { value: s.week, selected: s.week === state.week }, `Week ${s.week}`)))),
+        state.tab !== "thisweek" && data.standings.length
+          ? h("label", { class: "week-pick" }, h("span", { class: "sr" }, "Week"),
+            h("select", { onchange: (e) => app.set({ week: Number(e.target.value) }) },
+              data.standings.map((s) => h("option", { value: s.week, selected: s.week === state.week }, `Week ${s.week}`))))
+          : null,
         themeButton()),
+      h("p", { class: "updated" }, `Updated ${P.ui.fmt.time(data.generated_at)}`),
       h("div", { class: "filters" },
         segmented("Board", [["all", "Both"], ["cfb", "CFB"], ["nfl", "NFL"]], state.sport, (v) => app.set({ sport: v })),
         tierPicker(state),
-        segmented("Result", [["all", "All"], ["win", "Our wins"], ["loss", "Our losses"]], state.result, (v) => app.set({ result: v }))),
+        state.tab !== "thisweek"
+          ? segmented("Result", [["all", "All"], ["win", "Our wins"], ["loss", "Our losses"]], state.result, (v) => app.set({ result: v }))
+          : null),
       h("div", { class: "chips" }, F.chips(state).map((chip) => h("button", {
         class: "chip", type: "button", "aria-label": `Clear ${chip.label}`,
         onclick: () => app.set(F.clearFilter(state, chip.key)),
@@ -119,6 +124,11 @@
     return [P.ui.card(null, h("p", { class: "empty" }, "This tab is not available."))];
   }
 
+  function noResults() {
+    return [P.ui.card(null, h("p", { class: "empty" },
+      "No results imported yet. They appear after the first Tuesday results import."))];
+  }
+
   app.render = function () {
     const root = document.getElementById("app");
     const games = F.applyFilters(app.data.games, app.state);
@@ -126,7 +136,8 @@
       data: app.data, state: app.state, games,
       weekGames: games.filter((g) => g.week === app.state.week),
     };
-    const tab = P.tabs[app.state.tab] || notBuilt;
+    const needsResults = app.state.tab !== "thisweek" && !app.data.standings.length;
+    const tab = needsResults ? noResults : (P.tabs[app.state.tab] || notBuilt);
     const panel = P.panel ? P.panel(view) : null;
     const hadPanel = Boolean(root.querySelector(".panel"));
     root.replaceChildren(...[

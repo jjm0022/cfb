@@ -78,6 +78,38 @@
     pct(x, digits) { return P.stats.pct(x, digits); },
   };
 
-  P.ui = { h, s, card, LABELS, resultTag, fmt };
+  // The same badges the Discord messages use.
+  const TIER_BADGES = {
+    strong: "🔥 Strong", lean: "✅ Lean", slight: "🎯 Slight", coinflip: "🪙 Coinflip", no_market: "⚠️ No market",
+  };
+
+  function savedLogo(data, kind, sport, team) {
+    const list = data.logos && data.logos[kind] && data.logos[kind][sport];
+    return Boolean(list && list.includes(team));
+  }
+
+  // A saved logo (with its dark version when there is one), or a plain stand-in.
+  // Only files the page was told exist are named, so there is never a broken image.
+  function logo(data, sport, team, large) {
+    const size = large ? " logo-lg" : "";
+    if (!savedLogo(data, "light", sport, team)) {
+      return large
+        ? h("span", { class: "logo logo-lg logo-badge", "aria-hidden": "true" }, team)
+        : h("span", { class: "logo logo-none", "aria-hidden": "true" });
+    }
+    const src = (suffix) => `logos/${encodeURIComponent(sport)}/${encodeURIComponent(team)}${suffix}.png`;
+    const dark = savedLogo(data, "dark", sport, team);
+    return h("span", { class: "logo" + size, "aria-hidden": "true" },
+      h("img", { class: dark ? "logo-light" : null, src: src(""), alt: "", loading: "lazy" }),
+      dark ? h("img", { class: "logo-dark", src: src("-dark"), alt: "", loading: "lazy" }) : null);
+  }
+
+  function matchup(data, g) {
+    return h("span", { class: "matchup" },
+      logo(data, g.sport, g.away), h("span", null, g.away), h("span", { class: "at" }, "@"),
+      logo(data, g.sport, g.home), h("span", null, g.home));
+  }
+
+  P.ui = { h, s, card, LABELS, resultTag, fmt, logo, matchup, TIER_BADGES };
   P.tabs = P.tabs || {};
 })(globalThis.Pickem = globalThis.Pickem || {});

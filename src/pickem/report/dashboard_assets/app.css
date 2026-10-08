@@ -172,3 +172,31 @@ figcaption{color:var(--muted);font-size:13px;margin-bottom:6px}
 .badge{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;font-size:11.5px;
   background:var(--bad-bg);color:var(--bad)}
 #boot-error{white-space:pre-wrap;color:var(--bad);padding:16px}
+
+/* logos */
+.logo{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+  flex:none;vertical-align:middle}
+.logo img{width:100%;height:100%;object-fit:contain}
+.logo .logo-dark{display:none}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .logo .logo-light{display:none}
+  :root:not([data-theme="light"]) .logo .logo-dark{display:inline}
+}
+:root[data-theme="dark"] .logo .logo-light{display:none}
+:root[data-theme="dark"] .logo .logo-dark{display:inline}
+.logo-none{border-radius:50%;background:var(--push-bg)}
+.logo-lg{width:44px;height:44px}
+.logo-badge{border-radius:50%;background:var(--push-bg);color:var(--muted);font-size:12px;font-weight:600}
+.matchup{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.matchup .at{color:var(--muted)}
+
+/* this week */
+.updated{margin:4px 0 0;color:var(--muted);font-size:13px}
+.tw-pick{flex:none;text-align:right;white-space:nowrap}
+.tw-status{flex:none;display:inline-flex;align-items:center;gap:6px;min-width:3.5em;justify-content:flex-end}
+.tier-badge{font-weight:600}
+.lock{font-size:12.5px;color:var(--muted);white-space:nowrap}
+@media (max-width:520px){
+  .tw-row{flex-wrap:wrap}
+  .tw-row .grow{flex-basis:100%}
+}

@@ -105,3 +105,47 @@ test("the slight tier is a valid filter", () => {
   assert.deepEqual(state.tiers, ["lean", "slight"]);
   assert.equal(F.TIER_LABELS.slight, "Slight");
 });
+
+const thisWeek = {
+  pool_week: 6,
+  games: [
+    { id: "tw-cfb", sport: "cfb", model: { side: "home", tier: "strong", edge: 3, at: "" } },
+    { id: "tw-nfl", sport: "nfl", model: { side: "away", tier: "slight", edge: -0.5, at: "" } },
+    { id: "tw-none", sport: "nfl", model: null },
+  ],
+};
+
+test("this week is the first tab", () => {
+  assert.equal(F.TABS[0], "thisweek");
+});
+
+test("with results, the bare page still opens the results tab, so old links keep working", () => {
+  const withBoard = { ...data, this_week: thisWeek };
+  assert.equal(F.parseHash("", withBoard).tab, "week");
+  assert.equal(F.parseHash("#week=2", withBoard).tab, "week");
+  assert.equal(F.toHash(F.defaults(withBoard), withBoard), "");
+});
+
+test("before any results, the page opens on this week", () => {
+  const empty = { latest_week: null, standings: [], games: [], this_week: thisWeek };
+  assert.equal(F.parseHash("", empty).tab, "thisweek");
+  assert.equal(F.toHash(F.defaults(empty), empty), "");
+  assert.equal(F.toHash({ ...F.defaults(empty), tab: "season" }, empty), "#tab=season");
+});
+
+test("a this-week game id survives the address", () => {
+  const withBoard = { ...data, this_week: thisWeek };
+  const state = plain(F.parseHash("#tab=thisweek&game=tw-nfl", withBoard));
+  assert.equal(state.tab, "thisweek");
+  assert.equal(state.game, "tw-nfl");
+});
+
+test("this week's games follow the board and tier filters, not the result filter", () => {
+  const withBoard = { ...data, this_week: thisWeek };
+  const ids = (patch) => F.thisWeekGames(withBoard, { ...F.defaults(withBoard), ...patch }).map((g) => g.id);
+  assert.deepEqual(ids({}), ["tw-cfb", "tw-nfl", "tw-none"]);
+  assert.deepEqual(ids({ sport: "nfl" }), ["tw-nfl", "tw-none"]);
+  assert.deepEqual(ids({ tiers: ["slight", "none"] }), ["tw-nfl", "tw-none"]);
+  assert.deepEqual(ids({ result: "loss" }), ["tw-cfb", "tw-nfl", "tw-none"]);
+  assert.deepEqual(plain(F.thisWeekGames(data, F.defaults(data))), []);
+});

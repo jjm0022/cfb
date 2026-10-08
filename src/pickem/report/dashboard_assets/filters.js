@@ -1,7 +1,7 @@
 // Page state in the address, and which games each view counts.
 (function (P) {
   "use strict";
-  const TABS = ["week", "season", "model", "games"];
+  const TABS = ["thisweek", "week", "season", "model", "games"];
   const SPORTS = ["all", "cfb", "nfl"];
   const TIERS = ["strong", "lean", "slight", "coinflip", "no_market", "none"];
   const RESULTS = ["all", "win", "loss"];
@@ -11,7 +11,14 @@
   };
 
   function defaults(data) {
-    return { week: data.latest_week, tab: "week", sport: "all", tiers: [], result: "all", game: null };
+    return {
+      week: data.latest_week, tab: data.standings.length ? "week" : "thisweek",
+      sport: "all", tiers: [], result: "all", game: null,
+    };
+  }
+
+  function thisWeekList(data) {
+    return data.this_week ? data.this_week.games : [];
   }
 
   function parseHash(hash, data) {
@@ -25,14 +32,14 @@
     const tiers = (params.get("tier") || "").split(",");
     state.tiers = TIERS.filter((t) => tiers.includes(t));
     const id = params.get("game");
-    if (id && data.games.some((g) => g.id === id)) state.game = id;
+    if (id && (data.games.some((g) => g.id === id) || thisWeekList(data).some((g) => g.id === id))) state.game = id;
     return state;
   }
 
   function toHash(state, data) {
     const params = new URLSearchParams();
     if (state.week !== data.latest_week) params.set("week", String(state.week));
-    if (state.tab !== "week") params.set("tab", state.tab);
+    if (state.tab !== defaults(data).tab) params.set("tab", state.tab);
     if (state.sport !== "all") params.set("sport", state.sport);
     if (state.tiers.length) params.set("tier", state.tiers.join(","));
     if (state.result !== "all") params.set("result", state.result);
@@ -51,6 +58,13 @@
       (state.sport === "all" || g.sport === state.sport) &&
       (!state.tiers.length || state.tiers.includes(tierOf(g))) &&
       (state.result === "all" || g.results.us === state.result));
+  }
+
+  // This week's board takes the board and tier filters; no game on it has our result yet.
+  function thisWeekGames(data, state) {
+    return thisWeekList(data).filter((g) =>
+      (state.sport === "all" || g.sport === state.sport) &&
+      (!state.tiers.length || state.tiers.includes(tierOf(g))));
   }
 
   function confidentLosses(games) {
@@ -111,7 +125,7 @@
   }
 
   P.filters = {
-    TABS, TIERS, TIER_LABELS, defaults, parseHash, toHash, tierOf, applyFilters,
+    TABS, TIERS, TIER_LABELS, defaults, parseHash, toHash, tierOf, applyFilters, thisWeekGames,
     confidentLosses, gradedFor, search, sortGames, homeShare, chips, clearFilter,
   };
 })(globalThis.Pickem = globalThis.Pickem || {});

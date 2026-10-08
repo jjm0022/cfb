@@ -37,6 +37,7 @@ SCRIPTS = (
     "ui_core.js",
     "charts.js",
     "panel.js",
+    "tab_thisweek.js",
     "tab_week.js",
     "tab_season.js",
     "tab_model.js",

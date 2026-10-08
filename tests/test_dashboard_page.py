@@ -3,11 +3,13 @@ import re
 from dashboard_helpers import (
     BARE_GAME,
     GENERATED,
+    LOGOS_FIXTURE,
     MODEL_GAME,
     data_block,
     page_fixture,
     rendered_dom,
     synthetic_season,
+    this_week_fixture,
 )
 from results_helpers import assert_well_formed
 
@@ -151,3 +153,55 @@ def test_model_tab_with_no_games_says_so(tmp_path):
 def test_the_model_timeline_shows_the_date(tmp_path):
     dom = rendered_dom(page_fixture(tmp_path), f"game={MODEL_GAME}", tmp_path)
     assert "Sep 11, 6:00 AM ET" in dom  # 30 hours before a Saturday noon kickoff
+
+
+def this_week_page(tmp_path, report="fixture", **kwargs):
+    kwargs.setdefault("this_week", this_week_fixture())
+    kwargs.setdefault("logos", LOGOS_FIXTURE)
+    if report is None:
+        return page_fixture(tmp_path, None, season=2026, **kwargs)
+    return page_fixture(tmp_path, None if report == "fixture" else report, **kwargs)
+
+
+def test_this_week_lists_both_boards_in_kickoff_order(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), "tab=thisweek", tmp_path)
+    assert dom.count('class="row-button tw-row"') == 5
+    assert "CFB board" in dom and "NFL board" in dom
+    assert "Pool week 6" in dom
+    assert dom.count("🔒 Locked") == 1  # the final game shows its score instead
+    assert "17–24" in dom and 'class="res res-win"' in dom
+    assert "🔥 Strong" in dom and "🎯 Slight" in dom and "No model" in dom
+    order = [dom.index(f'aria-label="{m}"') for m in
+             ("AF @ ARMY", "PSU @ TEM", "OU @ MICH", "BUF @ MIA", "NE @ SEA")]
+    assert order == sorted(order)
+
+
+def test_this_week_draws_saved_logos_and_blanks_for_the_rest(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), "tab=thisweek", tmp_path)
+    assert 'src="logos/cfb/OU.png"' in dom and 'src="logos/cfb/OU-dark.png"' in dom
+    assert 'src="logos/nfl/BUF.png"' in dom
+    assert "logos/nfl/BUF-dark.png" not in dom
+    assert dom.count('class="logo logo-none"') == 7  # AF ARMY PSU TEM MIA NE SEA
+
+
+def test_this_week_follows_the_board_and_tier_filters(tmp_path):
+    page = this_week_page(tmp_path)
+    row = 'class="row-button tw-row"'
+    assert rendered_dom(page, "tab=thisweek&sport=nfl", tmp_path).count(row) == 2
+    assert rendered_dom(page, "tab=thisweek&tier=strong", tmp_path).count(row) == 2
+
+
+def test_this_week_without_a_board_says_so(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path, this_week=None), "tab=thisweek", tmp_path)
+    assert "No board is loaded yet." in dom
+
+
+def test_before_any_results_the_page_opens_on_this_week(tmp_path):
+    page = this_week_page(tmp_path, report=None)
+    assert rendered_dom(page, "", tmp_path).count('class="row-button tw-row"') == 5
+    assert "No results imported yet." in rendered_dom(page, "tab=season", tmp_path)
+
+
+def test_every_page_says_when_it_was_updated(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), "", tmp_path)
+    assert "Updated Tue, Sep 29, 9:00 AM ET" in dom  # GENERATED, in Eastern time
