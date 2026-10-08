@@ -94,7 +94,13 @@ from pickem.operations.recommendations import (
     poll_odds_snapshot,
 )
 from pickem.operations.results_import import ResultsImportError, import_results, league_week
-from pickem.report.publish import TRIGGER_MANUAL, TRIGGER_RESULTS, publish_dashboard
+from pickem.report.publish import (
+    TRIGGER_MANUAL,
+    TRIGGER_RESULTS,
+    Published,
+    log_write_failure,
+    publish_dashboard,
+)
 from pickem.report.results import ResultsReport, ResultsReportError, build_results_report
 from pickem.report.results_markdown import render_results_report
 from pickem.report.sheet import render_sheet
@@ -666,10 +672,16 @@ def publish_dashboard_cmd(
 ) -> None:
     """Rebuild the dashboard page from what is stored; exits 3 when it was not written."""
     with run_context("cli:publish-dashboard", db=str(db), trigger=trigger):
-        with _store(db) as store:
-            published = publish_dashboard(
-                store, dashboard_dir or config.dashboard_dir(), trigger=trigger
-            )
+        try:
+            store = _store(db)
+        except Exception as exc:  # e.g. the bot holds the database: a page failure, not an alert
+            log_write_failure(trigger, exc)
+            published = Published(None, str(exc))
+        else:
+            with store:
+                published = publish_dashboard(
+                    store, dashboard_dir or config.dashboard_dir(), trigger=trigger
+                )
     if published.path is None:
         typer.secho(f"dashboard not written: {published.error or 'no CBS board is stored yet'}",
                     fg="red", err=True)

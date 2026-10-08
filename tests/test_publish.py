@@ -121,3 +121,25 @@ def test_publish_dashboard_command_exits_3_when_not_written(tmp_path, monkeypatc
                                       "--dashboard-dir", str(tmp_path / "dash")])
     assert result.exit_code == 3
     assert "dashboard not written: render broke" in result.output
+
+
+def test_a_store_that_will_not_open_is_a_page_failure_not_a_run_failure(tmp_path, monkeypatch):
+    def held_by_the_bot(db):
+        raise OSError(f"Could not set lock on file {db}")
+
+    monkeypatch.setattr("pickem.cli._store", held_by_the_bot)
+    result = CliRunner().invoke(app, ["publish-dashboard", "--trigger", "week-start",
+                                      "--db", str(tmp_path / "pickem.duckdb"),
+                                      "--dashboard-dir", str(tmp_path / "dash")])
+    assert result.exit_code == 3, result.output
+    assert "dashboard not written: Could not set lock on file" in result.output
+    logger.complete()
+    rows = [json.loads(line) for line in
+            (tmp_path / "pickem-logs" / "pickem.jsonl").read_text().splitlines() if line.strip()]
+    assert not any(r["event"] == "run_failed" for r in rows)
+    [failed] = [r for r in rows if r["event"] == "dashboard_write_failed"]
+    assert failed["trigger"] == "week-start"
+    assert failed["error_type"] == "OSError"
+    assert "Traceback (most recent call last)" in failed["message"]
+    assert "in held_by_the_bot" in failed["message"]
+    assert any(r["event"] == "run_finished" for r in rows)
