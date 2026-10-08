@@ -64,8 +64,9 @@ dark versions) one more run fetches just those.
 
 It ends by listing the college teams it found no logo for. Those teams show a
 plain placeholder instead (a blank space beside the name in lists, a plain
-badge with the team's name in a game's detail panel), so nothing breaks.
-Rebuild the page afterwards (next section) so it starts using the new files.
+badge with the team's short code, such as "DAL", in a game's detail panel),
+so nothing breaks. Rebuild the page afterwards (see "Rebuild a page" below)
+so it starts using the new files.
 
 ## Link the page from Discord
 
@@ -127,10 +128,20 @@ sudo tailscale serve --set-path /pickem off
   viewing device (`tailscale status` on each).
 - `tailscale serve status` shows no `/pickem` entry: turn serving on again.
 - The page is stale: the "Updated" time at the top shows how old it is. A
-  failed rebuild is logged as `dashboard_write_failed`, with a `trigger` that
-  says which job tried: `bot`, `week-start`, `results` or `manual`. Check that
-  job's log (see `docs/runbooks/verifying-from-logs.md`), then rebuild the
-  page.
+  failed rebuild sends no DM; it is logged as `dashboard_write_failed` in the
+  logs in `~/LOGS/pickem/` (earlier days are in the `*.zip` archives there).
+  Each record has a `trigger` that says which job tried (`bot`, `week-start`,
+  `results` or `manual`) and the error's traceback. To list them:
+
+  ```
+  jq -r 'select(.event=="dashboard_write_failed") | "\(.ts)  \(.trigger)  \(.message)"' \
+    ~/LOGS/pickem/pickem.jsonl
+  ```
+
+  The week-start job also prints "Dashboard rebuild failed; the bot rebuilds
+  it on its next refresh." to its journal
+  (`journalctl --user -u pickem-board`). `docs/runbooks/verifying-from-logs.md`
+  has more ways to search the logs. Then rebuild the page.
 - Logos are missing (plain placeholders everywhere): run the logo download
   above, then rebuild the page.
 
