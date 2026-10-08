@@ -204,4 +204,6 @@ figcaption{color:var(--muted);font-size:13px;margin-bottom:6px}
 @media (max-width:520px){
   .tw-row{flex-wrap:wrap}
   .tw-row .grow{flex-basis:100%}
+  /* the pick takes the leftover width, so scores and locked marks end at the same right edge */
+  .tw-row .tw-pick{flex:1 1 auto;text-align:left}
 }
