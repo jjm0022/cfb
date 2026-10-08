@@ -102,8 +102,9 @@ the results tabs show as empty and "This week" still works.
 
 When `PICKEM_DASHBOARD_URL` is set, the status embed and the "Recommendations
 Updated" embed end with a "📊 Open this week's picks" link to
-`<PICKEM_DASHBOARD_URL>#tab=thisweek`. When it is not set, the messages are
-unchanged. Nothing else in either message changes. Other DMs are unchanged.
+`<PICKEM_DASHBOARD_URL>?v=<unix seconds>#tab=thisweek`. The `v` stamp makes
+each link new to the phone's browser, so it fetches the latest page instead of
+reusing a cached one. When it is not set, the messages are unchanged. Nothing else in either message changes. Other DMs are unchanged.
 
 ## When a rebuild fails
 
