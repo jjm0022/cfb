@@ -88,28 +88,36 @@
     return Boolean(list && list.includes(team));
   }
 
+  // With a pick side ("home" or "away"), the class that rings that team and fades the other.
+  function pickClass(pick, side) {
+    return pick ? (side === pick ? "picked" : "unpicked") : null;
+  }
+
   // A saved logo (with its dark version when there is one), or a plain stand-in.
   // Only files the page was told exist are named, so there is never a broken image.
-  function logo(data, sport, team, large) {
+  function logo(data, sport, team, large, extra) {
+    const more = (extra ? " " + extra : "");
     const size = large ? " logo-lg" : "";
     if (!savedLogo(data, "light", sport, team)) {
       return large
-        ? h("span", { class: "logo logo-lg logo-badge", "aria-hidden": "true" }, team)
-        : h("span", { class: "logo logo-none", "aria-hidden": "true" });
+        ? h("span", { class: "logo logo-lg logo-badge" + more, "aria-hidden": "true" }, team)
+        : h("span", { class: "logo logo-none" + more, "aria-hidden": "true" });
     }
     const src = (suffix) => `logos/${encodeURIComponent(sport)}/${encodeURIComponent(team)}${suffix}.png`;
     const dark = savedLogo(data, "dark", sport, team);
-    return h("span", { class: "logo" + size, "aria-hidden": "true" },
+    return h("span", { class: "logo" + size + more, "aria-hidden": "true" },
       h("img", { class: dark ? "logo-light" : null, src: src(""), alt: "", loading: "lazy" }),
       dark ? h("img", { class: "logo-dark", src: src("-dark"), alt: "", loading: "lazy" }) : null);
   }
 
-  function matchup(data, g) {
+  // `pick`, when given, is the side the model took; without it the matchup is drawn plain.
+  function matchup(data, g, pick) {
+    const away = pickClass(pick, "away"), home = pickClass(pick, "home");
     return h("span", { class: "matchup" },
-      logo(data, g.sport, g.away), h("span", null, g.away), h("span", { class: "at" }, "@"),
-      logo(data, g.sport, g.home), h("span", null, g.home));
+      logo(data, g.sport, g.away, false, away), h("span", { class: away }, g.away), h("span", { class: "at" }, "@"),
+      logo(data, g.sport, g.home, false, home), h("span", { class: home }, g.home));
   }
 
-  P.ui = { h, s, card, LABELS, resultTag, fmt, logo, matchup, TIER_BADGES };
+  P.ui = { h, s, card, LABELS, resultTag, fmt, logo, matchup, pickClass, TIER_BADGES };
   P.tabs = P.tabs || {};
 })(globalThis.Pickem = globalThis.Pickem || {});

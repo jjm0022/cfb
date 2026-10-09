@@ -186,7 +186,37 @@ def test_this_week_draws_saved_logos_and_blanks_for_the_rest(tmp_path):
     assert 'src="logos/cfb/OU.png"' in dom and 'src="logos/cfb/OU-dark.png"' in dom
     assert 'src="logos/nfl/BUF.png"' in dom
     assert "logos/nfl/BUF-dark.png" not in dom
-    assert dom.count('class="logo logo-none"') == 7  # AF ARMY PSU TEM MIA NE SEA
+    # AF ARMY PSU TEM MIA NE SEA; the picked and faded ones carry one more class
+    assert dom.count('class="logo logo-none') == 7
+
+
+def tw_row(dom: str, label: str) -> str:
+    """One This week row's markup, found by its matchup."""
+    return re.search(rf'<button class="row-button tw-row"[^>]*aria-label="{label}".*?</button>',
+                     dom, re.S).group(0)
+
+
+def test_this_week_rings_the_picked_team_and_fades_the_other(tmp_path):
+    page = this_week_page(tmp_path)
+    dom = rendered_dom(page, "tab=thisweek", tmp_path)
+    home_pick = tw_row(dom, "OU @ MICH")
+    assert '<span class="logo picked" aria-hidden="true"><img src="logos/cfb/MICH.png"' in home_pick
+    assert '<span class="picked">MICH</span>' in home_pick
+    assert ('<span class="logo unpicked" aria-hidden="true"><img class="logo-light" '
+            'src="logos/cfb/OU.png"') in home_pick
+    assert '<span class="unpicked">OU</span>' in home_pick
+    away_pick = tw_row(dom, "BUF @ MIA")  # MIA has no saved logo: its stand-in fades too
+    assert '<span class="logo picked" aria-hidden="true"><img src="logos/nfl/BUF.png"' in away_pick
+    assert '<span class="picked">BUF</span>' in away_pick
+    assert '<span class="logo logo-none unpicked"' in away_pick
+    assert '<span class="unpicked">MIA</span>' in away_pick
+    assert "picked" not in tw_row(dom, "NE @ SEA")  # no model pick, no highlight (nor "unpicked")
+    panel = rendered_dom(page, f"tab=thisweek&game={TW_SLIGHT}", tmp_path)
+    head = re.search(r'<div class="tw-head">.*?</div>', panel, re.S).group(0)
+    assert 'class="logo logo-lg picked"' in head  # BUF
+    assert 'class="logo logo-lg logo-badge unpicked"' in head  # MIA's stand-in
+    bare = rendered_dom(page, f"tab=thisweek&game={TW_NO_MODEL}", tmp_path)
+    assert "picked" not in re.search(r'<div class="tw-head">.*?</div>', bare, re.S).group(0)
 
 
 def test_this_week_follows_the_board_and_tier_filters(tmp_path):
@@ -222,7 +252,8 @@ def test_a_this_week_game_opens_with_lines_pick_and_chart(tmp_path):
     assert "How the pick changed this week" in dom and dom.count('class="changed"') == 2
     assert dom.count('class="mark-change"') == 2
     assert "Pick changed" in dom
-    assert dom.count('class="logo logo-lg"') == 2
+    assert dom.count('class="logo logo-lg picked"') == 1  # MICH, the pick
+    assert dom.count('class="logo logo-lg unpicked"') == 1  # OU
 
 
 def test_a_slight_pick_names_its_key_number(tmp_path):

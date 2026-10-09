@@ -23,7 +23,7 @@
       onclick: () => P.app.openGame(g.id),
     },
       h("span", { class: "grow" },
-        matchup(view.data, g), h("br"),
+        matchup(view.data, g, g.model && g.model.side), h("br"),
         h("span", { class: "muted" }, `${fmt.kickoff(g.kickoff)} · CBS ${fmt.homeLine(g, g.line)}`)),
       h("span", { class: "tw-pick" }, pick(g)),
       h("span", { class: "tw-status" }, status(g, view.now))));
@@ -56,9 +56,11 @@
       const fact = P.panel.fact;
       const m = g.model;
       const marks = F.pickChanges(g.history).map((c) => ({ at: c.at, label: changeLabel(g, c) }));
+      const ring = (side) => P.ui.pickClass(m && m.side, side);
       return [
         h("div", { class: "tw-head" },
-          P.ui.logo(data, g.sport, g.away, true), h("span", { class: "at" }, "@"), P.ui.logo(data, g.sport, g.home, true)),
+          P.ui.logo(data, g.sport, g.away, true, ring("away")), h("span", { class: "at" }, "@"),
+          P.ui.logo(data, g.sport, g.home, true, ring("home"))),
         h("p", { class: "muted" },
           `${LABELS.sport[g.sport]} · Week ${g.week} · ${fmt.kickoff(g.kickoff)}${F.isLocked(g, now) ? " · Locked" : ""}`),
         h("h3", null, "Lines now"),

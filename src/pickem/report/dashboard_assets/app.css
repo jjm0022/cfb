@@ -196,6 +196,11 @@ figcaption{color:var(--muted);font-size:13px;margin-bottom:6px}
 .matchup .at{color:var(--muted)}
 .tw-head{display:flex;align-items:center;gap:10px;margin:4px 0 2px}
 .tw-head .at{color:var(--muted)}
+/* the model's pick on This week: a ring and bold code for its team, the other team faded */
+.logo.picked{border-radius:50%;outline:2px solid var(--accent);outline-offset:2px}
+.matchup .logo.picked{margin:0 3px}
+.matchup span.picked{font-weight:700}
+.unpicked{opacity:.5}
 
 /* this week */
 .updated{margin:4px 0 0;color:var(--muted);font-size:13px}
