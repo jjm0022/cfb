@@ -11,6 +11,7 @@ from dashboard_helpers import (
     this_week_fixture,
 )
 
+from pickem.operations.recommendations import LIVE_THRESHOLDS
 from pickem.report.dashboard import NO_LOGOS, build_dashboard_data, render_dashboard
 from pickem.report.results import (
     BACKTEST_TIER_RATES,
@@ -118,6 +119,20 @@ def test_before_any_import_the_page_has_only_this_week():
     assert data["latest_week"] is None and data["entry"] is None
     assert data["standings"] == [] and data["games"] == [] and data["findings"] == {}
     assert len(data["this_week"]["games"]) == 5
+
+
+def test_the_live_tier_thresholds_ride_along_by_board():
+    # The chart's bands redraw the bot's tier rule, so they need its live settings.
+    expected = {
+        sport.value: {"strong": t.strong, "lean": t.lean, "slight": t.slight}
+        for sport, t in LIVE_THRESHOLDS.items()
+    }
+    with_report = build_dashboard_data(synthetic_season(), generated_at=GENERATED)
+    without = build_dashboard_data(None, generated_at=GENERATED, season=2026,
+                                   this_week=this_week_fixture())
+    assert with_report["thresholds"] == expected == without["thresholds"]
+    assert expected["nfl"]["slight"] is True and expected["cfb"]["slight"] is False
+    assert json.loads(json.dumps(without)) == without
 
 
 def test_a_page_with_no_report_needs_its_season():

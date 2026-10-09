@@ -215,3 +215,15 @@ test("on this week the result filter leaves no chip, since that tab ignores it",
   assert.deepEqual(plain(F.chips({ ...state, tab: "thisweek" })), [{ key: "sport", label: "NFL" }]);
   assert.deepEqual(plain(F.chips({ ...state, tab: "week" })).map((c) => c.key), ["sport", "result"]);
 });
+
+test("a spread chart runs to now while the pick can change, and to kickoff once it is locked", () => {
+  const now = Date.parse("2026-10-08T12:00:00Z");
+  const open = game({ kickoff: "2026-10-10T16:00:00Z", locked: false });
+  assert.equal(F.chartEnd(open, now), now);
+  assert.equal(F.chartEnd(game({ kickoff: "2026-10-10T16:00:00Z", locked: true }), now),
+    Date.parse("2026-10-10T16:00:00Z"));
+  assert.equal(F.chartEnd(game({ kickoff: "2026-10-08T11:00:00Z", locked: false }), now),
+    Date.parse("2026-10-08T11:00:00Z"));
+  // A Results game is final; the panel passes no clock.
+  assert.equal(F.chartEnd(game(), undefined), Date.parse("2026-09-05T16:00:00Z"));
+});

@@ -164,8 +164,14 @@
     return Boolean(g.locked) || Date.parse(g.kickoff) <= now;
   }
 
+  // Where a spread chart's time axis ends: now while the pick can still change, kickoff once it is
+  // locked. A Results game is final, and its panel passes no clock.
+  function chartEnd(g, now) {
+    return now === undefined || isLocked(g, now) ? Date.parse(g.kickoff) : now;
+  }
+
   P.filters = {
     TABS, TIERS, TIER_LABELS, defaults, parseHash, toHash, tierOf, applyFilters, thisWeekGames, pickChanges,
-    timelineRows, isLocked, confidentLosses, gradedFor, search, sortGames, homeShare, chips, clearFilter,
+    timelineRows, isLocked, chartEnd, confidentLosses, gradedFor, search, sortGames, homeShare, chips, clearFilter,
   };
 })(globalThis.Pickem = globalThis.Pickem || {});

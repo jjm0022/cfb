@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 
 from pickem.models import RecommendationRecord
+from pickem.operations.recommendations import LIVE_THRESHOLDS
 from pickem.report.results import (
     BACKTEST_TIER_RATES,
     BASELINES,
@@ -84,6 +85,11 @@ def build_dashboard_data(
         "analysis": None,
         "this_week": this_week,
         "logos": logos if logos is not None else NO_LOGOS,
+        # The bot's live tier settings, so the spread chart's bands follow the same rule.
+        "thresholds": {
+            sport.value: {"strong": t.strong, "lean": t.lean, "slight": t.slight}
+            for sport, t in LIVE_THRESHOLDS.items()
+        },
     }
 
 
