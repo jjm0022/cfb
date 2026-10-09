@@ -26,7 +26,10 @@
     app.render();
   };
 
-  app.openGame = (id) => app.set({ game: id }, { push: true });
+  // A game opened from another open game replaces its history step, so one
+  // Back (or the close button) closes the panel rather than walking back
+  // through every game viewed.
+  app.openGame = (id) => app.set({ game: id }, { push: !app.state.game });
 
   app.showList = function (title, games, strategy) {
     app.list = { title, games, strategy };
@@ -146,8 +149,13 @@
       h("main", { class: "tab" + (app.state.tab === "games" ? "" : " two"), id: "tab-" + app.state.tab }, tab(view)),
       panel,
     ].filter(Boolean));
-    document.body.classList.toggle("locked", Boolean(panel));
-    if (panel && !hadPanel) { const close = root.querySelector(".panel .close"); if (close) close.focus(); }
+    document.body.classList.toggle("panel-open", Boolean(panel));
+    if (panel && !hadPanel) {
+      // Opening the side panel narrows the page; keep the chosen row in sight.
+      const chosen = root.querySelector('main [aria-current="true"]');
+      if (chosen) chosen.scrollIntoView({ block: "nearest" });
+      const close = root.querySelector(".panel .close"); if (close) close.focus();
+    }
   };
 
   function boot() {

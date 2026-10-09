@@ -20,6 +20,7 @@
   function row(view, g) {
     return h("li", null, h("button", {
       class: "row-button tw-row", type: "button", "aria-label": `${g.away} @ ${g.home}`,
+      "aria-current": P.app.state.game === g.id ? "true" : null,
       onclick: () => P.app.openGame(g.id),
     },
       h("span", { class: "grow" },

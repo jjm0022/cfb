@@ -25,7 +25,6 @@
 html,body{overflow-x:hidden}
 body{margin:0;background:var(--bg);color:var(--ink);
   font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-body.locked{overflow:hidden}
 button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -181,10 +180,17 @@ figcaption{color:var(--muted);font-size:13px;margin-bottom:6px}
 .backdrop{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.35)}
 .panel{position:fixed;z-index:21;left:0;right:0;bottom:0;max-height:88vh;display:flex;
   flex-direction:column;background:var(--surface);border-radius:16px 16px 0 0;box-shadow:var(--shadow)}
+@media (max-width:899px){body.panel-open{overflow:hidden}}
 @media (min-width:900px){
-  .backdrop{background:rgba(0,0,0,.15)}
+  /* Beside the list the panel is not modal: no shade, the page keeps scrolling,
+     and the page makes room so no row hides under the panel. */
+  .backdrop{display:none}
+  body.panel-open{padding-right:440px}
   .panel{left:auto;top:0;width:440px;max-height:none;border-radius:0;border-left:1px solid var(--line)}
 }
+@media (min-width:900px) and (max-width:1239px){body.panel-open main.tab.two{grid-template-columns:1fr}}
+.row-button[aria-current="true"],.game-row[aria-current="true"]{
+  background:color-mix(in srgb,var(--accent) 14%,transparent);border-radius:8px}
 .panel-head{display:flex;align-items:center;gap:8px;padding:10px 12px 10px 16px;
   border-bottom:1px solid var(--line)}
 .panel-head h2{flex:1 1 auto;margin:0;font-size:17px}

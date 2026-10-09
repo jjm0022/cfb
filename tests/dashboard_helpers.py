@@ -209,13 +209,28 @@ def this_week_fixture() -> dict:
     ]}
 
 
-def rendered_dom(page: Path, fragment: str, tmp_path: Path) -> str:
+def clicked_dom(page: Path, fragment: str, tmp_path: Path, script: str, *,
+                width: int, height: int) -> str:
+    """``rendered_dom`` after ``script`` ran in a window of ``width`` x ``height``.
+
+    The script runs once the page has booted. It should click the way a person
+    does, on whatever sits topmost at a point, and leave what it saw in
+    ``data-`` attributes on the root element, which survive the dump.
+    """
+    scripted = tmp_path / "scripted.html"
+    scripted.write_text(page.read_text().replace(
+        "</body>", f"<script>setTimeout(() => {{ {script} }}, 0)</script></body>"))
+    return rendered_dom(scripted, fragment, tmp_path, window=f"{width},{height}")
+
+
+def rendered_dom(page: Path, fragment: str, tmp_path: Path, window: str | None = None) -> str:
     """The page's DOM after its scripts ran in headless Chrome, opened at ``#fragment``."""
     assert CHROME, "Google Chrome is required for the dashboard page tests"
     result = subprocess.run(
         [
             CHROME, "--headless=new", "--disable-gpu", "--no-first-run",
             "--no-default-browser-check", f"--user-data-dir={tmp_path / 'chrome-profile'}",
+            *([f"--window-size={window}"] if window else []),
             "--virtual-time-budget=3000", "--dump-dom", f"{page.as_uri()}#{fragment}",
         ],
         capture_output=True, text=True, timeout=90, check=False,

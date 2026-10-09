@@ -36,7 +36,7 @@
     const games = P.filters.confidentLosses(view.weekGames);
     const body = games.length
       ? h("ul", { class: "list" }, games.map((g) => h("li", null,
-          h("button", { class: "row-button", type: "button", onclick: () => P.app.openGame(g.id) },
+          h("button", { class: "row-button", type: "button", "aria-current": P.app.state.game === g.id ? "true" : null, onclick: () => P.app.openGame(g.id) },
             h("span", { class: "grow" }, fmt.sideLine(g, g.model.side),
               h("br"), h("span", { class: "muted" }, `Final ${g.away} ${g.away_score}–${g.home_score} ${g.home} · edge ${fmt.signed(g.model.edge, 1)}`)),
             resultTag("loss")))))

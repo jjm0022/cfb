@@ -7,7 +7,8 @@
   function shell(title, body) {
     return h("div", { class: "panel-wrap" },
       h("div", { class: "backdrop", onclick: () => P.app.closePanel() }),
-      h("aside", { class: "panel", role: "dialog", "aria-modal": "true", "aria-label": title },
+      h("aside", { class: "panel", role: "dialog", "aria-label": title,
+        "aria-modal": matchMedia("(max-width:899px)").matches ? "true" : null },
         h("div", { class: "panel-head" }, h("h2", null, title),
           h("button", { class: "close", type: "button", "aria-label": "Close", onclick: () => P.app.closePanel() }, "✕")),
         h("div", { class: "panel-body" }, body)));
@@ -15,7 +16,7 @@
 
   function gameButton(data, g, strategy) {
     const side = g.picks[strategy];
-    return h("button", { class: "row-button", type: "button", onclick: () => P.app.openGame(g.id) },
+    return h("button", { class: "row-button", type: "button", "aria-current": P.app.state.game === g.id ? "true" : null, onclick: () => P.app.openGame(g.id) },
       h("span", { class: "grow" },
         `W${g.week} · `, P.ui.matchup(data, g),
         h("br"),

@@ -9,6 +9,7 @@ from dashboard_helpers import (
     TW_NO_MODEL,
     TW_SLIGHT,
     TW_STRONG,
+    clicked_dom,
     data_block,
     page_fixture,
     rendered_dom,
@@ -254,6 +255,60 @@ def test_a_this_week_game_opens_with_lines_pick_and_chart(tmp_path):
     assert "Pick changed" in dom
     assert dom.count('class="logo logo-lg picked"') == 1  # MICH, the pick
     assert dom.count('class="logo logo-lg unpicked"') == 1  # OU
+
+
+CLICK_ROW = """
+  const seen = document.documentElement.dataset;
+  const title = () => (document.querySelector(".panel h2") || {}).textContent || "";
+  // Click like a mouse: on whatever is topmost at the row's centre.
+  const click = (label) => {
+    const row = document.querySelector(`.tw-row[aria-label="${label}"]`);
+    row.scrollIntoView({ block: "center" });
+    const box = row.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    const reached = Boolean(hit && hit.closest(".tw-row") === row);
+    if (hit) hit.click();
+    return String(reached);
+  };
+"""
+
+
+def test_on_a_computer_another_game_swaps_into_the_open_panel(tmp_path):
+    script = CLICK_ROW + """
+      const before = history.length;
+      seen.firstReached = click("OU @ MICH");
+      seen.first = title();
+      seen.secondReached = click("BUF @ MIA");
+      seen.second = title();
+      seen.current = (document.querySelector('[aria-current="true"]') || {}).ariaLabel || "";
+      seen.added = String(history.length - before);
+      Pickem.app.closePanel();
+      setTimeout(() => {
+        seen.closed = String(!document.querySelector(".panel"));
+        seen.hash = location.hash;
+      }, 300);
+    """
+    dom = clicked_dom(this_week_page(tmp_path), "tab=thisweek", tmp_path, script,
+                      width=1280, height=900)
+    assert 'data-first-reached="true"' in dom and 'data-first="OU @ MICH"' in dom
+    assert 'data-second-reached="true"' in dom  # the list is not covered by the panel's shade
+    assert 'data-second="BUF @ MIA"' in dom
+    assert 'data-current="BUF @ MIA"' in dom
+    assert 'data-added="1"' in dom  # one history step for the panel, not one per game
+    assert 'data-closed="true"' in dom and 'data-hash="#tab=thisweek"' in dom
+
+
+def test_on_a_phone_tapping_above_the_panel_still_closes_it(tmp_path):
+    script = """
+      const seen = document.documentElement.dataset;
+      const hit = document.elementFromPoint(195, 10);
+      seen.top = hit ? hit.className : "";
+      hit.click();
+      seen.closed = String(!document.querySelector(".panel"));
+    """
+    dom = clicked_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_STRONG}", tmp_path,
+                      script, width=390, height=844)
+    assert 'data-top="backdrop"' in dom and 'data-closed="true"' in dom
 
 
 def test_a_slight_pick_names_its_key_number(tmp_path):

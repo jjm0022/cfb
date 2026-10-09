@@ -23,7 +23,7 @@
     const share = F.homeShare(g);
     const disagreed = g.picks.us && g.picks.model && g.picks.us !== g.picks.model;
     return h("tr", {
-      class: "game-row", tabindex: 0, onclick: () => P.app.openGame(g.id),
+      class: "game-row", tabindex: 0, "aria-current": P.app.state.game === g.id ? "true" : null, onclick: () => P.app.openGame(g.id),
       onkeydown: (e) => { if (e.key === "Enter") P.app.openGame(g.id); },
     },
       h("td", null, g.week),
