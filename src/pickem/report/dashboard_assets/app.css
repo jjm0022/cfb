@@ -2,6 +2,7 @@
   --bg:#f4f6f3;--surface:#fff;--raised:#fbfcfb;--ink:#17211c;--muted:#5a675f;--line:#d9e0db;
   --accent:#2f7a55;--accent-ink:#fff;--median:#3b6fb6;--winner:#a8741f;--pin:#8a4fb4;
   --good:#2f7a55;--good-bg:#e1f1e8;--bad:#b4432f;--bad-bg:#f7e2dd;--push-bg:#ecefed;
+  --band-strong:#d3deec;--band-lean:#e3eaf4;--band-slight:#f0f4f9;
   --shadow:0 1px 2px rgba(20,30,25,.06),0 4px 16px rgba(20,30,25,.06);color-scheme:light;
 }
 @media (prefers-color-scheme: dark){
@@ -9,6 +10,7 @@
     --bg:#0f1512;--surface:#171f1b;--raised:#1c2521;--ink:#e3eae5;--muted:#97a59d;--line:#2b3631;
     --accent:#6cc497;--accent-ink:#0f1512;--median:#86aee8;--winner:#e0b25c;--pin:#c49be3;
     --good:#6cc497;--good-bg:#1d3a2b;--bad:#e7826d;--bad-bg:#43241d;--push-bg:#2a332f;
+    --band-strong:#2f3e52;--band-lean:#263241;--band-slight:#1e2731;
     --shadow:none;color-scheme:dark;
   }
 }
@@ -16,6 +18,7 @@
   --bg:#0f1512;--surface:#171f1b;--raised:#1c2521;--ink:#e3eae5;--muted:#97a59d;--line:#2b3631;
   --accent:#6cc497;--accent-ink:#0f1512;--median:#86aee8;--winner:#e0b25c;--pin:#c49be3;
   --good:#6cc497;--good-bg:#1d3a2b;--bad:#e7826d;--bad-bg:#43241d;--push-bg:#2a332f;
+  --band-strong:#2f3e52;--band-lean:#263241;--band-slight:#1e2731;
   --shadow:none;color-scheme:dark;
 }
 *{box-sizing:border-box}
@@ -145,6 +148,26 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .dot.s-us,.dot.s-median,.dot.s-winner,.dot.s-pinnacle{stroke:var(--surface)}
 /* the same colour as the timeline's "changed" badges, in round dots unlike the CBS line's dashes */
 .mark-change{stroke:var(--bad);stroke-width:2.5;stroke-dasharray:0 5;stroke-linecap:round}
+/* the spread chart: bands shaded by how strong the pick is there, labels sized for a phone */
+.spread-chart svg{max-width:520px}
+.spread-chart text{font-size:12px}
+.band{stroke:none}
+.band-strong{fill:var(--band-strong)}
+.band-lean{fill:var(--band-lean)}
+.band-slight{fill:var(--band-slight)}
+.band-coinflip{fill:none}
+.y-tick,.x-tick{fill:var(--muted)}
+.band-label{fill:var(--ink)}
+.cbs-label{fill:var(--muted);paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
+.plot-end{stroke:var(--surface);stroke-width:2}
+.day-grid{stroke:var(--line);stroke-width:1}
+.spread-chart .line.s-us{stroke-width:2.5}
+.spread-chart .line.s-pinnacle{stroke-width:1.5}
+.spread-chart .dot{stroke:none}
+.spread-chart .key{width:16px;height:0;border-radius:0;background:none;vertical-align:middle}
+.spread-chart .key.s-us{border-top:3px solid var(--accent)}
+.spread-chart .key.s-pinnacle{border-top:2px solid var(--pin)}
+.spread-chart .key.s-cbs{border-top:2px dashed var(--muted)}
 .hit{fill:transparent;cursor:pointer}
 .hit:focus-visible{outline:none;fill:var(--push-bg);fill-opacity:.6}
 .legend{list-style:none;display:flex;flex-wrap:wrap;gap:4px 14px;padding:0;margin:8px 0 0;

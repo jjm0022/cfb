@@ -291,6 +291,11 @@ def tw_game(board: dict, game_id: str) -> dict:
     return next(g for g in board["games"] if g["id"] == game_id)
 
 
+def svg_texts(dom: str, cls: str) -> list[str]:
+    """The text of every SVG label of one class, in drawing order."""
+    return re.findall(rf'<text class="{cls}"[^>]*>([^<]+)</text>', dom)
+
+
 def test_the_spread_chart_draws_the_more_favored_line_higher_and_says_so(tmp_path):
     board = this_week_fixture()
     tw_game(board, TW_STRONG)["lines"] = [
@@ -304,15 +309,65 @@ def test_the_spread_chart_draws_the_more_favored_line_higher_and_says_so(tmp_pat
         dom)
     cy = {spread: float(y) for y, spread in dots}
     assert cy["−7"] < cy["−3"]  # a smaller y is higher on the screen
-    # The span runs from the first line (35 hours out) to the last pick-change mark (6 hours out).
-    assert ("Spreads for MICH, Fri, Oct 9, 1:00 AM ET – Sat, Oct 10, 6:00 AM ET. "
-            "Higher on the chart means MICH more favored.") in dom
+    tick_y = {label: float(y) for y, label in re.findall(
+        r'<text class="y-tick"[^>]*\by="([\d.]+)"[^>]*>(MICH [^<]+)</text>', dom)}
+    assert tick_y["MICH −7"] < tick_y["MICH −3"]  # the axis runs the same way as the dots
+    assert ("US books vs the CBS line (MICH −3). Each band is the pick the model makes when "
+            "the US books line sits there.") in dom
+    assert "Pinnacle is shown for reference" not in dom  # no Pinnacle quotes in this game
+    # The axis runs from the first line (Fri 1 AM ET) to the last pick-change mark (Sat 6 AM ET).
+    assert svg_texts(dom, "x-tick") == ["Sat"]
 
 
 def test_a_chart_of_one_moment_says_when_it_was(tmp_path):
     dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_SLIGHT}", tmp_path)
-    assert ("Spreads for MIA at Sat, Oct 10, 9:00 AM ET. "
-            "Higher on the chart means MIA more favored.") in dom
+    assert "US books vs the CBS line (MIA −3.5)." in dom
+    assert svg_texts(dom, "x-tick") == ["Sat 9:00 AM"]
+
+
+def test_the_spread_chart_labels_its_axes_and_the_pick_at_every_level(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_STRONG}", tmp_path)
+    # CBS MICH −3 in CFB; the market ran from −4 to −6 and Pinnacle sat at −5.5.
+    ticks = svg_texts(dom, "y-tick")
+    assert ticks[0] == "MICH −6" and ticks[-1] == "MICH −0.5"  # every half point, favored on top
+    assert "MICH −3" in ticks and len(ticks) == 12
+    assert svg_texts(dom, "band-label") == [
+        "MICH strong", "MICH lean", "Coinflip", "OU lean", "OU strong"]
+    assert dom.count('class="band band-strong"') == 2 and dom.count('class="band band-lean"') == 2
+    assert 'class="band band-slight"' not in dom  # in CFB a half-point gap is a coinflip
+    assert svg_texts(dom, "cbs-label") == ["CBS line"]
+    assert dom.count('class="line s-us"') == 1 and dom.count('class="line s-pinnacle"') == 1
+    assert dom.count('class="dot s-pinnacle"') == 1
+    assert "Pinnacle is shown for reference; the model doesn't use it." in dom
+    legend = re.search(r'<ul class="legend">(.*?)</ul>', dom, re.S).group(1)
+    assert re.findall(r"</span>([^<]+)</li>", legend) == [
+        "US books", "Pinnacle (reference)", "CBS line (dashed)", "Pick changed (dotted)"]
+    # From Wed 3 AM ET, 81 hours before kickoff, to the last pick change, Sat 6 AM ET.
+    assert svg_texts(dom, "x-tick") == ["Thu", "Fri", "Sat"]
+
+
+def test_on_the_nfl_board_the_chart_shows_the_slight_bands(tmp_path):
+    dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_SLIGHT}", tmp_path)
+    assert svg_texts(dom, "band-label") == [
+        "MIA strong", "MIA lean", "MIA slight", "Coinflip", "BUF slight", "BUF lean", "BUF strong"]
+    assert dom.count('class="band band-slight"') == 2
+    assert "Pick changed" not in dom  # no marks, no legend entry
+
+
+def test_a_locked_games_chart_ends_at_kickoff(tmp_path):
+    # One quote at 6 AM ET; the game locked at its 8 AM ET kickoff.
+    dom = rendered_dom(this_week_page(tmp_path), f"tab=thisweek&game={TW_LOCKED}", tmp_path)
+    assert svg_texts(dom, "x-tick") == ["Sat 6:00 AM", "Sat 8:00 AM"]
+
+
+def test_a_results_game_gets_the_same_chart(tmp_path):
+    dom = rendered_dom(page_fixture(tmp_path), f"game={MODEL_GAME}", tmp_path)
+    # CBS TEM +24.5 in CFB, the market from +24.25 to +25.
+    assert svg_texts(dom, "band-label") == [
+        "TEM strong", "TEM lean", "Coinflip", "PSU lean", "PSU strong"]
+    assert "TEM +24.5" in svg_texts(dom, "y-tick")
+    assert dom.count('class="line s-pinnacle"') == 1
+    assert 'class="mark-change"' not in dom
 
 
 def test_a_long_pick_timeline_folds_the_refreshes_that_changed_nothing(tmp_path):

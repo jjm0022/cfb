@@ -65,7 +65,7 @@
       h("h3", null, "The model through the week"),
       timeline(g),
       h("h3", null, "Line movement"),
-      P.charts.lineMove(g),
+      P.charts.lineMove(g, { thresholds: data.thresholds[g.sport] }),
     ];
   }
 

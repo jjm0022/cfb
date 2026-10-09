@@ -81,7 +81,7 @@
         h("h3", null, "How the pick changed this week"),
         P.panel.timeline(g),
         h("h3", null, "Spread over time"),
-        P.charts.lineMove(g, marks),
+        P.charts.lineMove(g, { thresholds: data.thresholds[g.sport], marks, now }),
       ];
     },
   };
