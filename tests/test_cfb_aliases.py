@@ -99,3 +99,13 @@ def test_the_cbs_st_abbreviation_resolves(resolver, cbs_spelling, expected):
     missing spelling costs a week rather than a row.
     """
     assert resolver.resolve(cbs_spelling, Sport.CFB) == expected
+
+
+def test_cbs_results_ind_is_indiana_in_college_and_the_colts_in_the_nfl(resolver):
+    """CBS's week-6 2026 results page wrote Indiana as `IND` (`IND@NEB`).
+
+    Its pick sheet had used `IU`, so the board loaded and the results import
+    then rejected the whole week. `IND` stays the Colts on the NFL board.
+    """
+    assert resolver.resolve("IND", Sport.CFB) == "IU"
+    assert resolver.resolve("IND", Sport.NFL) == "IND"
