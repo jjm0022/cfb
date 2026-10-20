@@ -112,6 +112,30 @@ class MarketLinesResult(BaseModel):
     snapshot_at: datetime | None = None
 
 
+class PollTrigger(StrEnum):
+    """Why a live odds pull ran. The budget and the logs read it."""
+
+    WEEK_START = "week_start"
+    MIDWEEK = "midweek"
+    KICKOFF = "kickoff"
+    MANUAL = "manual"
+    CLI = "cli"
+
+
+class OddsPull(BaseModel):
+    """One live odds pull, or one the budget skipped. Append-only."""
+
+    pulled_at: datetime
+    sport: Sport
+    season: int
+    week: int
+    trigger: PollTrigger
+    offset_hours: float | None = None
+    games_requested: int
+    games_returned: int
+    skipped: bool = False
+
+
 class Edge(BaseModel):
     """The output of the strategy for a single game.
 

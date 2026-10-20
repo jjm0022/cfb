@@ -103,3 +103,18 @@ CREATE TABLE IF NOT EXISTS recommendation_history (
     source       VARCHAR NOT NULL,
     PRIMARY KEY (game_id, generated_at, source)
 );
+
+-- APPEND-ONLY. One row per live odds pull, or per pull the budget skipped.
+-- SportsGameOdds bills per game returned and props shares the account, so
+-- pick'em counts its own use here (operations/odds_budget.py).
+CREATE TABLE IF NOT EXISTS odds_pulls (
+    pulled_at        TIMESTAMPTZ NOT NULL,
+    sport            VARCHAR NOT NULL,
+    season           INTEGER NOT NULL,
+    week             INTEGER NOT NULL,
+    trigger          VARCHAR NOT NULL,
+    offset_hours     DOUBLE,
+    games_requested  INTEGER NOT NULL,
+    games_returned   INTEGER NOT NULL,
+    skipped          BOOLEAN NOT NULL
+);

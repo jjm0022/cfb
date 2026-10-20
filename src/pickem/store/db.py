@@ -22,6 +22,7 @@ from pickem.models import (
     Game,
     LeagueLine,
     MarketLine,
+    OddsPull,
     PoolPick,
     PoolResult,
     RecommendationRecord,
@@ -207,6 +208,36 @@ class Store:
         rows = [(x.game_id, x.source, x.book, x.spread_home, x.total, x.captured_at) for x in lines]
         # INSERT OR IGNORE, never REPLACE: an existing snapshot is history.
         self._executemany("INSERT OR IGNORE INTO lines VALUES (?, ?, ?, ?, ?, ?)", rows)
+
+    def record_odds_pull(self, pull: OddsPull) -> None:
+        self._con.execute(
+            "INSERT INTO odds_pulls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                pull.pulled_at,
+                pull.sport.value,
+                pull.season,
+                pull.week,
+                pull.trigger.value,
+                pull.offset_hours,
+                pull.games_requested,
+                pull.games_returned,
+                pull.skipped,
+            ],
+        )
+
+    def odds_games_used(self, since: datetime) -> int:
+        """Games SportsGameOdds billed pick'em for after ``since``."""
+        (total,) = self._con.execute(
+            "SELECT COALESCE(SUM(games_returned), 0) FROM odds_pulls WHERE pulled_at > ?",
+            [since],
+        ).fetchone()
+        return int(total)
+
+    def odds_skips_since(self, since: datetime) -> int:
+        (count,) = self._con.execute(
+            "SELECT COUNT(*) FROM odds_pulls WHERE skipped AND pulled_at > ?", [since]
+        ).fetchone()
+        return int(count)
 
     def completed_archive_request_ids(self, request_ids: Sequence[str]) -> set[str]:
         if not request_ids:
