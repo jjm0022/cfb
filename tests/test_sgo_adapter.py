@@ -249,3 +249,39 @@ def test_account_usage_reads_the_monthly_block():
 
 def test_unreadable_account_usage_is_none():
     assert _client(lambda _request: httpx.Response(500)).account_usage() is None
+
+
+def test_a_real_nfl_event_parses_and_matches_the_team_id_rule():
+    payload = json.loads((FIXTURES / "sgo_nfl_event.json").read_text())
+    (event,) = payload["data"]
+    game = Game(
+        game_id=make_game_id(Sport.NFL, 2026, 7, "NE", "CHI"),
+        sport=Sport.NFL,
+        season=2026,
+        week=7,
+        kickoff_utc=datetime(2026, 10, 23, 0, 15, tzinfo=UTC),
+        home_team_id="CHI",
+        away_team_id="NE",
+    )
+    now = datetime(2026, 10, 22, 23, 15, tzinfo=UTC)
+
+    pull = _client(_serve(payload)).fetch_spreads(
+        resolver=RESOLVER,
+        sport=Sport.NFL,
+        season=2026,
+        week=7,
+        now=now,
+        slate=[game.game_id],
+        window=(now, now + timedelta(days=7)),
+        games=[game],
+    )
+
+    assert event["teams"]["home"]["teamID"] == sgo_team_id("CHI", Sport.NFL, RESOLVER)
+    assert event["teams"]["away"]["teamID"] == sgo_team_id("NE", Sport.NFL, RESOLVER)
+    expected = {
+        book: float(quote["spread"])
+        for book, quote in event["odds"]["points-home-game-sp-home"]["byBookmaker"].items()
+        if quote.get("available")
+    }
+    assert expected, "the capture should have at least one open book"
+    assert {line.book: line.spread_home for line in pull.result.lines} == expected
