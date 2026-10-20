@@ -79,6 +79,11 @@ SUBMISSION_SOURCE = "oddsapi:submit"
 # sharp-book comparison. Kept out of the consensus until that comparison
 # says otherwise.
 PINNACLE_SOURCE = "oddsapi:pinnacle"
+# Live spreads from SportsGameOdds, since The Odds API key was deactivated on
+# 2026-10-20. Every reader of "the live market" accepts both labels, so weeks
+# polled before the switch still render.
+SGO_SOURCE = "sportsgameodds"
+LIVE_SOURCES = frozenset({LIVE_SOURCE, SGO_SOURCE})
 
 
 class MarketLine(BaseModel):

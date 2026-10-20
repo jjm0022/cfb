@@ -61,6 +61,7 @@ BACKOFF_SECONDS = 0.5
 
 __all__ = [
     "FROZEN_SOURCE",
+    "KeyRejected",
     "LIVE_SOURCE",
     "SUBMISSION_SOURCE",
     "OddsApiError",
@@ -329,6 +330,13 @@ class OddsApiError(RuntimeError):
 
 class QuotaExhausted(OddsApiError):
     """The API key is out of credits or unauthorized."""
+
+
+class KeyRejected(OddsApiError):
+    """The provider refused the key itself: cancelled, deactivated or mistyped.
+
+    Distinct from QuotaExhausted so an alert says what actually needs fixing.
+    """
 
 
 class OddsClient:
