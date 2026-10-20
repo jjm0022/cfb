@@ -76,8 +76,7 @@ listed. SGO specifics handled before that:
 - `captured_at` is the poll time, as today.
 
 **Requested games with no event.** Each requested game that comes back without
-an event is listed in `skipped` ("no SportsGameOdds event for <game id>; team
-ids X, Y") and so shows as `NO_MARKET`, exactly like a game a feed had no line
+an event is listed in `skipped` ("<game id>: no SportsGameOdds lines (team ids X, Y)") and so shows as `NO_MARKET`, exactly like a game a feed had no line
 for today. A wrong team id costs nothing: it matches no event.
 
 **Team ids.** SGO ids look like `ALABAMA_NCAAF` and `KANSAS_CITY_CHIEFS_NFL`.
@@ -85,11 +84,11 @@ Rule: take the team's first spelling in `aliases.yaml`, fold accents to ASCII,
 drop apostrophes, replace every other run of non-alphanumerics with `_`,
 uppercase, and append `_NCAAF` or `_NFL`. A small override table (in the same
 module) covers exceptions. Checked offline against props' saved responses:
-the rule reproduces 81 of the 82 FBS ids seen there; the miss (Hawaiʻi) is
-fixed by dropping apostrophes rather than turning them into `_`. Unverified ids
-(56 FBS teams, all 32 NFL) show up at the first Tuesday pull that includes them,
-as a "no SportsGameOdds event" skip, days before kickoff; the fix is an
-override entry.
+the rule reproduces 81 of the 82 FBS ids seen there (Hawai'i included, because
+apostrophes are dropped); the one miss is Miami (FL), which SGO calls
+`MIAMI_NCAAF`, so it starts as the first override. Unverified ids (55 FBS
+teams, all 32 NFL) show up at the first pull that includes them, as a "no
+SportsGameOdds lines" skip, days before kickoff; the fix is an override entry.
 
 **Errors.** Transport errors and 5xx retry with the existing policy. 401/403
 raise a new `KeyRejected(OddsApiError)` whose message says the key was
@@ -108,8 +107,9 @@ report SGO rows as ungraded, like any other in-season poll; a test pins that.
 
 `poll_odds_snapshot` gains two arguments:
 
-- `game_ids`: which slate games to request. Default: every slate game whose
-  kickoff is still in the future and inside the window. Started games are never
+- `kickoffs`: for a kickoff poll, the kickoffs it covers. Requested games are
+  the slate games whose kickoff is still in the future, inside the window, and
+  (when `kickoffs` is given) at one of those kickoffs. Started games are never
   requested (they would return in-play odds and cost objects).
 - `trigger`: `week_start`, `midweek`, `kickoff`, `manual` or `cli`, plus the
   kickoff offset for kickoff polls. Used for the budget and the logs.
@@ -154,7 +154,7 @@ picks.
 Settings (`games_per_30_days: 800`, `protected_offsets_hours: [2, 1]`) live in
 one module read by both the bot and the CLI.
 
-Every pull logs `odds_polled` with games requested, returned, and the 30-day
+Every pull logs `odds_usage` with games requested, returned, and the 30-day
 total. The week-start run also reads SGO's `/account/usage` once and logs the
 account-wide figure (`odds_account_usage`), for visibility only.
 
