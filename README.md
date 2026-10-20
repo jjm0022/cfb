@@ -23,12 +23,13 @@ You type the sides and the tiebreaker into CBS yourself.
 |---|---|
 | Python | 3.12 or newer (`.python-version` pins 3.12) |
 | Package manager | [uv](https://docs.astral.sh/uv/) — the project uses `uv.lock` and the `uv_build` backend |
-| Odds API key | [the-odds-api.com](https://the-odds-api.com) — live market spreads. Free tier is enough for weekly use (2 credits per poll: US books, then Pinnacle) |
+| SportsGameOdds API key | [sportsgameodds.com](https://sportsgameodds.com) — live market spreads. The free plan bills per game; pick'em keeps to 800 a month (`docs/runbooks/odds-source.md`) |
+| Odds API key | [the-odds-api.com](https://the-odds-api.com) — only for the historical archive the backtest reads |
 | CFBD API key | [collegefootballdata.com](https://collegefootballdata.com) — college schedules and final scores |
 | Discord bot token | Optional, only for the reminder bot |
 
 Everything is local: the database is a single DuckDB file, and no service other
-than the two data APIs is contacted.
+than the data APIs above is contacted.
 
 ## Install
 
@@ -50,7 +51,8 @@ Create `.env` in the project root. It is gitignored, and real environment
 variables always win over it.
 
 ```dotenv
-ODDS_API_KEY=your-odds-api-key
+SPORTSGAMEODDS_API_KEY=your-sportsgameodds-api-key
+ODDS_API_KEY=your-odds-api-key   # backtest archive only
 CFBD_API_KEY=your-cfbd-api-key
 
 # Only if you run the Discord bot:

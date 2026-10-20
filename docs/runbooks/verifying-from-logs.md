@@ -220,7 +220,7 @@ from pathlib import Path
 import os
 import zipfile
 
-names = ("ODDS_API_KEY", "CFBD_API_KEY", "DISCORD_BOT_TOKEN")
+names = ("ODDS_API_KEY", "SPORTSGAMEODDS_API_KEY", "CFBD_API_KEY", "DISCORD_BOT_TOKEN")
 log_dir = Path(os.environ.get("PICKEM_LOG_DIR", Path.home() / "LOGS" / "pickem"))
 files = [p for p in log_dir.glob("*") if p.suffix in {".log", ".jsonl", ".zip"}]
 if not files:

@@ -51,11 +51,12 @@ DISCORD_BOT_TOKEN=paste-the-token-here
 DISCORD_OWNER_ID=123456789012345678
 ```
 
-The bot's refresh path needs the existing Odds API credential. Add it if it is
-not already present in the file:
+The bot's refresh path needs the SportsGameOdds credential
+(`docs/runbooks/odds-source.md`). Add it if it is not already present in the
+file:
 
 ```dotenv
-ODDS_API_KEY=paste-the-odds-api-key-here
+SPORTSGAMEODDS_API_KEY=paste-the-sportsgameodds-api-key-here
 ```
 
 The CFBD credential is used by separate CFBD ingest/result commands, not by

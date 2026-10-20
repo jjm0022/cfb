@@ -19,6 +19,8 @@ Split out of `HANDOFF.md` on 2026-09-09; content unchanged.
   Line movement is the signal; overwriting destroys it. Because a bad row can
   never be cleaned up, nothing writes to it without knowing the game id is
   right — hence the odds `window` and `slate`.
+  One exception, forced by SGO's terms: if that account ends, its rows
+  (`source = 'sportsgameodds'`) must be deleted within 30 days.
 - **`upsert_games` never blind-replaces.** Scores COALESCE, so a source that
   does not carry them cannot erase what `sync-results` wrote. `ingest-cbs` uses
   `insert_games_if_absent`, because the CBS paste has a placeholder kickoff and
@@ -85,13 +87,17 @@ Split out of `HANDOFF.md` on 2026-09-09; content unchanged.
   last while the other end took a median, manufacturing and erasing edges
   silently. A regression test pins this: books at -1.0/-3.0/-9.0 against a
   -3.0 submission line is a COINFLIP, not a 6-point STRONG edge.
-- **Pinnacle is recorded, never used.** Each live poll also asks for Pinnacle
-  alone (one more credit) and stores it as `oddsapi:pinnacle`.
-  `generate_recommendations` drops that source before the consensus, so the
-  market line stays the US books' median. A 2026-09-24 spike over 2021–2025
-  found no US book sharper than that median; Pinnacle is being collected so
-  the same comparison can include it. Using it needs that comparison first,
-  and a fallback for the college games Pinnacle does not price.
+- **Live odds come from SportsGameOdds, and cost is per game.** Since
+  2026-10-21 the live market is SGO (`source = "sportsgameodds"`); the Odds API
+  client remains only for the historical archive. SGO bills per game returned,
+  so a poll asks only for unstarted slate games, by team id, and a kickoff poll
+  only for its own kickoffs. Pick'em keeps to 800 games per 30 days
+  (`operations/odds_budget.py`); the 2-hour and 1-hour kickoff polls always run.
+  See `docs/runbooks/odds-source.md`.
+- **Pinnacle is no longer recorded.** It was polled 2026-09-25 to 2026-10-19
+  as `oddsapi:pinnacle`; SGO's free plan has no Pinnacle. A 91-game replay found
+  Pinnacle-only picks no better than the US median (47–44 against 49–42; the
+  picks differed on 4 games). Stored rows stay and never enter the consensus.
 - **Proxies are classified by `source`, never by book name.** Both carry real
   bookmaker keys. `oddsapi:frozen` and `oddsapi:submit` are the two proxies;
   anything else — an in-season `oddsapi` poll, an `nflverse` closer — lands in

@@ -54,6 +54,11 @@ src/pickem/ingest/odds.py         OddsClient.fetch_spreads (live) and
                                   `window` and a `slate` of game ids.
                                   QuotaExhausted is distinct from feed errors.
                                   Retries transport/5xx. Context manager.
+
+- [ ] **Step 2: Update the invariants**
+
+In `docs/invariants.md`, replace the bullet that begins `- **Pinnacle is recorded, never used.**` with:
+
 src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
                                   Wilson score intervals. Pure; no I/O.
 src/pickem/backtest/snapshots.py  Pure planner: a stored schedule becomes the

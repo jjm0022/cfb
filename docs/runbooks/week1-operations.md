@@ -82,8 +82,9 @@ verified.
 
 After the rehearsal succeeds, repeat the saved-page ingest and polling against
 the live path. `ingest-cbs --html` reads the saved HTML and stores CBS frozen
-league lines; it does not fetch CBS. `poll-odds` reads the live Odds API and
-appends market history, so confirm the API key and quota before starting.
+league lines; it does not fetch CBS. `poll-odds` reads live SportsGameOdds
+spreads and appends market history, so confirm the API key and pick'em's
+share (`docs/runbooks/odds-source.md`) before starting.
 
 ```bash
 uv run pickem ingest-cbs \
