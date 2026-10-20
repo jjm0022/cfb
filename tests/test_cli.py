@@ -9,7 +9,10 @@ from typer.testing import CliRunner
 
 from pickem.backtest.archive import ArchiveRunInterrupted
 from pickem.cli import app
-from pickem.models import Sport
+from pickem.ingest.odds import KeyRejected
+from pickem.ingest.sgo import SgoClient
+from pickem.models import MarketLinesResult, PollTrigger, Sport
+from pickem.operations.odds_budget import OddsBudgetSkipped
 
 runner = CliRunner()
 
@@ -1155,7 +1158,6 @@ def test_backfill_history_forwards_the_probe_cap_and_prints_execution_balances(
     # already-completed/pending ledger state after the paid probe.
     from datetime import UTC, datetime
 
-    from pickem.models import MarketLinesResult
 
     db = tmp_path / "t.duckdb"
     _seed_two_slots(db)
@@ -1267,3 +1269,72 @@ def test_backfill_history_translates_interruption_to_exit_one(tmp_path, monkeypa
     )
     assert result.exit_code == 1
     assert "stopped at snapshot 2/3" in result.output
+
+
+def _invoke_poll_odds(tmp_path, *extra):
+    db = tmp_path / "poll.duckdb"
+    db.touch()
+    return runner.invoke(
+        app,
+        ["poll-odds", "--sport", "nfl", "--season", "2026", "--week", "7", "--db", str(db), *extra],
+    )
+
+
+def _record_poll(monkeypatch):
+    calls: list[dict] = []
+
+    def fake(*_args, **kwargs):
+        calls.append(kwargs)
+        return MarketLinesResult(lines=[], skipped=[])
+
+    monkeypatch.setattr("pickem.cli.poll_odds_snapshot", fake)
+    return calls
+
+
+def test_poll_odds_pulls_from_sportsgameodds_with_its_trigger(tmp_path, monkeypatch):
+    calls = _record_poll(monkeypatch)
+
+    result = _invoke_poll_odds(tmp_path, "--trigger", "week_start")
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["trigger"] is PollTrigger.WEEK_START
+    assert calls[0]["client_factory"] is SgoClient
+
+
+def test_poll_odds_defaults_to_the_cli_trigger(tmp_path, monkeypatch):
+    calls = _record_poll(monkeypatch)
+
+    _invoke_poll_odds(tmp_path)
+
+    assert calls[0]["trigger"] is PollTrigger.CLI
+
+
+def _raise(error):
+    def fake(*_args, **_kwargs):
+        raise error
+
+    return fake
+
+
+def test_poll_odds_says_the_key_was_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "pickem.cli.poll_odds_snapshot",
+        _raise(KeyRejected("SportsGameOdds rejected the API key (HTTP 401)")),
+    )
+
+    result = _invoke_poll_odds(tmp_path)
+
+    assert result.exit_code == 1
+    assert "key rejected" in result.output
+
+
+def test_poll_odds_exits_three_when_the_budget_skips_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "pickem.cli.poll_odds_snapshot",
+        _raise(OddsBudgetSkipped("Skipped a cli odds pull", notify=True)),
+    )
+
+    result = _invoke_poll_odds(tmp_path)
+
+    assert result.exit_code == 3
+    assert "Skipped a cli odds pull" in result.output

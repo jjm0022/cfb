@@ -14,7 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from pickem import cli
-from pickem.ingest.odds import OddsClient
+from pickem.ingest.sgo import SgoClient
 from pickem.models import Sport
 from pickem.store.db import Store
 
@@ -24,32 +24,29 @@ PASTE = "Buffalo Bills at Miami Dolphins -3.0\nDallas Cowboys at New York Jets +
 
 
 def _event(home, away, kickoff, home_point):
+    """One SportsGameOdds event: the home spread, as each book quotes it."""
     return {
-        "id": f"{away}-at-{home}",
-        "commence_time": kickoff.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "home_team": home,
-        "away_team": away,
-        "bookmakers": [
-            {
-                "key": book,
-                "markets": [
-                    {
-                        "key": "spreads",
-                        "outcomes": [
-                            {"name": home, "point": home_point + offset},
-                            {"name": away, "point": -(home_point + offset)},
-                        ],
-                    }
-                ],
+        "eventID": f"{away}-at-{home}",
+        "teams": {"home": {"names": {"long": home}}, "away": {"names": {"long": away}}},
+        "status": {"startsAt": kickoff.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")},
+        "odds": {
+            "points-home-game-sp-home": {
+                "byBookmaker": {
+                    book: {"spread": f"{home_point + offset:+g}", "available": True}
+                    for book, offset in (("fanduel", 0.0), ("draftkings", 0.5))
+                }
             }
-            for book, offset in (("pinnacle", 0.0), ("draftkings", 0.5))
-        ],
+        },
     }
 
 
 @pytest.fixture
-def payload():
-    soon = datetime.now(tz=UTC) + timedelta(days=2)
+def soon():
+    return datetime.now(tz=UTC) + timedelta(days=2)
+
+
+@pytest.fixture
+def payload(soon):
     later = datetime.now(tz=UTC) + timedelta(days=40)
     return [
         # On our sheet: the market has moved three points toward Miami.
@@ -65,13 +62,26 @@ def payload():
 
 @pytest.fixture
 def fake_odds(monkeypatch, payload):
-    monkeypatch.setenv("ODDS_API_KEY", "test-key")
+    monkeypatch.setenv("SPORTSGAMEODDS_API_KEY", "test-key")
 
     def build(api_key, **kwargs):
-        transport = httpx.MockTransport(lambda _r: httpx.Response(200, json=payload))
-        return OddsClient(api_key, transport=transport, sleep=lambda _s: None)
+        transport = httpx.MockTransport(
+            lambda _r: httpx.Response(200, json={"success": True, "data": payload})
+        )
+        return SgoClient(api_key, transport=transport, sleep=lambda _s: None)
 
-    monkeypatch.setattr(cli, "OddsClient", build)
+    monkeypatch.setattr(cli, "SgoClient", build)
+
+
+def _schedule(db, kickoff):
+    """Give the pasted games their kickoff, as the HTML board the weekly job reads does.
+
+    A paste carries no kickoff times, so each game is stamped with the paste
+    time, and a poll only asks SportsGameOdds for games not yet started.
+    """
+    with Store(db) as store:
+        games = store.load_week(Sport.NFL, 2025, 3).games
+        store.upsert_games([game.model_copy(update={"kickoff_utc": kickoff}) for game in games])
 
 
 def _run(*args):
@@ -80,7 +90,7 @@ def _run(*args):
     return result
 
 
-def test_paste_to_pick_sheet(tmp_path, fake_odds):
+def test_paste_to_pick_sheet(tmp_path, fake_odds, soon):
     db = tmp_path / "e2e.duckdb"
     paste = tmp_path / "week3.txt"
     paste.write_text(PASTE)
@@ -88,6 +98,7 @@ def test_paste_to_pick_sheet(tmp_path, fake_odds):
 
     ingest = _run("ingest-cbs", "--file", str(paste), *week)
     assert "ingested 2 games" in ingest.stdout
+    _schedule(db, soon)
 
     poll = _run("poll-odds", *week)
     assert "appended 4 market lines" in poll.stdout
@@ -130,13 +141,14 @@ def test_paste_to_pick_sheet(tmp_path, fake_odds):
         assert {row[3] for row in picks} <= {"home", "away"}
 
 
-def test_a_second_poll_appends_history_rather_than_overwriting(tmp_path, fake_odds):
+def test_a_second_poll_appends_history_rather_than_overwriting(tmp_path, fake_odds, soon):
     db = tmp_path / "e2e.duckdb"
     paste = tmp_path / "week3.txt"
     paste.write_text(PASTE)
     week = ["--sport", "nfl", "--season", "2025", "--week", "3", "--db", str(db)]
 
     _run("ingest-cbs", "--file", str(paste), *week)
+    _schedule(db, soon)
     _run("poll-odds", *week)
     _run("poll-odds", *week)
 

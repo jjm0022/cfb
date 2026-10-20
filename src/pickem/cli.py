@@ -68,10 +68,12 @@ from pickem.ingest.cfbd_source import (
 )
 from pickem.ingest.logos import LOGO_DIR, cfb_sources, download_logos, fetch_logo, nfl_sources
 from pickem.ingest.nflverse import load_nfl_closing_lines, load_nfl_games
-from pickem.ingest.odds import OddsApiError, OddsClient, QuotaExhausted
-from pickem.models import HISTORY_REPORT, Game, Sport
+from pickem.ingest.odds import KeyRejected, OddsApiError, OddsClient, QuotaExhausted
+from pickem.ingest.sgo import SgoClient
+from pickem.models import HISTORY_REPORT, Game, PollTrigger, Sport
 from pickem.notify.discord_dm import build_message_embed, build_results_embed, send_owner_dm
 from pickem.obs.log import configure_logging, run_context
+from pickem.operations.odds_budget import OddsBudgetSkipped
 from pickem.operations.pick_check import (
     Outcome,
     compare_picks,
@@ -192,6 +194,11 @@ def poll_odds(
     week: int = typer.Option(...),
     db: Path = typer.Option(config.DEFAULT_DB),
     days: int = typer.Option(7, help="Kickoff window ahead of now that this week occupies"),
+    trigger: PollTrigger = typer.Option(
+        PollTrigger.CLI,
+        help="Why this pull runs, for the SportsGameOdds budget: week_start from the "
+        "Tuesday job, cli otherwise",
+    ),
 ) -> None:
     """Append a market snapshot for the active week."""
     with run_context(
@@ -203,8 +210,6 @@ def poll_odds(
 
         now = datetime.now(tz=UTC)
         try:
-            # Keep the existing CLI-level OddsClient seam so offline CLI tests and
-            # callers that provide a transport continue to work after extraction.
             result = poll_odds_snapshot(
                 db,
                 sport,
@@ -212,8 +217,12 @@ def poll_odds(
                 week,
                 now,
                 days=days,
-                client_factory=OddsClient,
+                trigger=trigger,
+                client_factory=SgoClient,
             )
+        except OddsBudgetSkipped as exc:
+            typer.secho(str(exc), fg="yellow", err=True)
+            raise typer.Exit(code=3) from exc
         except RecommendationDatabaseMissing:
             # The existence check above preserves the original user-facing path;
             # this also protects the race where the file disappears between checks.
@@ -229,6 +238,9 @@ def poll_odds(
                 err=True,
             )
             raise typer.Exit(code=2) from exc
+        except KeyRejected as exc:
+            typer.secho(f"odds key rejected: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
         except OddsApiError as exc:
             typer.secho(f"odds feed unavailable: {exc}", fg="red", err=True)
             raise typer.Exit(code=1) from exc

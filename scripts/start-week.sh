@@ -167,7 +167,7 @@ for sport in "${sports[@]}"; do
     loaded+=("$sport week $week")
     printf 'Polling %s %s week %s odds over the next %s days\n' "$sport" "$season" "$week" "$days"
     if ! uv run pickem poll-odds --sport "$sport" --season "$season" --week "$week" \
-        --days "$days" --db "$database"; then
+        --days "$days" --trigger week_start --db "$database"; then
         failed+=("$sport week $week (poll)")
     fi
 done

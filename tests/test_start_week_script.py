@@ -71,7 +71,7 @@ def _ingest(page: Path, sport: str, week: int, db: Path) -> str:
 def _poll(sport: str, week: int, db: Path, days: int = 11) -> str:
     return (
         f"run pickem poll-odds --sport {sport} --season 2026 --week {week} "
-        f"--days {days} --db {db}"
+        f"--days {days} --trigger week_start --db {db}"
     )
 
 
