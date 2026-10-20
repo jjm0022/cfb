@@ -5,10 +5,12 @@ schedule:
   refresh:
     days: [wed, thu, fri, sat, sun, mon]
     time: "10:00"
-  # Polls anchored to each kickoff, on top of the daily refresh above. One
-  # poll covers every game in the sport, so cost scales with distinct
-  # instants, not games: roughly 60 polls per pool week at these offsets,
-  # each costing 2 credits (US books, then Pinnacle alone).
+    # SportsGameOdds bills per game, so only Thursday's refresh pulls odds;
+    # the other days re-decide from stored lines (docs/runbooks/odds-source.md).
+    odds_days: [thu]
+  # Polls anchored to each kickoff, on top of the daily refresh above. Each poll
+  # fetches only the games kicking off then, so cost is per game: about 495 a
+  # month at these offsets, of pick'em's 800.
   kickoff_polls:
     offsets_hours: [12, 6, 2, 1]
     plan_every_hours: 6

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +45,7 @@ from pickem.models import (
     Edge,
     Game,
     LeagueLine,
+    PollTrigger,
     RecommendationRecord,
     Side,
     Sport,
@@ -2571,3 +2572,128 @@ async def test_a_failed_rebuild_is_logged_with_its_traceback(settings, records, 
     (failed,) = [r for r in records if r["extra"].get("event") == "dashboard_write_failed"]
     trace = logged_traceback(failed)
     assert "in locked_build" in trace and "RuntimeError: Could not set lock on file" in trace
+
+
+class KwargsMonitor:
+    def __init__(self, snapshot=None):
+        self.seen: list[dict] = []
+        self.snapshot = snapshot
+
+    async def refresh(self, **kwargs):
+        self.seen.append(kwargs)
+        return RefreshResult(changed=False, snapshot=self.snapshot)
+
+
+@pytest.mark.asyncio
+async def test_a_kickoff_poll_asks_only_for_its_own_kickoffs(settings):
+    add_pick_scope(settings, Sport.NFL)
+    monitor = KwargsMonitor()
+    bot = PickemBot(settings, monitor, scheduler=FakeScheduler())
+    kickoffs = (datetime(2026, 9, 13, 17, tzinfo=UTC), datetime(2026, 9, 13, 20, tzinfo=UTC))
+    instant = replace(_instant(13, 16), kickoffs=kickoffs)
+
+    await bot._run_kickoff_poll(NFL_SCOPE, instant)
+
+    (kwargs,) = monitor.seen
+    assert kwargs["kickoffs"] == kickoffs
+    assert kwargs["trigger"] is PollTrigger.KICKOFF
+    assert kwargs["offset_hours"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_the_daily_refresh_pulls_odds_only_on_odds_days(settings, monkeypatch):
+    add_pick_scope(settings, Sport.NFL)
+    monitor = KwargsMonitor()
+    bot = PickemBot(replace(settings, odds_days=("thu",)), monitor, scheduler=FakeScheduler())
+
+    monkeypatch.setattr("pickem.discord_bot._weekday", lambda _tz: "wed")
+    await bot._scheduled_refresh()
+    monkeypatch.setattr("pickem.discord_bot._weekday", lambda _tz: "thu")
+    await bot._scheduled_refresh()
+
+    assert [kwargs.get("pull_odds", True) for kwargs in monitor.seen] == [False, True]
+    assert monitor.seen[1]["trigger"] is PollTrigger.MIDWEEK
+
+
+@pytest.mark.asyncio
+async def test_a_budget_notice_is_sent_to_the_owner(settings):
+    add_pick_scope(settings, Sport.NFL)
+    snapshot = RecommendationSnapshot(
+        Sport.NFL, 2026, 1, datetime(2026, 9, 10, tzinfo=UTC), (),
+        odds_notice="Skipped a midweek odds pull",
+    )
+    bot = PickemBot(settings, KwargsMonitor(snapshot), scheduler=FakeScheduler())
+    sent: list[str | None] = []
+
+    async def record(message=None, *, embed=None):
+        sent.append(message)
+
+    bot._send_owner_dm = record
+
+    await bot._refresh_scopes()
+
+    assert sent == ["Skipped a midweek odds pull"]
+
+
+def test_settings_read_the_odds_days(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_OWNER_ID", "123")
+    config_path = tmp_path / "discord-bot.yaml"
+    config_path.write_text(
+        "database: pickem.duckdb\n"
+        "timezone: America/New_York\n"
+        "schedule:\n"
+        "  refresh:\n"
+        "    days: [wed, thu, fri]\n"
+        "    time: '10:00'\n"
+        "    odds_days: [thu]\n"
+    )
+
+    settings = DiscordSettings.from_env(config_path=config_path)
+
+    assert settings.odds_days == ("thu",)
+
+
+def test_odds_days_default_to_the_refresh_days(settings):
+    assert settings.odds_days == ("wed", "thu", "fri", "sat", "sun", "mon")
+
+
+def test_an_unknown_odds_day_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_OWNER_ID", "123")
+    config_path = tmp_path / "discord-bot.yaml"
+    config_path.write_text(
+        "database: pickem.duckdb\n"
+        "timezone: America/New_York\n"
+        "schedule:\n"
+        "  refresh:\n"
+        "    days: [wed]\n"
+        "    time: '10:00'\n"
+        "    odds_days: [thursday]\n"
+    )
+
+    with pytest.raises(RuntimeError, match="odds_days"):
+        DiscordSettings.from_env(config_path=config_path)
+
+
+@pytest.mark.asyncio
+async def test_a_budget_notice_that_cannot_be_sent_is_logged_not_raised(settings, records):
+    add_pick_scope(settings, Sport.NFL)
+    snapshot = RecommendationSnapshot(
+        Sport.NFL, 2026, 1, datetime(2026, 9, 10, tzinfo=UTC), (),
+        odds_notice="Skipped a midweek odds pull",
+    )
+    bot = PickemBot(settings, KwargsMonitor(snapshot), scheduler=FakeScheduler())
+
+    async def fail(message=None, *, embed=None):
+        raise RuntimeError("discord is down")
+
+    bot._send_owner_dm = fail
+
+    results = await bot._refresh_scopes()
+
+    assert len(results) == 1
+    assert any(
+        r["extra"].get("event") == "owner_dm_failed" and r["extra"].get("purpose") == "odds_budget"
+        for r in records
+    )

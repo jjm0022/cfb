@@ -33,7 +33,7 @@ from pickem.automation.poll_plan import PollInstant, plan_polls
 from pickem.ingest.cbs_entry import parse_entry_picks
 from pickem.ingest.cbs_fetch import fetch_board_html as fetch_cbs_board_html
 from pickem.ingest.cbs_fetch import open_session as open_cbs_session
-from pickem.models import HISTORY_MONITOR, Game, Side, Sport, Tier
+from pickem.models import HISTORY_MONITOR, Game, PollTrigger, Side, Sport, Tier
 from pickem.notify.discord_dm import build_message_embed
 from pickem.obs.log import configure_logging, run_context
 from pickem.operations.pick_check import (
@@ -58,6 +58,7 @@ PRIVATE_MESSAGE = "This bot is private."
 # refresh. A fixed wall-clock time cannot be close to kickoff for a slate that
 # runs twelve hours; these are anchored to the kickoffs themselves.
 DEFAULT_POLL_OFFSETS_HOURS = (12.0, 6.0, 2.0, 1.0)
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 # The whole CBS read, Chrome start and shutdown included. Only the page load
 # has its own timeout; a Chrome wedged at start or stop would otherwise hold
 # the CBS lock and silence every later check.
@@ -78,6 +79,9 @@ class DiscordSettings:
     refresh_days: str = "wed-sun,mon"
     refresh_hour: int = 10
     refresh_minute: int = 0
+    # Days the daily refresh pulls odds; the other days re-decide from stored
+    # lines. SportsGameOdds bills per game, so the config pulls only Thursday.
+    odds_days: tuple[str, ...] = DAYS
     poll_offsets_hours: tuple[float, ...] = DEFAULT_POLL_OFFSETS_HOURS
     poll_plan_every_hours: int = DEFAULT_POLL_PLAN_EVERY_HOURS
     poll_horizon_days: int = DEFAULT_POLL_HORIZON_DAYS
@@ -92,6 +96,9 @@ class DiscordSettings:
             schedule = raw["schedule"]
             refresh_hour, refresh_minute = _parse_time(schedule["refresh"]["time"])
             refresh_days = ",".join(schedule["refresh"]["days"])
+            odds_days = _parse_days(
+                schedule["refresh"].get("odds_days", schedule["refresh"]["days"])
+            )
             timezone = ZoneInfo(raw["timezone"])
             # Optional: a config file written before kickoff-anchored polling
             # existed must still start the bot.
@@ -115,6 +122,7 @@ class DiscordSettings:
             refresh_days=refresh_days,
             refresh_hour=refresh_hour,
             refresh_minute=refresh_minute,
+            odds_days=odds_days,
             poll_offsets_hours=offsets,
             poll_plan_every_hours=plan_every,
             poll_horizon_days=horizon_days,
@@ -133,6 +141,21 @@ def _parse_offsets(values: object) -> tuple[float, ...]:
     if any(offset <= 0 for offset in offsets):
         raise ValueError(f"offsets_hours must all be positive, got {offsets}")
     return offsets
+
+
+def _parse_days(values: object) -> tuple[str, ...]:
+    if isinstance(values, str) or not isinstance(values, Sequence):
+        raise ValueError(f"odds_days must be a list, got {values!r}")
+    days = tuple(str(value).lower() for value in values)
+    unknown = [day for day in days if day not in DAYS]
+    if unknown:
+        raise ValueError(f"odds_days has unknown days {unknown}; use {', '.join(DAYS)}")
+    return days
+
+
+def _weekday(timezone: ZoneInfo) -> str:
+    """Today's three-letter day in ``timezone``; a seam so tests can pick the day."""
+    return DAYS[datetime.now(timezone).weekday()]
 
 def _parse_time(value: str) -> tuple[int, int]:
     hour, minute = (int(part) for part in value.split(":", maxsplit=1))
@@ -1015,6 +1038,7 @@ class PickemBot(commands.Bot):
         *,
         sport: Sport | None = None,
         window_start: datetime | None = None,
+        **poll: Any,
     ) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
         # Automation only ever acts on games that have not kicked off: a locked
         # pick cannot be changed, so re-deciding it is noise and notifying on
@@ -1024,6 +1048,7 @@ class PickemBot(commands.Bot):
         # keywords keeps working.
         if window_start is not None:
             refresh_kwargs["window_start"] = window_start
+        refresh_kwargs.update(poll)
         async with self._refresh_lock:
             scopes = self._resolve_scopes(season, week, sport=sport)
             results: list[tuple[MonitorScope, RefreshResult]] = []
@@ -1045,7 +1070,24 @@ class PickemBot(commands.Bot):
         # Every refresh, changed or not: the spreads moved even when no pick did.
         # Not awaited: the page must never hold up the reply or DM that follows.
         self._request_dashboard_rebuild()
+        # A pull the budget skipped is news once per 30 days; the snapshot says when.
+        for _scope, result in results:
+            notice = getattr(result.snapshot, "odds_notice", None)
+            if notice:
+                await self._dm_odds_notice(notice)
         return tuple(results)
+
+    async def _dm_odds_notice(self, notice: str) -> None:
+        """Tell the owner a pull was skipped. Never raises: the refresh already ran."""
+        try:
+            await self._send_owner_dm(notice)
+        except Exception as error:
+            logger.bind(
+                event="owner_dm_failed",
+                purpose="odds_budget",
+                error_type=type(error).__name__,
+                error_detail=str(error),
+            ).error(f"odds budget DM failed: {error}")
 
     def _request_dashboard_rebuild(self) -> None:
         """Ask for the page to be rebuilt in the background, never two builds at once.
@@ -1077,7 +1119,10 @@ class PickemBot(commands.Bot):
             log_write_failure(TRIGGER_BOT, error, _scheduled_error_detail(self.settings, error))
 
     async def _scheduled_refresh(self) -> tuple[tuple[MonitorScope, RefreshResult], ...]:
-        return await self._refresh_scopes()
+        # SportsGameOdds bills per game: only the configured days pull odds.
+        if _weekday(self.settings.timezone) in self.settings.odds_days:
+            return await self._refresh_scopes(trigger=PollTrigger.MIDWEEK)
+        return await self._refresh_scopes(pull_odds=False)
 
     def _plan_kickoff_polls(self, now: datetime | None = None) -> tuple[str, ...]:
         """Re-derive the poll schedule from the kickoffs currently stored.
@@ -1122,6 +1167,9 @@ class PickemBot(commands.Bot):
                 scope.week,
                 sport=scope.sport,
                 window_start=instant.at,
+                kickoffs=instant.covered_kickoffs,
+                trigger=PollTrigger.KICKOFF,
+                offset_hours=instant.offset_hours,
             )
             # The last poll is the model's final word before the pick locks,
             # so that is when CBS is compared against it.
