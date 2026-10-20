@@ -4,16 +4,18 @@ Pure: no I/O, no clock of its own, no scheduler. The caller supplies the
 kickoffs and ``now``; what comes back is the schedule it should register.
 
 A fixed wall-clock refresh cannot be close to kickoff for a slate that runs
-twelve hours, so polls are anchored to each kickoff instead. Cost scales with
-the number of distinct *instants*, not games: one poll returns every game in
-the sport, so games sharing a kickoff share their polls, and an instant two
-kickoff slots both ask for is charged once.
+twelve hours, so polls are anchored to each kickoff instead.
+
+SportsGameOdds bills per game, so a poll fetches only the games whose kickoff
+asked for it. Games sharing a kickoff share their polls, and an instant two
+kickoff slots both ask for is one poll that covers both slots' games.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 DEFAULT_HORIZON = timedelta(days=10)
@@ -26,6 +28,13 @@ class PollInstant:
     at: datetime
     offset_hours: float
     kickoff_utc: datetime
+    # Every kickoff that asked for this instant; the poll fetches only their
+    # games. Left out of equality so plans still compare by when and why.
+    kickoffs: tuple[datetime, ...] = field(default=(), compare=False)
+
+    @property
+    def covered_kickoffs(self) -> tuple[datetime, ...]:
+        return self.kickoffs or (self.kickoff_utc,)
 
 
 def plan_polls(
@@ -61,10 +70,20 @@ def plan_polls(
     )
 
     chosen: dict[datetime, PollInstant] = {}
+    askers: dict[datetime, set[datetime]] = defaultdict(set)
     for instant in candidates:
         if instant.at > now:
             chosen.setdefault(instant.at, instant)
-    return tuple(sorted(chosen.values(), key=lambda instant: instant.at))
+            askers[instant.at].add(instant.kickoff_utc)
+    return tuple(
+        sorted(
+            (
+                replace(instant, kickoffs=tuple(sorted(askers[instant.at])))
+                for instant in chosen.values()
+            ),
+            key=lambda instant: instant.at,
+        )
+    )
 
 
 __all__ = ["DEFAULT_HORIZON", "PollInstant", "plan_polls"]

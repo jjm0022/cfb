@@ -99,3 +99,27 @@ def test_plan_accepts_fractional_offsets():
             kickoff_utc=kickoff,
         ),
     )
+
+
+def test_each_instant_names_the_kickoffs_it_polls():
+    kickoff = at(13, 17)
+
+    plan = plan_polls([kickoff, kickoff], offsets_hours=OFFSETS, now=NOW)
+
+    assert {instant.kickoffs for instant in plan} == {(kickoff,)}
+
+
+def test_a_shared_instant_polls_both_kickoffs():
+    # 12h before the 13:00 kickoff and 1h before the 02:00 kickoff are both 01:00.
+    afternoon, overnight = at(14, 13), at(14, 2)
+
+    plan = plan_polls([afternoon, overnight], offsets_hours=(12.0, 1.0), now=NOW)
+
+    shared = next(instant for instant in plan if instant.at == at(14, 1))
+    assert shared.kickoffs == (overnight, afternoon)
+
+
+def test_an_instant_built_by_hand_covers_its_own_kickoff():
+    instant = PollInstant(at=at(13, 16), offset_hours=1.0, kickoff_utc=at(13, 17))
+
+    assert instant.covered_kickoffs == (at(13, 17),)
