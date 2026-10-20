@@ -1,0 +1,512 @@
+{
+ "success": true,
+ "data": [
+  {
+   "eventID": "u8B8HcVMTXZiiYUKoPV9",
+   "leagueID": "NCAAF",
+   "teams": {
+    "home": {
+     "teamID": "INDIANA_NCAAF",
+     "names": {
+      "long": "Indiana"
+     }
+    },
+    "away": {
+     "teamID": "OHIO_STATE_NCAAF",
+     "names": {
+      "long": "Ohio State"
+     }
+    }
+   },
+   "status": {
+    "startsAt": "2026-10-17T16:00:00.000Z"
+   },
+   "odds": {
+    "points-away-game-sp-away": {
+     "oddID": "points-away-game-sp-away",
+     "opposingOddID": "points-home-game-sp-home",
+     "marketName": "Spread",
+     "statID": "points",
+     "statEntityID": "away",
+     "periodID": "game",
+     "betTypeID": "sp",
+     "sideID": "away",
+     "started": false,
+     "ended": false,
+     "cancelled": false,
+     "bookOddsAvailable": true,
+     "fairOddsAvailable": true,
+     "fairOdds": "-108",
+     "bookOdds": "-105",
+     "fairSpread": "-2.5",
+     "bookSpread": "-3",
+     "openFairOdds": "-104",
+     "openBookOdds": "-107",
+     "openFairSpread": "-2.5",
+     "openBookSpread": "-3",
+     "scoringSupported": true,
+     "byBookmaker": {
+      "draftkings": {
+       "odds": "+100",
+       "spread": "-3",
+       "lastUpdatedAt": "2026-10-17T14:24:27.686Z",
+       "available": true,
+       "deeplink": "https://sportsbook.draftkings.com/event/34226148?outcomes=0HC84998524N300_3"
+      },
+      "fanduel": {
+       "odds": "-115",
+       "spread": "-2.5",
+       "lastUpdatedAt": "2026-10-17T14:25:16.411Z",
+       "available": true,
+       "deeplink": "https://sportsbook.fanduel.com/addToBetslip?marketId=717.169857888&selectionId=484727"
+      },
+      "unibet": {
+       "odds": "-115",
+       "spread": "-3",
+       "lastUpdatedAt": "2026-10-17T14:24:34.428Z",
+       "available": true
+      },
+      "betmgm": {
+       "odds": "+100",
+       "spread": "-3",
+       "lastUpdatedAt": "2026-10-17T14:27:36.803Z",
+       "available": true,
+       "deeplink": "https://sports.nj.betmgm.com/en/sports/events/6:46837?options=6:46837-3943811-6302734"
+      },
+      "espnbet": {
+       "odds": "-105",
+       "spread": "-2.5",
+       "lastUpdatedAt": "2026-10-17T14:24:36.928Z",
+       "available": true,
+       "deeplink": "https://espnbet.app.link/?market_selection_id[0]=84b1d463-506e-4a03-97e5-d53cd533975f&odds_numerator[0]=2&odds_denominator[0]=1"
+      },
+      "caesars": {
+       "odds": "-103",
+       "spread": "-3",
+       "lastUpdatedAt": "2026-10-17T14:24:27.928Z",
+       "available": true,
+       "deeplink": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=c359e950-0a12-319f-94bd-94daeb124b54"
+      },
+      "bovada": {
+       "odds": "-120",
+       "spread": "-2.5",
+       "lastUpdatedAt": "2026-10-17T14:24:35.928Z",
+       "available": true
+      }
+     }
+    },
+    "points-home-game-sp-home": {
+     "oddID": "points-home-game-sp-home",
+     "opposingOddID": "points-away-game-sp-away",
+     "marketName": "Spread",
+     "statID": "points",
+     "statEntityID": "home",
+     "periodID": "game",
+     "betTypeID": "sp",
+     "sideID": "home",
+     "started": false,
+     "ended": false,
+     "cancelled": false,
+     "bookOddsAvailable": true,
+     "fairOddsAvailable": true,
+     "fairOdds": "+108",
+     "bookOdds": "-115",
+     "fairSpread": "+2.5",
+     "bookSpread": "+3",
+     "openFairOdds": "+104",
+     "openBookOdds": "-117",
+     "openFairSpread": "+2.5",
+     "openBookSpread": "+3",
+     "scoringSupported": true,
+     "byBookmaker": {
+      "draftkings": {
+       "odds": "-120",
+       "spread": "+3",
+       "lastUpdatedAt": "2026-10-17T14:24:27.686Z",
+       "available": true,
+       "deeplink": "https://sportsbook.draftkings.com/event/34226148?outcomes=0HC84998524P300_1"
+      },
+      "fanduel": {
+       "odds": "-105",
+       "spread": "+2.5",
+       "lastUpdatedAt": "2026-10-17T14:25:16.411Z",
+       "available": true,
+       "deeplink": "https://sportsbook.fanduel.com/addToBetslip?marketId=717.169857888&selectionId=2039646"
+      },
+      "unibet": {
+       "odds": "-109",
+       "spread": "+3",
+       "lastUpdatedAt": "2026-10-17T14:24:34.428Z",
+       "available": true
+      },
+      "betmgm": {
+       "odds": "-110",
+       "spread": "+3",
+       "lastUpdatedAt": "2026-10-17T14:27:36.803Z",
+       "available": true,
+       "deeplink": "https://sports.nj.betmgm.com/en/sports/events/6:46837?options=6:46837-3943811-6302735"
+      },
+      "espnbet": {
+       "odds": "-115",
+       "spread": "+2.5",
+       "lastUpdatedAt": "2026-10-17T14:24:36.928Z",
+       "available": true,
+       "deeplink": "https://espnbet.app.link/?market_selection_id[0]=0b8d6d2a-8990-4741-9c74-5f94f740ae83&odds_numerator[0]=2&odds_denominator[0]=1"
+      },
+      "caesars": {
+       "odds": "-118",
+       "spread": "+3",
+       "lastUpdatedAt": "2026-10-17T14:24:27.928Z",
+       "available": true,
+       "deeplink": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=c6fab733-544b-3ab8-a4e5-98a59343d878"
+      },
+      "bovada": {
+       "odds": "+100",
+       "spread": "+2.5",
+       "lastUpdatedAt": "2026-10-17T14:24:35.928Z",
+       "available": true
+      }
+     }
+    }
+   }
+  },
+  {
+   "eventID": "deObBbVgy71qE1pEiaUV",
+   "leagueID": "NCAAF",
+   "teams": {
+    "home": {
+     "teamID": "LSU_NCAAF",
+     "names": {
+      "long": "LSU"
+     }
+    },
+    "away": {
+     "teamID": "MISSISSIPPI_STATE_NCAAF",
+     "names": {
+      "long": "Mississippi State"
+     }
+    }
+   },
+   "status": {
+    "startsAt": "2026-10-17T16:00:00.000Z"
+   },
+   "odds": {
+    "points-away-game-sp-away": {
+     "oddID": "points-away-game-sp-away",
+     "opposingOddID": "points-home-game-sp-home",
+     "marketName": "Spread",
+     "statID": "points",
+     "statEntityID": "away",
+     "periodID": "game",
+     "betTypeID": "sp",
+     "sideID": "away",
+     "started": false,
+     "ended": false,
+     "cancelled": false,
+     "bookOddsAvailable": true,
+     "fairOddsAvailable": true,
+     "fairOdds": "+100",
+     "bookOdds": "-110",
+     "fairSpread": "+17.5",
+     "bookSpread": "+17.5",
+     "openFairOdds": "-101",
+     "openBookOdds": "-113",
+     "openFairSpread": "+12",
+     "openBookSpread": "+12",
+     "scoringSupported": true,
+     "byBookmaker": {
+      "draftkings": {
+       "odds": "-110",
+       "spread": "+17.5",
+       "lastUpdatedAt": "2026-10-17T14:24:27.686Z",
+       "available": true,
+       "deeplink": "https://sportsbook.draftkings.com/event/34788268?outcomes=0HC86628978P1750_3"
+      },
+      "fanduel": {
+       "odds": "-110",
+       "spread": "+17.5",
+       "lastUpdatedAt": "2026-10-17T14:25:16.411Z",
+       "available": true,
+       "deeplink": "https://sportsbook.fanduel.com/addToBetslip?marketId=717.190025962&selectionId=924535"
+      },
+      "unibet": {
+       "odds": "-110",
+       "spread": "+17.5",
+       "lastUpdatedAt": "2026-10-17T13:04:32.681Z",
+       "available": false
+      },
+      "espnbet": {
+       "odds": "-115",
+       "spread": "+17.5",
+       "lastUpdatedAt": "2026-10-17T14:24:36.928Z",
+       "available": true,
+       "deeplink": "https://espnbet.app.link/?market_selection_id[0]=f945ab53-d5fe-490a-9134-5d67bfe0523d&odds_numerator[0]=2&odds_denominator[0]=1"
+      },
+      "betmgm": {
+       "odds": "-108",
+       "spread": "+17.5",
+       "lastUpdatedAt": "2026-10-17T14:27:24.482Z",
+       "available": true,
+       "deeplink": "https://sports.nj.betmgm.com/en/sports/events/6:46915?options=6:46915-3956170-6331095"
+      },
+      "caesars": {
+       "odds": "-114",
+       "spread": "+17.5",
+       "lastUpdatedAt": "2026-10-17T14:24:27.928Z",
+       "available": true,
+       "deeplink": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=6c323a1b-e22c-3509-8ec8-2d2fc09f0893"
+      },
+      "bovada": {
+       "odds": "-115",
+       "spread": "+18",
+       "lastUpdatedAt": "2026-10-17T14:24:35.928Z",
+       "available": true
+      }
+     }
+    },
+    "points-home-game-sp-home": {
+     "oddID": "points-home-game-sp-home",
+     "opposingOddID": "points-away-game-sp-away",
+     "marketName": "Spread",
+     "statID": "points",
+     "statEntityID": "home",
+     "periodID": "game",
+     "betTypeID": "sp",
+     "sideID": "home",
+     "started": false,
+     "ended": false,
+     "cancelled": false,
+     "bookOddsAvailable": true,
+     "fairOddsAvailable": true,
+     "fairOdds": "+100",
+     "bookOdds": "-110",
+     "fairSpread": "-17.5",
+     "bookSpread": "-17.5",
+     "openFairOdds": "+101",
+     "openBookOdds": "-110",
+     "openFairSpread": "-12",
+     "openBookSpread": "-12",
+     "scoringSupported": true,
+     "byBookmaker": {
+      "draftkings": {
+       "odds": "-110",
+       "spread": "-17.5",
+       "lastUpdatedAt": "2026-10-17T14:24:27.686Z",
+       "available": true,
+       "deeplink": "https://sportsbook.draftkings.com/event/34788268?outcomes=0HC86628978N1750_1"
+      },
+      "fanduel": {
+       "odds": "-110",
+       "spread": "-17.5",
+       "lastUpdatedAt": "2026-10-17T14:25:16.411Z",
+       "available": true,
+       "deeplink": "https://sportsbook.fanduel.com/addToBetslip?marketId=717.190025962&selectionId=484738"
+      },
+      "unibet": {
+       "odds": "-115",
+       "spread": "-17.5",
+       "lastUpdatedAt": "2026-10-17T13:04:32.681Z",
+       "available": false
+      },
+      "espnbet": {
+       "odds": "-105",
+       "spread": "-17.5",
+       "lastUpdatedAt": "2026-10-17T14:24:36.928Z",
+       "available": true,
+       "deeplink": "https://espnbet.app.link/?market_selection_id[0]=b5d3bc40-0b81-4dd6-a82e-c483cb607523&odds_numerator[0]=2&odds_denominator[0]=1"
+      },
+      "betmgm": {
+       "odds": "-110",
+       "spread": "-17.5",
+       "lastUpdatedAt": "2026-10-17T14:27:24.482Z",
+       "available": true,
+       "deeplink": "https://sports.nj.betmgm.com/en/sports/events/6:46915?options=6:46915-3956170-6331096"
+      },
+      "caesars": {
+       "odds": "-106",
+       "spread": "-17.5",
+       "lastUpdatedAt": "2026-10-17T14:24:27.928Z",
+       "available": true,
+       "deeplink": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=ae457613-507b-31b2-a221-9b0730e6bb9a"
+      },
+      "bovada": {
+       "odds": "-105",
+       "spread": "-18",
+       "lastUpdatedAt": "2026-10-17T14:24:35.928Z",
+       "available": true
+      }
+     }
+    }
+   }
+  },
+  {
+   "eventID": "QWeePByjZAKzscg6sanq",
+   "leagueID": "NCAAF",
+   "teams": {
+    "home": {
+     "teamID": "HAWAII_NCAAF",
+     "names": {
+      "long": "Hawai'i"
+     }
+    },
+    "away": {
+     "teamID": "NEW_MEXICO_NCAAF",
+     "names": {
+      "long": "New Mexico"
+     }
+    }
+   },
+   "status": {
+    "startsAt": "2026-10-18T02:30:00.000Z"
+   },
+   "odds": {
+    "points-away-game-sp-away": {
+     "oddID": "points-away-game-sp-away",
+     "opposingOddID": "points-home-game-sp-home",
+     "marketName": "Spread",
+     "statID": "points",
+     "statEntityID": "away",
+     "periodID": "game",
+     "betTypeID": "sp",
+     "sideID": "away",
+     "started": false,
+     "ended": false,
+     "cancelled": false,
+     "bookOddsAvailable": true,
+     "fairOddsAvailable": true,
+     "fairOdds": "+100",
+     "bookOdds": "-110",
+     "fairSpread": "-15",
+     "bookSpread": "-14.5",
+     "openFairOdds": "+100",
+     "openBookOdds": "-112",
+     "openFairSpread": "-17.5",
+     "openBookSpread": "-17.5",
+     "scoringSupported": true,
+     "byBookmaker": {
+      "fanduel": {
+       "odds": "-108",
+       "spread": "-14.5",
+       "lastUpdatedAt": "2026-10-18T00:35:22.012Z",
+       "available": true,
+       "deeplink": "https://sportsbook.fanduel.com/addToBetslip?marketId=717.190064623&selectionId=602744"
+      },
+      "draftkings": {
+       "odds": "-112",
+       "spread": "-14.5",
+       "lastUpdatedAt": "2026-10-18T00:34:42.729Z",
+       "available": true,
+       "deeplink": "https://sportsbook.draftkings.com/event/34788285?outcomes=0HC86629005N1450_3"
+      },
+      "espnbet": {
+       "odds": "-110",
+       "spread": "-14.5",
+       "lastUpdatedAt": "2026-10-18T00:35:02.785Z",
+       "available": true,
+       "deeplink": "https://espnbet.app.link/?market_selection_id[0]=6d87b029-7d3b-42c5-ac62-679e3da7843e&odds_numerator[0]=2&odds_denominator[0]=1"
+      },
+      "betmgm": {
+       "odds": "-110",
+       "spread": "-14.5",
+       "lastUpdatedAt": "2026-10-18T00:37:26.935Z",
+       "available": true,
+       "deeplink": "https://sports.nj.betmgm.com/en/sports/events/6:46913?options=6:46913-3942238-6299677"
+      },
+      "caesars": {
+       "odds": "-112",
+       "spread": "-14.5",
+       "lastUpdatedAt": "2026-10-18T00:35:02.785Z",
+       "available": true,
+       "deeplink": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=b50f2cdd-5245-32fe-a752-6dff111f723e"
+      },
+      "unibet": {
+       "odds": "-114",
+       "spread": "-14.5",
+       "lastUpdatedAt": "2026-10-18T00:35:13.785Z",
+       "available": true
+      },
+      "bovada": {
+       "odds": "-110",
+       "spread": "-15",
+       "lastUpdatedAt": "2026-10-18T00:34:22.785Z",
+       "available": true
+      }
+     }
+    },
+    "points-home-game-sp-home": {
+     "oddID": "points-home-game-sp-home",
+     "opposingOddID": "points-away-game-sp-away",
+     "marketName": "Spread",
+     "statID": "points",
+     "statEntityID": "home",
+     "periodID": "game",
+     "betTypeID": "sp",
+     "sideID": "home",
+     "started": false,
+     "ended": false,
+     "cancelled": false,
+     "bookOddsAvailable": true,
+     "fairOddsAvailable": true,
+     "fairOdds": "+100",
+     "bookOdds": "-110",
+     "fairSpread": "+15",
+     "bookSpread": "+14.5",
+     "openFairOdds": "+100",
+     "openBookOdds": "-112",
+     "openFairSpread": "+17.5",
+     "openBookSpread": "+17.5",
+     "scoringSupported": true,
+     "byBookmaker": {
+      "fanduel": {
+       "odds": "-112",
+       "spread": "+14.5",
+       "lastUpdatedAt": "2026-10-18T00:35:22.012Z",
+       "available": true,
+       "deeplink": "https://sportsbook.fanduel.com/addToBetslip?marketId=717.190064623&selectionId=661961"
+      },
+      "draftkings": {
+       "odds": "-108",
+       "spread": "+14.5",
+       "lastUpdatedAt": "2026-10-18T00:34:42.729Z",
+       "available": true,
+       "deeplink": "https://sportsbook.draftkings.com/event/34788285?outcomes=0HC86629005P1450_1"
+      },
+      "espnbet": {
+       "odds": "-110",
+       "spread": "+14.5",
+       "lastUpdatedAt": "2026-10-18T00:35:02.785Z",
+       "available": true,
+       "deeplink": "https://espnbet.app.link/?market_selection_id[0]=0a1742fb-63c0-4aba-a3e5-4cff681f786d&odds_numerator[0]=2&odds_denominator[0]=1"
+      },
+      "betmgm": {
+       "odds": "-108",
+       "spread": "+14.5",
+       "lastUpdatedAt": "2026-10-18T00:37:26.935Z",
+       "available": true,
+       "deeplink": "https://sports.nj.betmgm.com/en/sports/events/6:46913?options=6:46913-3942238-6299678"
+      },
+      "caesars": {
+       "odds": "-108",
+       "spread": "+14.5",
+       "lastUpdatedAt": "2026-10-18T00:35:02.785Z",
+       "available": true,
+       "deeplink": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=2d881580-460c-3bad-8e1b-83d5f5a96911"
+      },
+      "unibet": {
+       "odds": "-111",
+       "spread": "+14.5",
+       "lastUpdatedAt": "2026-10-18T00:35:13.785Z",
+       "available": true
+      },
+      "bovada": {
+       "odds": "-110",
+       "spread": "+15",
+       "lastUpdatedAt": "2026-10-18T00:34:22.785Z",
+       "available": true
+      }
+     }
+    }
+   }
+  }
+ ]
+}
