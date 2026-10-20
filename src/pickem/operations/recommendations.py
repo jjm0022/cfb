@@ -7,8 +7,8 @@ the automation monitor.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Collection
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -17,15 +17,19 @@ from loguru import logger
 from pickem import config
 from pickem.edge.divergence import Thresholds, rank_edges
 from pickem.edge.pipeline import decide_edges
-from pickem.ingest.odds import (
-    CFB_KEY,
-    NFL_KEY,
-    OddsApiError,
-    OddsClient,
-    QuotaExhausted,
-    _safe_error_detail,
+from pickem.ingest.odds import KeyRejected, OddsApiError, QuotaExhausted
+from pickem.ingest.sgo import SgoClient
+from pickem.models import (
+    PINNACLE_SOURCE,
+    Edge,
+    Game,
+    MarketLinesResult,
+    OddsPull,
+    PollTrigger,
+    Sport,
+    Tier,
 )
-from pickem.models import PINNACLE_SOURCE, Edge, MarketLinesResult, Sport, Tier
+from pickem.operations.odds_budget import GAMES_PER_30_DAYS, OddsBudgetSkipped, check_budget
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 from pickem.store.db import Store
 
@@ -53,6 +57,9 @@ class RecommendationSnapshot:
     week: int
     generated_at: datetime
     edges: tuple[Edge, ...]
+    # Set when this refresh skipped its odds pull to stay inside pick'em's
+    # SportsGameOdds share and no other skip was recorded in the 30 days before.
+    odds_notice: str | None = None
 
 
 def _open_store(db: Path) -> Store:
@@ -117,8 +124,7 @@ def generate_recommendations(
         dataset = store.load_week(sport, season, week)
         edges = decide_edges(
             _still_pending(dataset, pending_as_of),
-            # Pinnacle is recorded for a later comparison, not used: the
-            # consensus stays the US books' median until a backtest says so.
+            # Pinnacle rows (recorded 2026-09-25 to 2026-10-19) never enter the consensus.
             [line for line in dataset.market_lines if line.source != PINNACLE_SOURCE],
             dataset.games,
             store.games_before(sport, season, week),
@@ -136,6 +142,32 @@ def generate_recommendations(
     return RecommendationSnapshot(sport, season, week, now, ranked)
 
 
+def _games_to_request(
+    dataset,
+    now: datetime,
+    window_end: datetime,
+    kickoffs: Collection[datetime] | None,
+) -> list[Game]:
+    """The slate games a pull should pay for.
+
+    SportsGameOdds bills per game, so: only games not yet started (a started
+    game would return in-play odds), inside the window, and for a kickoff
+    poll only the games whose kickoff asked for it.
+    """
+    slate = {line.game_id for line in dataset.league_lines}
+    wanted = None if kickoffs is None else set(kickoffs)
+    return sorted(
+        (
+            game
+            for game in dataset.games
+            if game.game_id in slate
+            and now < game.kickoff_utc <= window_end
+            and (wanted is None or game.kickoff_utc in wanted)
+        ),
+        key=lambda game: (game.kickoff_utc, game.game_id),
+    )
+
+
 def poll_odds_snapshot(
     db: Path,
     sport: Sport,
@@ -145,27 +177,25 @@ def poll_odds_snapshot(
     *,
     days: int = 7,
     window_start: datetime | None = None,
-    client_factory: Callable[..., OddsClient] | None = None,
+    kickoffs: Collection[datetime] | None = None,
+    trigger: PollTrigger = PollTrigger.CLI,
+    offset_hours: float | None = None,
+    client_factory: Callable[..., SgoClient] | None = None,
 ) -> MarketLinesResult:
     """Fetch and append the live market snapshot for one ingested week.
 
     The slate and kickoff-window guards are kept here with the append-only
-    write.  ``client_factory`` is an adapter seam for the CLI's existing HTTP
-    transport test seam; production callers leave it unset.
+    write. ``window_start`` overrides the lower edge of the kickoff window;
+    the default reaches twelve hours back.
 
-    ``window_start`` overrides the lower edge of the kickoff window.  The
-    default reaches twelve hours back so a poll running slightly late still
-    covers the game it was meant to.  A poll anchored to a *later* kickoff
-    passes ``now`` instead: the feed returns every event with posted odds, and
-    an hour before a night game the afternoon games are in progress, quoting
-    live in-game spreads.  Those are not the pre-kickoff market this system
-    reasons about, and `lines` is append-only, so a stored one cannot be
-    withdrawn.
+    Only games not yet started are requested -- for a kickoff poll, only the
+    games at ``kickoffs`` -- because SportsGameOdds bills per game. A pull
+    that would take pick'em past its share raises ``OddsBudgetSkipped``
+    instead of requesting anything.
     """
     if not db.exists():
         raise RecommendationDatabaseMissing(f"no database at {db}; run ingest-cbs first")
 
-    key = NFL_KEY if sport is Sport.NFL else CFB_KEY
     with _open_store(db) as store:
         dataset = store.load_week(sport, season, week)
         slate = [line.game_id for line in dataset.league_lines]
@@ -173,48 +203,73 @@ def poll_odds_snapshot(
             raise RecommendationSlateMissing(
                 f"no {sport.value} {season} week {week} games in the store; run ingest-cbs first"
             )
-
-        factory = client_factory or OddsClient
-        request = {
-            "resolver": TeamResolver.default(),
-            "sport": sport,
-            "season": season,
-            "week": week,
-            "now": now,
-            "slate": slate,
-            "window": (
-                window_start if window_start is not None else now - timedelta(hours=12),
-                now + timedelta(days=days),
-            ),
-        }
-        with factory(config.odds_api_key()) as client:
-            result = client.fetch_spreads(key, **request)
-            store.append_market_lines(result.lines)
-            _poll_pinnacle(client, store, key, request)
-    return result
-
-
-def _poll_pinnacle(client: OddsClient, store: Store, key: str, request: dict) -> None:
-    """Record Pinnacle alone, for a later sharp-book comparison.
-
-    One extra credit per poll. Never allowed to fail the poll it rides on:
-    the US books are what the picks use.
-    """
-    try:
-        pinnacle = client.fetch_spreads(
-            key, **request, bookmakers="pinnacle", source=PINNACLE_SOURCE
+        window = (
+            window_start if window_start is not None else now - timedelta(hours=12),
+            now + timedelta(days=days),
         )
-        store.append_market_lines(pinnacle.lines)
-    except Exception as error:
-        # The final "unreachable" error embeds the last transport error's text.
-        detail = _safe_error_detail(error, config.odds_api_key())
-        logger.bind(
-            event="pinnacle_poll_failed",
-            sport=request["sport"].value,
-            week=request["week"],
-            error_type=type(error).__name__,
-            error_detail=detail,
-        ).warning(f"Pinnacle poll failed; US books were stored: {detail}")
+        games = _games_to_request(dataset, now, window[1], kickoffs)
+        if not games:
+            logger.bind(
+                event="odds_poll_empty",
+                sport=sport.value,
+                season=season,
+                week=week,
+                trigger=trigger.value,
+            ).info("no games left to poll; nothing requested")
+            return MarketLinesResult(lines=[], skipped=[])
+        used = check_budget(
+            store,
+            now=now,
+            sport=sport,
+            season=season,
+            week=week,
+            trigger=trigger,
+            offset_hours=offset_hours,
+            games_requested=len(games),
+        )
+        factory = client_factory or SgoClient
+        with factory(config.sgo_api_key()) as client:
+            pull = client.fetch_spreads(
+                resolver=TeamResolver.default(),
+                sport=sport,
+                season=season,
+                week=week,
+                now=now,
+                slate=slate,
+                window=window,
+                games=games,
+            )
+            store.append_market_lines(pull.result.lines)
+            store.record_odds_pull(
+                OddsPull(
+                    pulled_at=now,
+                    sport=sport,
+                    season=season,
+                    week=week,
+                    trigger=trigger,
+                    offset_hours=offset_hours,
+                    games_requested=len(games),
+                    games_returned=pull.events_returned,
+                )
+            )
+            total = used + pull.events_returned
+            logger.bind(
+                event="odds_usage",
+                trigger=trigger.value,
+                games_requested=len(games),
+                games_returned=pull.events_returned,
+                used_30d=total,
+                share=GAMES_PER_30_DAYS,
+            ).info(
+                f"pick'em has used {total} of its {GAMES_PER_30_DAYS} "
+                "SportsGameOdds games in 30 days"
+            )
+            if trigger is PollTrigger.WEEK_START:
+                usage = client.account_usage()
+                logger.bind(event="odds_account_usage", usage=usage).info(
+                    f"SportsGameOdds account usage, props included: {usage}"
+                )
+    return pull.result
 
 
 def refresh_recommendations(
@@ -226,12 +281,37 @@ def refresh_recommendations(
     *,
     window_start: datetime | None = None,
     pending_as_of: datetime | None = None,
+    kickoffs: Collection[datetime] | None = None,
+    trigger: PollTrigger = PollTrigger.MANUAL,
+    offset_hours: float | None = None,
+    pull_odds: bool = True,
 ) -> RecommendationSnapshot:
-    """Append a current market snapshot, then generate recommendations."""
-    poll_odds_snapshot(db, sport, season, week, now, window_start=window_start)
-    return generate_recommendations(
+    """Append a current market snapshot (unless ``pull_odds`` is off), then decide.
+
+    A pull the budget skips is not a failure: the picks are re-decided from
+    the lines already stored, and the snapshot carries the notice when the
+    owner should hear about it.
+    """
+    notice: str | None = None
+    if pull_odds:
+        try:
+            poll_odds_snapshot(
+                db,
+                sport,
+                season,
+                week,
+                now,
+                window_start=window_start,
+                kickoffs=kickoffs,
+                trigger=trigger,
+                offset_hours=offset_hours,
+            )
+        except OddsBudgetSkipped as skipped:
+            notice = str(skipped) if skipped.notify else None
+    snapshot = generate_recommendations(
         db, sport, season, week, now, pending_as_of=pending_as_of
     )
+    return replace(snapshot, odds_notice=notice)
 
 
 __all__ = [
@@ -241,7 +321,9 @@ __all__ = [
     "generate_recommendations",
     "poll_odds_snapshot",
     "refresh_recommendations",
+    "KeyRejected",
     "OddsApiError",
+    "OddsBudgetSkipped",
     "QuotaExhausted",
     "UnknownTeamError",
 ]
