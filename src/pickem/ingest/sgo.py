@@ -37,8 +37,10 @@ from pickem.resolve.resolver import TeamResolver
 
 BASE_URL = "https://api.sportsgameodds.com/v2"
 HOME_SPREAD_ODD = "points-home-game-sp-home"
-# SportsGameOdds' start times and the board's can differ by a few minutes.
-RANGE_PADDING = timedelta(minutes=30)
+# SportsGameOdds' start time and the board's can differ, by minutes or by a TV
+# slot. Padding is free: the team filter bills only our games, and a team plays
+# once a week, so a wider range cannot return a second event for it.
+RANGE_PADDING = timedelta(hours=6)
 PAGE_LIMIT = 100
 
 LEAGUES = {Sport.NFL: "NFL", Sport.CFB: "NCAAF"}

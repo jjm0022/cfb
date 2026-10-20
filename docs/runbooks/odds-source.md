@@ -39,15 +39,24 @@ each Tuesday week start.
 A pull would have taken pick'em past 800. Nothing is broken: picks are
 re-decided from the lines already stored, and the 2-hour and 1-hour pulls
 before each kickoff still run. You hear about this once per 30 days; every skip
-is logged as `odds_budget_skipped`. To change the share, edit
+is logged as `odds_budget_skipped`, a `/refresh` reply says "No new odds were
+pulled", and the Tuesday week-start DM says "No odds pulled" (the board still
+loads, so no retry is needed). To change the share, edit
 `GAMES_PER_30_DAYS` in `src/pickem/operations/odds_budget.py`.
 
 ## "no SportsGameOdds lines" for a game
 
-The pull listed `<game id>: no SportsGameOdds lines (team ids X, Y)`. Either
-the books have not priced the game yet, or one of the two team ids is wrong.
-Check the id against SGO's (an event's `teams.home.teamID`), then add a row to
-`TEAM_ID_OVERRIDES` in `src/pickem/ingest/sgo.py`.
+The pull listed `<game id>: no SportsGameOdds lines (team ids X, Y)`. Look at
+the other lines the same pull listed:
+
+- **"X at Y: ... not a team we track"** for that game: SGO returned it, but
+  under a name our resolver does not know. Add the name as an alias in
+  `aliases.yaml`.
+- **Nothing else about that game:** either the books have not priced it yet,
+  or both team ids are wrong (a request matches an event through either
+  team's id, so one wrong id alone loses nothing). Check the ids against
+  SGO's (an event's `teams.home.teamID`), then add a row to
+  `TEAM_ID_OVERRIDES` in `src/pickem/ingest/sgo.py`.
 
 ## "odds key rejected"
 

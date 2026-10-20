@@ -149,6 +149,9 @@ if [[ -z "$page" ]]; then
 fi
 failed=()
 loaded=()
+# Polls the SportsGameOdds budget skipped (exit 3): the board is loaded and the
+# kickoff polls still run, so this is news, not a failure a retry would fix.
+unpolled=()
 for sport in "${sports[@]}"; do
     week=$pool_week
     if [[ "$sport" == nfl ]]; then
@@ -166,8 +169,13 @@ for sport in "${sports[@]}"; do
     fi
     loaded+=("$sport week $week")
     printf 'Polling %s %s week %s odds over the next %s days\n' "$sport" "$season" "$week" "$days"
-    if ! uv run pickem poll-odds --sport "$sport" --season "$season" --week "$week" \
-        --days "$days" --trigger week_start --db "$database"; then
+    poll_rc=0
+    poll_output=$(uv run pickem poll-odds --sport "$sport" --season "$season" --week "$week" \
+        --days "$days" --trigger week_start --db "$database" 2>&1) || poll_rc=$?
+    [[ -n "$poll_output" ]] && printf '%s\n' "$poll_output"
+    if ((poll_rc == 3)); then
+        unpolled+=("$(printf '%s\n' "$poll_output" | tail -n 1)")
+    elif ((poll_rc != 0)); then
         failed+=("$sport week $week (poll)")
     fi
 done
@@ -179,13 +187,18 @@ if ((${#loaded[@]})); then
         echo "Dashboard rebuild failed; the bot rebuilds it on its next refresh." >&2
 fi
 
+skip_note=""
+if ((${#unpolled[@]})); then
+    skip_note="No odds pulled: $(printf '%s ' "${unpolled[@]}")"
+fi
+
 if ((${#failed[@]})); then
     summary=$(printf '%s, ' "${failed[@]}")
     echo "Week start failed for: ${summary%, }" >&2
     message="Pool week $pool_week: failed for ${summary%, }."
     if ((${#loaded[@]})); then
         done_list=$(printf '%s, ' "${loaded[@]}")
-        message+=" Loaded: ${done_list%, }. $reminder"
+        message+=" Loaded: ${done_list%, }. $skip_note$reminder"
     fi
     notify "$message $retry_note"
     exit 1
@@ -193,7 +206,7 @@ fi
 
 if ((${#loaded[@]})); then
     loaded_list=$(printf '%s, ' "${loaded[@]}")
-    notify "Pool week $pool_week board loaded (${loaded_list%, }). $reminder"
+    notify "Pool week $pool_week board loaded (${loaded_list%, }). $skip_note$reminder"
 else
     notify "Pool week $pool_week board loaded. $reminder"
 fi

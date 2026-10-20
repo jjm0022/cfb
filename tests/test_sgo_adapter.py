@@ -111,8 +111,27 @@ def test_the_request_names_only_our_teams_and_the_spread_market():
         "LSU_NCAAF", "NEW_MEXICO_NCAAF", "HAWAII_NCAAF",
     }
     assert params["oddID"] == "points-home-game-sp-home"
-    assert params["startsAfter"] == "2026-10-17T15:30:00Z"
-    assert params["startsBefore"] == "2026-10-18T03:00:00Z"
+    assert params["startsAfter"] == "2026-10-17T10:00:00Z"
+    assert params["startsBefore"] == "2026-10-18T08:30:00Z"
+
+
+def test_a_start_time_hours_off_the_boards_is_still_found():
+    # The board says 16:00; SportsGameOdds has the game at 19:30. SportsGameOdds
+    # filters by start time itself, so the requested range must reach it.
+    payload = _payload()
+    payload["data"][0]["status"]["startsAt"] = "2026-10-17T19:30:00.000Z"
+
+    def handler(request):
+        after, before = request.url.params["startsAfter"], request.url.params["startsBefore"]
+        in_range = [
+            event for event in payload["data"]
+            if after <= event["status"]["startsAt"][:19] + "Z" <= before
+        ]
+        return httpx.Response(200, json={"data": in_range})
+
+    pull = _fetch(_client(handler), games=[OSU_AT_IU], slate=[OSU_AT_IU.game_id])
+
+    assert _by_game(pull)[OSU_AT_IU.game_id]["draftkings"] == 3.0
 
 
 def test_home_spreads_are_stored_unflipped():

@@ -804,6 +804,9 @@ def _format_refresh_results(
             if result.changed
             else _format_unchanged((last_change_by_scope or {}).get(scope))
         )
+        skipped = getattr(result.snapshot, "odds_skipped", None)
+        if result.error is None and skipped:
+            value = f"{value}\n\n⚠️ No new odds were pulled. {skipped}"
         # Split like the status and notification embeds do. `details` prints a
         # rationale per pick, which clears Discord's 1024-character field limit
         # on a full board -- and Discord rejects the whole message, so an

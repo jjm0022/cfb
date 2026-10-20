@@ -2697,3 +2697,16 @@ async def test_a_budget_notice_that_cannot_be_sent_is_logged_not_raised(settings
         r["extra"].get("event") == "owner_dm_failed" and r["extra"].get("purpose") == "odds_budget"
         for r in records
     )
+
+
+def test_the_refresh_reply_says_when_no_odds_were_pulled():
+    scope = MonitorScope(Sport.NFL, 2026, 1)
+    snapshot = RecommendationSnapshot(
+        Sport.NFL, 2026, 1, datetime(2026, 9, 10, tzinfo=UTC), (),
+        odds_skipped="Skipped a manual odds pull for nfl week 1: pick'em has used 800 of its 800",
+    )
+
+    embed = _format_refresh_results(((scope, RefreshResult(changed=False, snapshot=snapshot)),))
+
+    assert "No new odds were pulled" in embed.fields[0].value
+    assert "used 800 of its 800" in embed.fields[0].value

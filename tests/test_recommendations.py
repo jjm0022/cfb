@@ -420,3 +420,22 @@ def test_live_cfb_keeps_small_gaps_as_coinflips(db):
     ).edges
     assert edge.tier is Tier.COINFLIP
     assert edge.side.value == "home"
+
+
+def test_every_skip_is_marked_even_when_the_owner_is_not_told(db, seeded_week, sgo):
+    now = datetime(2026, 9, 2, tzinfo=UTC)
+    _spend(db, 800, now - timedelta(days=1))
+    refresh_recommendations(db, Sport.NFL, 2026, 1, now, trigger=PollTrigger.MANUAL)
+
+    later = refresh_recommendations(
+        db, Sport.NFL, 2026, 1, now + timedelta(hours=1), trigger=PollTrigger.MANUAL
+    )
+
+    assert later.odds_notice is None
+    assert "800 of its 800" in later.odds_skipped
+
+
+def test_a_pull_that_runs_is_not_marked_skipped(db, seeded_week, sgo):
+    snapshot = refresh_recommendations(db, Sport.NFL, 2026, 1, datetime(2026, 9, 2, tzinfo=UTC))
+
+    assert snapshot.odds_skipped is None

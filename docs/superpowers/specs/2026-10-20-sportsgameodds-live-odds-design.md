@@ -51,7 +51,9 @@ for live polls today.
 
 - `leagueID`: `NFL` or `NCAAF`
 - `teamID`: the SGO ids of both teams of every requested game, comma-separated
-- `startsAfter` / `startsBefore`: earliest and latest requested kickoff, ±30 min
+- `startsAfter` / `startsBefore`: earliest and latest requested kickoff, ±6 hours
+  (free: the team filter bills only our games; catches a start time that
+  differs from the board's by a TV slot)
 - `oddID`: `points-home-game-sp-home` (payload size only; billing is per event)
 - `limit=100`, paging through `nextCursor`
 

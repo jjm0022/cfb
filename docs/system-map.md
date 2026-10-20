@@ -54,11 +54,14 @@ src/pickem/ingest/odds.py         OddsClient.fetch_spreads (live) and
                                   `window` and a `slate` of game ids.
                                   QuotaExhausted is distinct from feed errors.
                                   Retries transport/5xx. Context manager.
-
-- [ ] **Step 2: Update the invariants**
-
-In `docs/invariants.md`, replace the bullet that begins `- **Pinnacle is recorded, never used.**` with:
-
+src/pickem/ingest/sgo.py          SgoClient.fetch_spreads (live spreads from
+                                  SportsGameOdds since 2026-10-21). Asks only
+                                  for the requested games, by team id
+                                  (sgo_team_id), and parses through odds.py's
+                                  _parse_events so the guards are shared.
+src/pickem/operations/odds_budget.py
+                                  Pick'em's 800-games-per-30-days share of the
+                                  SportsGameOdds plan, counted in odds_pulls.
 src/pickem/backtest/stats.py      Result StrEnum, ATS grade_pick, and bounded
                                   Wilson score intervals. Pure; no I/O.
 src/pickem/backtest/snapshots.py  Pure planner: a stored schedule becomes the

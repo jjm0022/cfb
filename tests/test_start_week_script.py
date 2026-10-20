@@ -12,13 +12,15 @@ def _run(
     tmp_path: Path,
     *args: str,
     fail_on: str | tuple[str, ...] = (),
+    skip_on: str = "",
     current_week: int = 4,
     status: str = "new",
 ) -> tuple[subprocess.CompletedProcess, list[str]]:
     """Run the script against a fake ``uv`` that logs each call.
 
     ``fail_on`` makes the fake exit 1 for any call whose arguments contain one
-    of the patterns. ``cbs-current-week`` prints ``current_week`` and
+    of the patterns; ``skip_on`` makes it exit 3 with a budget-skip message, as
+    ``poll-odds`` does. ``cbs-current-week`` prints ``current_week`` and
     ``pool-week-status`` prints ``status``.
     """
     patterns = (fail_on,) if isinstance(fail_on, str) else fail_on
@@ -32,6 +34,10 @@ def _run(
         'while IFS= read -r pattern; do\n'
         '    if [[ -n "$pattern" && "$*" == *"$pattern"* ]]; then exit 1; fi\n'
         'done <<< "$START_WEEK_FAIL_ON"\n'
+        'if [[ -n "$START_WEEK_SKIP_ON" && "$*" == *"$START_WEEK_SKIP_ON"* ]]; then\n'
+        '    echo "Skipped a week_start odds pull: pick\'em has used 800 of its 800" >&2\n'
+        '    exit 3\n'
+        'fi\n'
         'if [[ "$*" == *cbs-current-week* ]]; then echo "$START_WEEK_CURRENT"; fi\n'
         'if [[ "$*" == *pool-week-status* ]]; then echo "$START_WEEK_STATUS"; fi\n'
         "exit 0\n"
@@ -41,6 +47,7 @@ def _run(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "START_WEEK_COMMAND_LOG": str(command_log),
         "START_WEEK_FAIL_ON": "\n".join(patterns),
+        "START_WEEK_SKIP_ON": skip_on,
         "START_WEEK_CURRENT": str(current_week),
         "START_WEEK_STATUS": status,
     }
@@ -390,3 +397,19 @@ def test_a_failed_rebuild_does_not_fail_the_week_start(tmp_path):
     assert "Dashboard rebuild failed" in result.stderr
     [dm] = _dms(commands)
     assert "Pool week 4 board loaded" in dm
+
+
+def test_a_budget_skip_loads_the_board_and_says_why_no_odds_were_pulled(tmp_path):
+    weeks, db = tmp_path / "weeks", tmp_path / "pickem.duckdb"
+
+    result, commands = _run(
+        tmp_path, "--auto", "--season", "2026", "--weeks-dir", str(weeks), "--db", str(db),
+        skip_on="poll-odds --sport cfb",
+    )
+
+    assert result.returncode == 0, result.stderr
+    [dm] = _dms(commands)
+    assert "Pool week 4 board loaded" in dm
+    assert "used 800 of its 800" in dm
+    assert "Retry runs" not in dm
+    assert "submit this week's picks" in dm

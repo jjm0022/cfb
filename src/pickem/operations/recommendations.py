@@ -60,6 +60,8 @@ class RecommendationSnapshot:
     # Set when this refresh skipped its odds pull to stay inside pick'em's
     # SportsGameOdds share and no other skip was recorded in the 30 days before.
     odds_notice: str | None = None
+    # Set on every skipped pull, so a reply can say no new odds were pulled.
+    odds_skipped: str | None = None
 
 
 def _open_store(db: Path) -> Store:
@@ -293,6 +295,7 @@ def refresh_recommendations(
     owner should hear about it.
     """
     notice: str | None = None
+    skipped_message: str | None = None
     if pull_odds:
         try:
             poll_odds_snapshot(
@@ -307,11 +310,12 @@ def refresh_recommendations(
                 offset_hours=offset_hours,
             )
         except OddsBudgetSkipped as skipped:
-            notice = str(skipped) if skipped.notify else None
+            skipped_message = str(skipped)
+            notice = skipped_message if skipped.notify else None
     snapshot = generate_recommendations(
         db, sport, season, week, now, pending_as_of=pending_as_of
     )
-    return replace(snapshot, odds_notice=notice)
+    return replace(snapshot, odds_notice=notice, odds_skipped=skipped_message)
 
 
 __all__ = [
