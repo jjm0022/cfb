@@ -541,3 +541,18 @@ def test_preflight_cli_returns_nonzero_when_a_hard_gate_fails(tmp_path):
     assert result.exit_code == 1
     assert "Overall: NOT READY" in result.output
     assert "missing league line" in result.output
+
+
+def test_sportsgameodds_lines_count_as_live_coverage():
+    dataset = _dataset().model_copy(
+        update={
+            "market_lines": [
+                line.model_copy(update={"source": "sportsgameodds"})
+                for line in _dataset().market_lines
+            ]
+        }
+    )
+
+    result = _evaluate(dataset)
+
+    assert "missing live market coverage" not in result.games[0].reasons

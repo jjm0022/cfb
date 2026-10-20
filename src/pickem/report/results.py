@@ -19,7 +19,7 @@ from pickem.edge.divergence import consensus_spread, suppress_decision_logging
 from pickem.edge.favorite import favorite_side
 from pickem.edge.key_numbers import key_number_crossed
 from pickem.models import (
-    LIVE_SOURCE,
+    LIVE_SOURCES,
     PINNACLE_SOURCE,
     Game,
     MarketLine,
@@ -140,8 +140,8 @@ def closing_line_value(
 
 
 def closing_spread(lines: Iterable[MarketLine], kickoff: datetime) -> float | None:
-    """Live-market consensus from quotes captured before kickoff."""
-    before = [ln for ln in lines if ln.source == LIVE_SOURCE and ln.captured_at < kickoff]
+    """Live-market consensus (either provider) from quotes captured before kickoff."""
+    before = [ln for ln in lines if ln.source in LIVE_SOURCES and ln.captured_at < kickoff]
     with suppress_decision_logging():
         return consensus_spread(before)
 
@@ -165,7 +165,7 @@ def line_history(lines: Iterable[MarketLine], kickoff: datetime) -> tuple[LinePo
     own series and never enters the consensus.
     """
     before = [ln for ln in lines if ln.captured_at < kickoff]
-    live = [ln for ln in before if ln.source == LIVE_SOURCE]
+    live = [ln for ln in before if ln.source in LIVE_SOURCES]
     points: list[LinePoint] = []
     with suppress_decision_logging():
         for at in sorted({ln.captured_at for ln in live}):

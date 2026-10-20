@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from loguru import logger
 from pydantic import BaseModel
 
-from pickem.models import LIVE_SOURCE, Game, MarketLine, Sport
+from pickem.models import LIVE_SOURCES, Game, MarketLine, Sport
 from pickem.store.db import StoredDataset
 
 
@@ -82,7 +82,7 @@ def evaluate_preflight(
     league_game_ids = {line.game_id for line in dataset.league_lines}
     live_by_game: dict[str, list[MarketLine]] = {}
     for line in dataset.market_lines:
-        if line.source == LIVE_SOURCE:
+        if line.source in LIVE_SOURCES:
             live_by_game.setdefault(line.game_id, []).append(line)
 
     game_results: list[PreflightGame] = []

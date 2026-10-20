@@ -81,6 +81,11 @@ def odds_api_key() -> str:
     return _required("ODDS_API_KEY")
 
 
+def sgo_api_key() -> str:
+    """SportsGameOdds key; the same account props uses, so the plan is shared."""
+    return _required("SPORTSGAMEODDS_API_KEY")
+
+
 def cfbd_api_key() -> str:
     return _required("CFBD_API_KEY")
 

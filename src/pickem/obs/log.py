@@ -17,7 +17,12 @@ from pathlib import Path
 from loguru import logger
 
 # Values of these environment variables are redacted wherever they appear.
-_SECRET_ENV_VARS = ("ODDS_API_KEY", "CFBD_API_KEY", "DISCORD_BOT_TOKEN")
+_SECRET_ENV_VARS = (
+    "ODDS_API_KEY",
+    "SPORTSGAMEODDS_API_KEY",
+    "CFBD_API_KEY",
+    "DISCORD_BOT_TOKEN",
+)
 _REDACTED = "***REDACTED***"
 _MIN_SECRET_LEN = 8  # never redact a short value; it would blank ordinary text
 _DEFAULT_EVENT = "unlabeled_log"
