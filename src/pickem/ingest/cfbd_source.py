@@ -17,17 +17,19 @@ game and book, mirroring `ingest.cbs.ParseResult`.
 
 from __future__ import annotations
 
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
 
 import httpx
 from pydantic import BaseModel, SecretStr
 
 from pickem import config
-from pickem.models import Game, MarketLine, MarketLinesResult, Sport
+from pickem.ingest.odds import _parse_events, _skip
+from pickem.models import CFBD_SOURCE, Game, MarketLine, MarketLinesResult, Sport
 from pickem.resolve.matchup import resolve_matchup
-from pickem.resolve.resolver import TeamResolver
+from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 BASE_URL = "https://api.collegefootballdata.com"
 MAX_ATTEMPTS = 5
@@ -212,7 +214,7 @@ def load_cfb_lines(
             lines.append(
                 MarketLine(
                     game_id=matchup.game_id,
-                    source="cfbd",
+                    source=CFBD_SOURCE,
                     book=provider["provider"],
                     spread_home=float(provider["spread"]),
                     total=provider.get("over_under"),
@@ -220,3 +222,100 @@ def load_cfb_lines(
                 )
             )
     return MarketLinesResult(lines=lines, skipped=skipped)
+
+
+def fallback_spreads(
+    rows: list[dict],
+    *,
+    resolver: TeamResolver,
+    season: int,
+    week: int,
+    slate: Collection[str],
+    window: tuple[datetime, datetime],
+    games: Sequence[Game],
+    now: datetime,
+) -> MarketLinesResult:
+    """CFBD's book spreads for ``games`` only, through the live feed's guards.
+
+    The backup for college games SportsGameOdds sent no lines for. ``rows``
+    is one ``/lines`` week, which covers every game including FCS, so rows
+    for other games are dropped quietly rather than listed: they were never
+    asked for. What remains goes through the same window, slate and
+    neutral-site handling as every live pull.
+    """
+    wanted = {game.game_id for game in games}
+    events = [
+        _as_feed_event(row)
+        for row in rows
+        if _matchup_ids(row, resolver=resolver, season=season, week=week) & wanted
+    ]
+    parsed = _parse_events(
+        events,
+        resolver=resolver,
+        sport=Sport.CFB,
+        season=season,
+        week=week,
+        slate=slate,
+        window=window,
+        captured_at=now,
+        source=CFBD_SOURCE,
+    )
+    skipped = list(parsed.skipped)
+    priced = {line.game_id for line in parsed.lines}
+    for game_id in sorted(wanted - priced):
+        _skip(
+            skipped,
+            guard="no_cfbd_lines",
+            game_id=game_id,
+            message=f"{game_id}: no CFBD lines either — shows as NO_MARKET",
+        )
+    return MarketLinesResult(lines=parsed.lines, skipped=skipped)
+
+
+def _matchup_ids(row: dict, *, resolver: TeamResolver, season: int, week: int) -> set[str]:
+    """The row's game id both ways round, or nothing for a school we don't track."""
+    try:
+        matchup = resolve_matchup(
+            resolver=resolver,
+            sport=Sport.CFB,
+            season=season,
+            week=week,
+            away_name=row["away_team"],
+            home_name=row["home_team"],
+        )
+    except (UnknownTeamError, KeyError):
+        return set()
+    return {matchup.game_id, matchup.flipped().game_id}
+
+
+def _as_feed_event(row: dict) -> dict:
+    """One CFBD ``/lines`` row in the live feed's shape.
+
+    Book names become keys like the live feed's ("ESPN Bet" -> "espnbet"),
+    so the consensus counts each book once whichever source priced it.
+    """
+    home, away = row["home_team"], row["away_team"]
+    bookmakers = []
+    for provider in row.get("lines") or []:
+        spread = provider.get("spread")
+        outcomes: list[dict] = [{"name": home, "point": spread}]
+        if spread is not None:
+            # The away side is read when the board lists a neutral-site game
+            # the other way round.
+            outcomes.append({"name": away, "point": 0.0 - float(spread)})
+        bookmakers.append(
+            {
+                "key": _book_key(str(provider.get("provider"))),
+                "markets": [{"key": "spreads", "outcomes": outcomes}],
+            }
+        )
+    return {
+        "home_team": home,
+        "away_team": away,
+        "commence_time": row.get("start_date"),
+        "bookmakers": bookmakers,
+    }
+
+
+def _book_key(provider: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", provider.lower())

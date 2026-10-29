@@ -83,7 +83,10 @@ PINNACLE_SOURCE = "oddsapi:pinnacle"
 # 2026-10-20. Every reader of "the live market" accepts both labels, so weeks
 # polled before the switch still render.
 SGO_SOURCE = "sportsgameodds"
-LIVE_SOURCES = frozenset({LIVE_SOURCE, SGO_SOURCE})
+# CollegeFootballData's book lines, used only for college games SportsGameOdds
+# has no lines for (it listed Utah at Cincinnati as empty duplicates in 2026).
+CFBD_SOURCE = "cfbd"
+LIVE_SOURCES = frozenset({LIVE_SOURCE, SGO_SOURCE, CFBD_SOURCE})
 
 
 class MarketLine(BaseModel):

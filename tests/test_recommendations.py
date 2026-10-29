@@ -4,6 +4,7 @@ import pytest
 
 from pickem.ingest.sgo import SgoPull
 from pickem.models import (
+    CFBD_SOURCE,
     LIVE_SOURCE,
     PINNACLE_SOURCE,
     SGO_SOURCE,
@@ -15,6 +16,7 @@ from pickem.models import (
     PollTrigger,
     Sport,
     Tier,
+    make_game_id,
 )
 from pickem.operations.recommendations import (
     generate_recommendations,
@@ -65,6 +67,7 @@ class FakeSgoClient:
 
     calls: list[dict] = []
     lines: list[MarketLine] = []
+    skipped: list[str] = []
     usage_reads = 0
 
     def __init__(self, api_key):
@@ -78,7 +81,9 @@ class FakeSgoClient:
 
     def fetch_spreads(self, **kwargs):
         FakeSgoClient.calls.append(kwargs)
-        result = MarketLinesResult(lines=list(FakeSgoClient.lines), skipped=[])
+        result = MarketLinesResult(
+            lines=list(FakeSgoClient.lines), skipped=list(FakeSgoClient.skipped)
+        )
         return SgoPull(result, len(kwargs["games"]))
 
     def account_usage(self):
@@ -89,6 +94,7 @@ class FakeSgoClient:
 @pytest.fixture
 def sgo(monkeypatch):
     FakeSgoClient.calls, FakeSgoClient.lines, FakeSgoClient.usage_reads = [], [], 0
+    FakeSgoClient.skipped = []
     monkeypatch.setenv("SPORTSGAMEODDS_API_KEY", "test-key")
     monkeypatch.setattr("pickem.operations.recommendations.SgoClient", FakeSgoClient)
     return FakeSgoClient
@@ -439,3 +445,120 @@ def test_a_pull_that_runs_is_not_marked_skipped(db, seeded_week, sgo):
     snapshot = refresh_recommendations(db, Sport.NFL, 2026, 1, datetime(2026, 9, 2, tzinfo=UTC))
 
     assert snapshot.odds_skipped is None
+
+
+UTAH_AT_CIN = make_game_id(Sport.CFB, 2026, 9, "UTAH", "CIN")
+CFB_NOW = datetime(2026, 10, 29, 14, tzinfo=UTC)
+CFBD_WEEK9 = [
+    {
+        "home_team": "Cincinnati",
+        "away_team": "Utah",
+        "start_date": "2026-10-31T19:45:00.000Z",
+        "lines": [
+            {"provider": "DraftKings", "spread": 6.5, "over_under": 50.5},
+            {"provider": "Bovada", "spread": 6.5, "over_under": 51.0},
+        ],
+    }
+]
+
+
+class FakeCfbd:
+    """Stands in for CollegeFootballData: records each request, returns canned rows."""
+
+    def __init__(self):
+        self.calls: list[tuple[int, int]] = []
+        self.rows: list[dict] = list(CFBD_WEEK9)
+        self.error: Exception | None = None
+
+    def __call__(self, season, week):
+        self.calls.append((season, week))
+        if self.error is not None:
+            raise self.error
+        return self.rows
+
+
+@pytest.fixture
+def cfbd(monkeypatch):
+    fake = FakeCfbd()
+    monkeypatch.setattr("pickem.operations.recommendations.fetch_cfbd_lines", fake)
+    return fake
+
+
+def _seed_cfb_week(db):
+    kickoff = datetime(2026, 10, 31, 19, 45, tzinfo=UTC)
+    with Store(db) as store:
+        store.init_schema()
+        store.upsert_games(
+            [Game(game_id=UTAH_AT_CIN, sport=Sport.CFB, season=2026, week=9,
+                  kickoff_utc=kickoff, home_team_id="CIN", away_team_id="UTAH")]
+        )
+        store.upsert_league_lines(
+            [LeagueLine(game_id=UTAH_AT_CIN, season=2026, week=9, spread_home=6.5,
+                        posted_at=kickoff)]
+        )
+
+
+def _stored(db, sport, week):
+    with Store(db, read_only=True) as store:
+        return {
+            (line.source, line.book, line.spread_home)
+            for line in store.load_week(sport, 2026, week).market_lines
+        }
+
+
+def test_cfbd_fills_a_college_game_sportsgameodds_has_no_lines_for(db, sgo, cfbd, records):
+    _seed_cfb_week(db)
+
+    result = poll_odds_snapshot(db, Sport.CFB, 2026, 9, CFB_NOW)
+
+    assert cfbd.calls == [(2026, 9)]
+    assert _stored(db, Sport.CFB, 9) == {
+        (CFBD_SOURCE, "draftkings", 6.5),
+        (CFBD_SOURCE, "bovada", 6.5),
+    }
+    assert len(result.lines) == 2
+    filled = [r for r in records if r["extra"].get("event") == "cfbd_fallback"]
+    assert filled[0]["extra"]["games_filled"] == 1
+    assert filled[0]["extra"]["games_missing"] == 0
+
+
+def test_a_game_cfbd_filled_is_not_reported_as_no_market(db, sgo, cfbd):
+    _seed_cfb_week(db)
+    sgo.skipped = [
+        f"{UTAH_AT_CIN}: no SportsGameOdds lines (team ids UTAH_NCAAF, CINCINNATI_NCAAF) "
+        "— shows as NO_MARKET",
+        "Somewhere at Elsewhere: not a team we track (unknown) — not stored",
+    ]
+
+    result = poll_odds_snapshot(db, Sport.CFB, 2026, 9, CFB_NOW)
+
+    assert result.skipped == ["Somewhere at Elsewhere: not a team we track (unknown) — not stored"]
+
+
+def test_cfbd_is_not_asked_when_sportsgameodds_priced_every_game(db, sgo, cfbd):
+    _seed_cfb_week(db)
+    sgo.lines = [MarketLine(game_id=UTAH_AT_CIN, source=SGO_SOURCE, book="fanduel",
+                            spread_home=6.5, captured_at=CFB_NOW)]
+
+    poll_odds_snapshot(db, Sport.CFB, 2026, 9, CFB_NOW)
+
+    assert cfbd.calls == []
+    assert _stored(db, Sport.CFB, 9) == {(SGO_SOURCE, "fanduel", 6.5)}
+
+
+def test_nfl_never_asks_cfbd(db, seeded_week, sgo, cfbd):
+    poll_odds_snapshot(db, Sport.NFL, 2026, 1, datetime(2026, 9, 2, tzinfo=UTC))
+
+    assert cfbd.calls == []
+
+
+def test_a_cfbd_failure_keeps_the_poll(db, sgo, cfbd, records):
+    _seed_cfb_week(db)
+    cfbd.error = RuntimeError("CFBD is down")
+
+    result = poll_odds_snapshot(db, Sport.CFB, 2026, 9, CFB_NOW)
+
+    assert result.lines == []
+    assert any(r["extra"].get("event") == "cfbd_fallback_failed" for r in records)
+    with Store(db, read_only=True) as store:
+        assert store.odds_games_used(CFB_NOW - timedelta(days=30)) == 1

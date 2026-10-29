@@ -93,7 +93,9 @@ Split out of `HANDOFF.md` on 2026-09-09; content unchanged.
   so a poll asks only for unstarted slate games, by team id, and a kickoff poll
   only for its own kickoffs. Pick'em keeps to 800 games per 30 days
   (`operations/odds_budget.py`); the 2-hour and 1-hour kickoff polls always run.
-  See `docs/runbooks/odds-source.md`.
+  A college game SGO sends no lines for is filled from CFBD in the same poll
+  (`source = "cfbd"`, also a live source), and a CFBD failure never costs the
+  SGO lines. See `docs/runbooks/odds-source.md`.
 - **Pinnacle is no longer recorded.** It was polled 2026-09-25 to 2026-10-19
   as `oddsapi:pinnacle`; SGO's free plan has no Pinnacle. A 91-game replay found
   Pinnacle-only picks no better than the US median (47–44 against 49–42; the

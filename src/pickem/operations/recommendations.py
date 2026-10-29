@@ -17,12 +17,14 @@ from loguru import logger
 from pickem import config
 from pickem.edge.divergence import Thresholds, rank_edges
 from pickem.edge.pipeline import decide_edges
+from pickem.ingest.cfbd_source import CfbdConfig, default_lines_fetcher, fallback_spreads
 from pickem.ingest.odds import KeyRejected, OddsApiError, QuotaExhausted
 from pickem.ingest.sgo import SgoClient
 from pickem.models import (
     PINNACLE_SOURCE,
     Edge,
     Game,
+    MarketLine,
     MarketLinesResult,
     OddsPull,
     PollTrigger,
@@ -271,7 +273,77 @@ def poll_odds_snapshot(
                 logger.bind(event="odds_account_usage", usage=usage).info(
                     f"SportsGameOdds account usage, props included: {usage}"
                 )
-    return pull.result
+        if sport is not Sport.CFB:
+            return pull.result
+        return _cfbd_backup(
+            store, pull.result, season=season, week=week, now=now, slate=slate,
+            window=window, games=games,
+        )
+
+
+def fetch_cfbd_lines(season: int, week: int) -> list[dict]:
+    """One CFBD ``/lines`` call for the week. The tests replace this."""
+    return default_lines_fetcher(CfbdConfig.from_env())(season, week)
+
+
+def _cfbd_backup(
+    store: Store,
+    result: MarketLinesResult,
+    *,
+    season: int,
+    week: int,
+    now: datetime,
+    slate: list[str],
+    window: tuple[datetime, datetime],
+    games: list[Game],
+) -> MarketLinesResult:
+    """Fill the college games SportsGameOdds sent no lines for from CFBD.
+
+    SportsGameOdds sometimes lists a game with no odds at all (Utah at
+    Cincinnati, 2026 week 9). CFBD's free tier carries a few US books for
+    every game, which is enough to keep such a game out of NO_MARKET. A CFBD
+    failure never costs the SportsGameOdds lines already stored.
+    """
+    priced = {line.game_id for line in result.lines}
+    missing = [game for game in games if game.game_id not in priced]
+    if not missing:
+        return result
+    try:
+        backup = fallback_spreads(
+            fetch_cfbd_lines(season, week),
+            resolver=TeamResolver.default(),
+            season=season,
+            week=week,
+            slate=slate,
+            window=window,
+            games=missing,
+            now=now,
+        )
+    except Exception as exc:  # a backup source must never sink the poll
+        logger.bind(
+            event="cfbd_fallback_failed",
+            season=season,
+            week=week,
+            games_missing=len(missing),
+            error=type(exc).__name__,
+        ).warning(f"CFBD backup failed ({type(exc).__name__}: {exc}); SportsGameOdds lines kept")
+        return result
+    store.append_market_lines(backup.lines)
+    filled = {line.game_id for line in backup.lines}
+    logger.bind(
+        event="cfbd_fallback",
+        season=season,
+        week=week,
+        games_filled=len(filled),
+        games_missing=len(missing) - len(filled),
+    ).info(f"CFBD filled {len(filled)} of {len(missing)} games SportsGameOdds had no lines for")
+    lines: list[MarketLine] = [*result.lines, *backup.lines]
+    # SportsGameOdds said these would show as NO_MARKET; CFBD made that untrue.
+    stale = tuple(f"{game_id}: no SportsGameOdds lines" for game_id in filled)
+    skipped = [
+        message for message in result.skipped if not stale or not message.startswith(stale)
+    ]
+    return MarketLinesResult(lines=lines, skipped=[*skipped, *backup.skipped])
 
 
 def refresh_recommendations(

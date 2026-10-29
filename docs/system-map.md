@@ -42,7 +42,10 @@ src/pickem/ingest/nflverse.py     load_nfl_games, load_nfl_closing_lines.
                                   `loader` is injected so tests stay offline.
                                   _kickoff combines gameday + gametime through
                                   US/Eastern for the true UTC instant.
-src/pickem/ingest/cfbd_source.py  CfbdConfig, load_cfb_games, load_cfb_lines.
+src/pickem/ingest/cfbd_source.py  CfbdConfig, load_cfb_games, load_cfb_lines,
+                                  fallback_spreads (the live backup for college
+                                  games SGO sent no lines for; source "cfbd",
+                                  through odds.py's _parse_events).
                                   `fetcher` is injected. Talks to the CFBD REST
                                   API over httpx — NOT the `cfbd` SDK, which
                                   pins pydantic<2. Retries 429 with backoff.

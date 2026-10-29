@@ -58,6 +58,25 @@ the other lines the same pull listed:
   SGO's (an event's `teams.home.teamID`), then add a row to
   `TEAM_ID_OVERRIDES` in `src/pickem/ingest/sgo.py`.
 
+## CFBD backup for college games
+
+When a college poll comes back with no SGO lines for a game it asked for, the
+poll makes one CollegeFootballData (CFBD) `/lines` call for the week and stores
+that game's book spreads under `source = "cfbd"`. It happened first with Utah at
+Cincinnati in 2026 week 9, which SGO listed as four empty copies of the game.
+NFL never uses it, and it does not count toward the SGO share. CFBD's free tier
+allows about 1,000 calls a month; a week uses a handful.
+
+- The log shows `cfbd_fallback` with `games_filled` and `games_missing`.
+- `<game id>: no CFBD lines either — shows as NO_MARKET` means neither source
+  had the game.
+- `cfbd_fallback_failed` means the CFBD call failed (most often a missing or
+  expired `CFBD_API_KEY`). The SGO lines from that poll were still stored, and
+  the next poll tries again.
+
+CFBD usually carries two or three books, so `preflight --min-books 3` can still
+flag a game it filled.
+
 ## "odds key rejected"
 
 SGO refused the key (HTTP 401 or 403). Check the account, then the key in both

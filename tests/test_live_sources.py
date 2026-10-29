@@ -4,7 +4,7 @@ import pytest
 
 from pickem import config
 from pickem.backtest.runner import split_proxies
-from pickem.models import LIVE_SOURCE, LIVE_SOURCES, SGO_SOURCE, MarketLine
+from pickem.models import CFBD_SOURCE, LIVE_SOURCE, LIVE_SOURCES, SGO_SOURCE, MarketLine
 from pickem.obs.log import _secret_values
 from pickem.report.results import US_LINE, closing_spread, line_history
 
@@ -21,8 +21,15 @@ def _line(source: str, book: str, spread: float, hours_before: float) -> MarketL
     )
 
 
-def test_both_providers_are_the_live_market():
-    assert LIVE_SOURCES == {LIVE_SOURCE, SGO_SOURCE}
+def test_every_live_provider_is_the_live_market():
+    assert LIVE_SOURCES == {LIVE_SOURCE, SGO_SOURCE, CFBD_SOURCE}
+
+
+def test_cfbd_backup_rows_are_never_graded_as_a_backtest_proxy():
+    frozen, submission, unclassified = split_proxies([_line(CFBD_SOURCE, "draftkings", 6.5, 1)])
+
+    assert (frozen, submission) == ([], [])
+    assert "not graded" in unclassified[0]
 
 
 def test_the_closing_line_reads_sportsgameodds_rows():

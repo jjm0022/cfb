@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from pickem.ingest.cfbd_source import load_cfb_games, load_cfb_lines
+from pickem.ingest.cfbd_source import fallback_spreads, load_cfb_games, load_cfb_lines
+from pickem.models import CFBD_SOURCE, Game, Sport, make_game_id
 from pickem.resolve.resolver import TeamResolver, UnknownTeamError
 
 GAMES = [
@@ -243,3 +244,102 @@ def test_rate_limiting_is_retried_and_a_4xx_is_not(monkeypatch):
 
 def test_the_api_key_never_appears_in_a_repr():
     assert "test-key" not in repr(_config())
+
+
+NOW = datetime(2026, 10, 29, 14, tzinfo=UTC)
+WINDOW = (NOW - timedelta(hours=12), NOW + timedelta(days=7))
+
+
+def _cfb_game(away: str, home: str) -> Game:
+    return Game(
+        game_id=make_game_id(Sport.CFB, 2026, 9, away, home),
+        sport=Sport.CFB,
+        season=2026,
+        week=9,
+        kickoff_utc=datetime(2026, 10, 31, 19, 45, tzinfo=UTC),
+        home_team_id=home,
+        away_team_id=away,
+    )
+
+
+UTAH_AT_CIN = _cfb_game("UTAH", "CIN")
+WEEK9 = [
+    {
+        "home_team": "Cincinnati",
+        "away_team": "Utah",
+        "start_date": "2026-10-31T19:45:00.000Z",
+        "lines": [
+            {"provider": "DraftKings", "spread": 6.5, "over_under": 50.5},
+            {"provider": "ESPN Bet", "spread": 7.0, "over_under": 50.5},
+        ],
+    },
+    {
+        "home_team": "Wake Forest",
+        "away_team": "Virginia",
+        "start_date": "2026-10-31T19:45:00.000Z",
+        "lines": [{"provider": "DraftKings", "spread": -3.0, "over_under": 48.5}],
+    },
+    {
+        "home_team": "Not A Real School",
+        "away_team": "Another Made Up School",
+        "start_date": "2026-10-31T17:00:00.000Z",
+        "lines": [{"provider": "DraftKings", "spread": -10.0, "over_under": 55.5}],
+    },
+]
+
+
+def _fallback(rows, games=(UTAH_AT_CIN,)):
+    return fallback_spreads(
+        rows,
+        resolver=TeamResolver.default(),
+        season=2026,
+        week=9,
+        slate=[game.game_id for game in games],
+        window=WINDOW,
+        games=list(games),
+        now=NOW,
+    )
+
+
+def test_the_fallback_fills_only_the_games_asked_for():
+    result = _fallback(WEEK9)
+
+    assert {(line.game_id, line.book, line.spread_home) for line in result.lines} == {
+        (UTAH_AT_CIN.game_id, "draftkings", 6.5),
+        (UTAH_AT_CIN.game_id, "espnbet", 7.0),
+    }
+    assert {line.source for line in result.lines} == {CFBD_SOURCE}
+    assert {line.captured_at for line in result.lines} == {NOW}
+    # Other games and schools we don't track are not the fallback's business.
+    assert result.skipped == []
+
+
+def test_the_fallback_keeps_the_boards_home_side_for_a_neutral_site_game():
+    flipped = _cfb_game("CIN", "UTAH")
+
+    result = _fallback(WEEK9, games=(flipped,))
+
+    assert {line.book: line.spread_home for line in result.lines} == {
+        "draftkings": -6.5,
+        "espnbet": -7.0,
+    }
+    assert {line.game_id for line in result.lines} == {flipped.game_id}
+
+
+def test_a_cfbd_book_with_no_spread_is_listed():
+    rows = [{**WEEK9[0], "lines": [{"provider": "DraftKings", "spread": None},
+                                   {"provider": "Bovada", "spread": 6.5}]}]
+
+    result = _fallback(rows)
+
+    assert [line.book for line in result.lines] == ["bovada"]
+    assert f"{UTAH_AT_CIN.game_id}: draftkings — no spread" in result.skipped
+
+
+def test_a_game_cfbd_does_not_have_either_is_listed():
+    result = _fallback(WEEK9[1:])
+
+    assert result.lines == []
+    assert result.skipped == [
+        f"{UTAH_AT_CIN.game_id}: no CFBD lines either — shows as NO_MARKET"
+    ]
