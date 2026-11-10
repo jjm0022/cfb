@@ -1,4 +1,11 @@
-"""Take the frozen board's favorite — the COINFLIP tiebreak.
+"""The frozen board's favorite and underdog — the COINFLIP tiebreak takes the underdog.
+
+Since 2026-11-09 a COINFLIP resolves to the underdog. Neither side has a
+measured edge, but most of the pool takes the favorite, so the underdog makes
+our card different at no cost in expected points: simulated over pool weeks 1–9
+of 2026 it raised the chance of winning a week from 3.5% to 5.7%. That reverses
+if coinflip favorites cover about 53% or more. See "Weekly-win simulation" in
+`docs/results.md`. What follows is why the favorite was the rule before that.
 
 A COINFLIP is a game where the frozen league line and the live market agree, so
 there is no divergence to trade and no side the strategy actually prefers. That
@@ -27,3 +34,8 @@ def favorite_side(league_spread: float) -> Side:
     resolves to HOME, which is the convention the evaluated baseline used.
     """
     return Side.HOME if league_spread <= 0 else Side.AWAY
+
+
+def underdog_side(league_spread: float) -> Side:
+    """Return the side the frozen board does not favor; AWAY on an exact pick'em."""
+    return Side.AWAY if favorite_side(league_spread) is Side.HOME else Side.HOME

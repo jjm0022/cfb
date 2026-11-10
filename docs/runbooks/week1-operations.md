@@ -116,7 +116,7 @@ initializing a schema and never writes picks. It checks exact game and league
 line counts, future kickoffs, live `oddsapi` coverage, freshness, distinct
 book count at each game's latest snapshot, and completed prior history for the
 Elo tiebreak. Elo now backs `NO_MARKET` only — `COINFLIP` takes the
-frozen-board favorite and needs no history — but preflight still gates on that
+frozen-board underdog and needs no history — but preflight still gates on that
 history, so treat it as a hard requirement.
 
 ```bash

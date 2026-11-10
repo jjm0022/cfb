@@ -198,7 +198,7 @@ GROUP BY day ORDER BY day;
 
 The quota and tiebreak queries from the standard are also useful during an
 investigation. Two rules emit `tiebreak_applied`, so `method` says which one
-decided: `frozen_line_favorite` for `COINFLIP`, `elo` for `NO_MARKET`. Only the
+decided: `frozen_line_underdog` for `COINFLIP` (`frozen_line_favorite` before 2026-11-09), `elo` for `NO_MARKET`. Only the
 Elo records carry `projected_margin`, hence the `// "-"` fallback:
 
 ```bash

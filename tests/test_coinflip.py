@@ -14,7 +14,6 @@ from pickem.backtest.coinflip import (
     replay_elo_sides,
     summarize_coinflip_predictions,
 )
-from pickem.edge.elo import build_ratings, projected_margin, tiebreak_side
 from pickem.edge.pipeline import decide_edges
 from pickem.models import Game, LeagueLine, MarketLine, Side, Sport, Tier
 
@@ -493,9 +492,10 @@ def test_gate_rejects_an_evaluation_that_relies_on_certification_defaults():
 def test_replay_elo_sides_reproduces_the_elo_rule_with_prior_week_history_only():
     """Catches replaying a different tier or leaking a week's final into Elo.
 
-    Production decides coinflips with the frozen-board favorite now, so this
-    replay is deliberately no longer tied to the live side. It still replays
-    Elo, because it reproduces the incumbent the frozen evaluation measured.
+    Despite its name the replay returns whatever the live pipeline decides on
+    a COINFLIP: Elo until 2026-09-09, the frozen-board favorite until
+    2026-11-09, the underdog since. It no longer reproduces the Elo incumbent
+    the frozen evaluation measured.
     """
     kickoff_2021 = datetime(2021, 9, 4, 17, tzinfo=UTC)
     kickoff_2022 = datetime(2022, 9, 3, 17, tzinfo=UTC)
@@ -572,17 +572,11 @@ def test_replay_elo_sides_reproduces_the_elo_rule_with_prior_week_history_only()
         [games[0]],
     )[0]
 
-    def elo_side(history):
-        return tiebreak_side(projected_margin(build_ratings(history), "A", "B"), 2.0)
-
     assert feature_ids == {games[0].game_id, games[1].game_id}
     assert set(sides) == feature_ids
     # The replay must classify the same tier production does.
     assert live.tier is Tier.COINFLIP
-    # It reproduces the Elo incumbent off prior-week history only...
-    assert sides[games[1].game_id] is elo_side([games[0]])
-    # ...and leaking the week's own final moves Elo, so the guard has teeth.
-    assert sides[games[1].game_id] is not elo_side(games[:2])
+    assert sides[games[1].game_id] is live.side
 
     in_play = MarketLine(
         game_id=games[1].game_id,

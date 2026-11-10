@@ -32,8 +32,10 @@ src/pickem/edge/elo.py            EloConfig, build_ratings, projected_margin,
                                   tiebreak_side. Pure; no I/O. Decides
                                   NO_MARKET only, since 2026-09-09.
 src/pickem/edge/favorite.py       favorite_side: the frozen-board favorite,
-                                  HOME when the spread is <= 0. Decides
-                                  COINFLIP. Pure; no I/O, no fitted state.
+                                  HOME when the spread is <= 0.
+                                  underdog_side: the other side; decides
+                                  COINFLIP since 2026-11-09. Pure; no I/O,
+                                  no fitted state.
 src/pickem/edge/pipeline.py       `decide_edges`, the only public edge-decision
                                   interface; it returns final picks and resolves
                                   only COINFLIP and NO_MARKET internally,

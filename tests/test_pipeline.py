@@ -68,25 +68,25 @@ def test_settled_divergence_does_not_require_a_matching_game(
     assert edge.tier is expected_tier
 
 
-def test_coinflip_returns_the_board_favorite_not_a_placeholder():
+def test_coinflip_returns_the_board_underdog_not_a_placeholder():
     [edge] = decide_edges([league(-3.0)], [market(-3.5)], [game()], HISTORY)
-    assert edge.side is Side.HOME
-    assert edge.tier is Tier.COINFLIP
-    assert "frozen-board favorite" in edge.rationale
-
-
-def test_coinflip_on_an_away_favored_board_returns_away():
-    [edge] = decide_edges([league(3.0)], [market(3.5)], [game()], HISTORY)
     assert edge.side is Side.AWAY
     assert edge.tier is Tier.COINFLIP
-    assert "frozen-board favorite" in edge.rationale
+    assert "frozen-board underdog" in edge.rationale
 
 
-def test_coinflip_takes_the_favorite_however_big_the_number():
-    """The Elo tiebreak this replaced returned AWAY here, flipping to the dog
-    once the board outran its projected margin."""
-    [edge] = decide_edges([league(-40.0)], [market(-40.0)], [game()], HISTORY)
+def test_coinflip_on_an_away_favored_board_returns_home():
+    [edge] = decide_edges([league(3.0)], [market(3.5)], [game()], HISTORY)
     assert edge.side is Side.HOME
+    assert edge.tier is Tier.COINFLIP
+    assert "frozen-board underdog" in edge.rationale
+
+
+def test_coinflip_takes_the_underdog_however_small_the_number():
+    """No crossover by spread size: the pool crowds the favorite at every
+    number, and being different is the whole point of the rule."""
+    [edge] = decide_edges([league(-1.5)], [market(-1.5)], [game()], HISTORY)
+    assert edge.side is Side.AWAY
     assert edge.tier is Tier.COINFLIP
 
 
@@ -95,7 +95,7 @@ def test_coinflip_never_consults_the_rating(records):
 
     assert "elo" not in edge.rationale.lower()
     tiebreak = next(r for r in records if r["extra"]["event"] == "tiebreak_applied")
-    assert tiebreak["extra"]["method"] == "frozen_line_favorite"
+    assert tiebreak["extra"]["method"] == "frozen_line_underdog"
     assert tiebreak["extra"]["league_spread"] == -3.0
     assert tiebreak["extra"]["side"] == edge.side.value
     assert "projected_margin" not in tiebreak["extra"]
@@ -343,10 +343,10 @@ def test_slight_never_runs_a_tiebreak(records):
     assert not [r for r in records if r["extra"].get("event") == "tiebreak_applied"]
 
 
-def test_zero_gap_is_still_a_coinflip_for_the_favorite_with_slight_on():
+def test_zero_gap_is_still_a_coinflip_for_the_underdog_with_slight_on():
     [edge] = decide_edges([league(-3.5)], [market(-3.5)], [game()], HISTORY, NFL_LIVE)
     assert edge.tier is Tier.COINFLIP
-    assert edge.side is Side.HOME
+    assert edge.side is Side.AWAY
 
 
 @pytest.mark.parametrize(
@@ -366,4 +366,4 @@ def test_no_market_is_still_elo_with_slight_on():
 def test_default_thresholds_keep_small_gaps_as_coinflips():
     [edge] = decide_edges([league(-3.5)], [market(-3.0)], [game()], HISTORY)
     assert edge.tier is Tier.COINFLIP
-    assert edge.side is Side.HOME
+    assert edge.side is Side.AWAY

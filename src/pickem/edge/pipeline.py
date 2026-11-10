@@ -5,12 +5,13 @@ decide a STRONG or LEAN game. A real divergence signal is never overridden —
 letting a rating outvote a moved line would throw away the edge this system
 exists to capture.
 
-COINFLIP takes the frozen board's favorite. The frozen line and the market
-agree there, so any pick is a bet against the market's own number; the cheapest
-rule that scored at the noise band wins. See `edge/favorite.py`.
+COINFLIP takes the frozen board's underdog. The frozen line and the market
+agree there, so neither side has an edge; most of the pool takes the favorite,
+so the underdog is the side that makes our card different. See
+`edge/favorite.py`.
 
 NO_MARKET still uses Elo, because there is no market line to compare against
-and the favorite rule has never been evaluated on those games.
+and neither board rule has been evaluated on those games.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from pickem.edge.divergence import (
     _emit_decision_event,
 )
 from pickem.edge.elo import EloConfig, build_ratings, projected_margin, tiebreak_side
-from pickem.edge.favorite import favorite_side
+from pickem.edge.favorite import underdog_side
 from pickem.models import Edge, Game, LeagueLine, MarketLine, Side, Tier
 
 _TIEBREAK_TIERS = {Tier.COINFLIP, Tier.NO_MARKET}
@@ -122,20 +123,20 @@ def _apply_tiebreaks(
             )
 
         if edge.tier is Tier.COINFLIP:
-            resolved.append(_decide_by_favorite(edge, game))
+            resolved.append(_decide_by_underdog(edge, game))
         else:
             resolved.append(_decide_by_elo(edge, game, ratings, config))
     return resolved
 
 
-def _decide_by_favorite(edge: Edge, game: Game) -> Edge:
-    """Take the frozen board's favorite; the market gave us nothing to trade."""
-    side = favorite_side(edge.league_spread)
+def _decide_by_underdog(edge: Edge, game: Game) -> Edge:
+    """Take the frozen board's underdog: no edge either way, and the pool crowds the favorite."""
+    side = underdog_side(edge.league_spread)
     _emit_decision_event(
         "INFO",
-        f"Frozen-board favorite is {side.value} on a board of {edge.league_spread:+.1f}",
+        f"Frozen-board underdog is {side.value} on a board of {edge.league_spread:+.1f}",
         event="tiebreak_applied",
-        method="frozen_line_favorite",
+        method="frozen_line_underdog",
         game_id=edge.game_id,
         tier=edge.tier.value,
         home_team_id=game.home_team_id,
@@ -148,7 +149,7 @@ def _decide_by_favorite(edge: Edge, game: Game) -> Edge:
             "side": side,
             "rationale": (
                 f"{edge.rationale}; no divergence, so we take the frozen-board "
-                f"favorite ({side.value}) on a board of {edge.league_spread:+.1f}"
+                f"underdog ({side.value}) on a board of {edge.league_spread:+.1f}"
             ),
         }
     )

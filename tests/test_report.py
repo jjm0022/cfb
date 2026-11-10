@@ -62,7 +62,7 @@ def test_shows_the_deciding_rationale_for_each_pick():
                 )
             ],
             Tier.COINFLIP,
-            "frozen-board favorite",
+            "frozen-board underdog",
         ),
         ([], Tier.NO_MARKET, "Elo rating projects"),
     ],
@@ -71,7 +71,7 @@ def test_renders_the_deciding_tiebreak_rationale_for_tiebreak_tiers(
     market_lines, expected_tier, expected_rationale
 ):
     """Each tiebreak tier reaches the sheet naming the rule that actually
-    decided it — COINFLIP the frozen-board favorite, NO_MARKET the Elo rating."""
+    decided it — COINFLIP the frozen-board underdog, NO_MARKET the Elo rating."""
     league = LeagueLine(game_id=GID, season=2025, week=3, spread_home=-3.0, posted_at=NOW)
     [decided] = decide_edges([league], market_lines, [GAME], [])
     sheet = render_sheet([decided], [GAME], generated_at=NOW, provenance=PROVENANCE)

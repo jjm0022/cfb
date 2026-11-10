@@ -63,8 +63,8 @@ Split out of `HANDOFF.md` on 2026-09-09; content unchanged.
   edge produce the SAME pick. Moving the STRONG/LEAN boundary
   relabels games; it never changes one, and no backtest can tune it toward
   correct picks. Only `lean` moves games between the two deciders (divergence
-  vs the tiebreak — the frozen-board favorite since 2026-09-09, Elo before
-  that). Verified 2026-08-19 across a 56-cell sweep: every cell
+  vs the tiebreak — the frozen-board underdog since 2026-11-09, the favorite
+  from 2026-09-09, Elo before that). Verified 2026-08-19 across a 56-cell sweep: every cell
   sharing a `lean` value had a byte-identical win/loss/push record.
 - **`calibrate`'s cutoff is a tolerance, not a strict at-or-before.**
   `poll-odds` derives its slate from `league_lines`, so the market snapshot is
@@ -73,7 +73,7 @@ Split out of `HANDOFF.md` on 2026-09-09; content unchanged.
   window admits the same-sitting poll; widening it far enough to admit the next
   day's number would readmit exactly the line movement the strategy trades on.
 - **A tiebreak never overrides a real divergence signal.** The two rules may
-  resolve only `COINFLIP` (frozen-board favorite) and `NO_MARKET` (Elo);
+  resolve only `COINFLIP` (frozen-board underdog) and `NO_MARKET` (Elo);
   `STRONG` and `LEAN` edges pass through unchanged.
   An edge that needs a tiebreak but has no `Game` record raises
   `MissingGameError` — it is never passed through carrying internal

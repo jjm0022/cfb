@@ -96,6 +96,19 @@ Supporting material, roughly in reading order:
 
 ## Current state
 
+### COINFLIP changed from the favorite to the underdog (2026-11-09)
+
+**This supersedes the section below.** `COINFLIP` now takes the frozen-board
+underdog (`underdog_side` in `edge/favorite.py`; away on an exact pick'em), on
+the weekly-win simulation over pool weeks 1–9: 3.5% → 5.7% chance to win a
+week, reversing if coinflip favorites cover about 53%. See "Weekly-win
+simulation" in `docs/results.md`. `tiebreak_applied` now carries
+`method=frozen_line_underdog`. `NO_MARKET` is unchanged.
+
+Side effect, already true since 2026-09-09: `evaluate-coinflip` and
+`evaluate-coinflip-residual` take their "Elo" baseline from the live pipeline,
+so they no longer reproduce the published Elo figure.
+
 ### COINFLIP tiebreak changed from Elo to the frozen-board favorite (2026-09-09)
 
 **This supersedes every "Elo remains the live COINFLIP decider" statement in

@@ -425,7 +425,7 @@ def test_live_cfb_keeps_small_gaps_as_coinflips(db):
         db, Sport.CFB, 2026, 6, datetime(2026, 10, 11, 15, tzinfo=UTC)
     ).edges
     assert edge.tier is Tier.COINFLIP
-    assert edge.side.value == "home"
+    assert edge.side.value == "away"
 
 
 def test_every_skip_is_marked_even_when_the_owner_is_not_told(db, seeded_week, sgo):

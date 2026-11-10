@@ -235,4 +235,37 @@ as the 70% lopsided rule (4.9% each).
   split, not broken by the Monday-night total.
 - Four weeks of one pool; the other entrants' habits may change.
 
-**Decision:** pending owner review. The live COINFLIP rule is unchanged.
+**Decision (2026-10-05):** pending owner review. The live COINFLIP rule is unchanged.
+
+### Rerun over pool weeks 1–9, and the switch (2026-11-09)
+
+Same command, same seed, nine weeks, 53 entrants:
+
+```
+  rule                  avg weekly win   >=1 win in 18 weeks
+  current                         3.5%                 47.6%
+  underdog                        5.7%                 65.4%
+  minority*                       6.6%                 70.7%
+  lopsided underdog*              5.9%                 66.5%
+  optimal mix*                    6.7%                 71.2%
+```
+
+The underdog rule was better or level in every week (lowest: 4.6% → 4.5% in
+week 6). Sensitivity to the favorite's cover rate on COINFLIP games, from a
+one-off script that overrode the simulator's 50%:
+
+| Favorite covers | current | underdog | optimal mix* |
+|---|---|---|---|
+| 50% | 3.5% | 5.7% | 6.7% |
+| 51% | 3.9% | 5.2% | 6.5% |
+| 52% | 4.2% | 4.6% | 6.3% |
+| 53% | 4.6% | 4.1% | 6.3% |
+
+Through week 9 the favorite is 61–68 (47.3%) on this season's COINFLIP games
+(CFB 37–37, NFL 24–31).
+
+**Decision (2026-11-09): the owner switched COINFLIP to the frozen-board
+underdog.** `NO_MARKET` still uses Elo. Not examined: on the CFB board a
+COINFLIP can carry a market lean of under a point, and the underdog rule
+ignores which way it points. Revert by pointing the COINFLIP step in
+`edge/pipeline.py` back at `favorite_side`.

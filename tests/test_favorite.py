@@ -1,6 +1,6 @@
 import pytest
 
-from pickem.edge.favorite import favorite_side
+from pickem.edge.favorite import favorite_side, underdog_side
 from pickem.models import Side
 
 
@@ -30,3 +30,9 @@ def test_the_size_of_the_number_never_changes_the_favorite():
     is the whole behavioural change."""
     assert favorite_side(-3.0) is favorite_side(-40.0) is Side.HOME
     assert favorite_side(3.0) is favorite_side(40.0) is Side.AWAY
+
+
+def test_underdog_side_is_the_other_side_and_away_on_a_pickem():
+    assert underdog_side(-3.0) is Side.AWAY
+    assert underdog_side(3.0) is Side.HOME
+    assert underdog_side(0.0) is Side.AWAY
