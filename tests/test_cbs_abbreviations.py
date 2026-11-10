@@ -39,6 +39,7 @@ CBS_CFB = {
     "UK": "UK",
     "MICHST": "MSU",
     "MIZZOU": "MIZ",
+    "CUSE": "SYR",
     "NCST": "NCSU",
     "NWEST": "NU",
     "RUT": "RUTG",
